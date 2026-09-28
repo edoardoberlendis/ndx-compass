@@ -40,7 +40,8 @@ Oppure dal Terminale:
 - **Screener**: i 100 titoli con colonne Panoramica / Performance / Valutazione / Tecnica, filtri (anche "Sopra/Sotto 20, 40 e 60", "Valutazione economica/cara", "Upgrade recenti", "Stime in rialzo/calo"), export CSV. La vista Tecnica mostra la distanza dalle medie 20/40/60/50/200.
 - **Settori**: mappa del mercato per settore › industria (colorata per performance 1G…1A) e, sotto, rendimenti dei settori
   pesati per capitalizzazione. Clic su un settore: la mappa si ingrandisce su quel settore e compaiono i suoi titoli.
-- **Idee**: il report tecnico generato da `signals.py` (vedi sotto).
+- **Report**: il report tecnico generato da `signals.py` (vedi sotto): sintesi, mappa di rotazione, temi, cosa è cambiato,
+  tabella delle medie e backtest. Le idee di trading (entrata/stop/target) sono in fondo, chiuse di default.
 - **Scheda titolo**: grafico 1G–MAX, confronto con NDX, fondamentali, target degli analisti, notizie, più:
   - **Valutazione** (Economica / In linea / Cara): P/E atteso, P/S ed EV/EBITDA contro la mediana dei titoli dello
     stesso settore nel Nasdaq-100 (saltato se il settore ha meno di 3 titoli) e P/E / P/S di oggi contro la mediana
@@ -65,11 +66,11 @@ Tastiera: `/` cerca, `Esc` chiude la scheda.
 Così si fanno poche richieste a Yahoo Finance ed è più difficile essere bloccati. I dati possono essere in ritardo.
 L'elenco dei titoli viene da Wikipedia. Pesi e contributi all'indice sono stimati dalla capitalizzazione.
 
-## Report automatico (scheda Idee)
+## Report automatico (scheda Report)
 
 `signals.py` gira dal lunedì al venerdì alle **08:30** (piano prima dell'apertura, sulla chiusura precedente)
 e alle **22:30** (dopo la chiusura USA), ora locale, tramite launchd (il programmatore di macOS).
-Ogni esecuzione salva `reports/<data>_<sessione>.json`, mostra una notifica e compare nella scheda **Idee**.
+Ogni esecuzione salva `reports/<data>_<sessione>.json`, mostra una notifica e compare nella scheda **Report**.
 
 ```sh
 ./schedule.sh install   # attiva (o riattiva) la programmazione
@@ -90,7 +91,7 @@ Il report è uno screening meccanico, **non è una consulenza finanziaria**.
 ## Backtest della parte tecnica
 
 ```sh
-.venv/bin/python backtest.py   # circa 10 secondi, salva reports/backtest.json (sezione in fondo alla scheda Idee)
+.venv/bin/python backtest.py   # circa 10 secondi, salva reports/backtest.json (sezione nella scheda Report)
 ```
 
 Ogni settimana degli ultimi ~10 anni ricalcola, per i titoli di oggi, il punteggio tecnico della dashboard (stesso
@@ -105,7 +106,7 @@ Pesi e soglie non vengono adattati ai risultati.
 | File/cartella | A cosa serve |
 |---|---|
 | `server.py` | Server: scarica i dati e li serve alla pagina web |
-| `signals.py` | Report tecnico due volte al giorno (scheda Idee) |
+| `signals.py` | Report tecnico due volte al giorno (scheda Report) |
 | `analysts.py` | Dati degli analisti e valutazione (scaricati una volta al giorno) |
 | `score.py` | Segnale finale: tecnica + analisti + valutazione + notizie |
 | `backtest.py` | Backtest della parte tecnica del segnale (a mano) |

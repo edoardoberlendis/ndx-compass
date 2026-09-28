@@ -1198,7 +1198,7 @@ function renderRRG(R) {
   pts.append("circle").attr("r", d => 4 + Math.sqrt(d.n) * 1.3).attr("fill", d => css(QCOL[d.quadrant])).attr("stroke", css("--surface")).attr("stroke-width", 2);
   pts.append("text").attr("class", "rrg-label").attr("x", d => x(d.rs1m) > iw - 120 ? -10 : 10).attr("text-anchor", d => x(d.rs1m) > iw - 120 ? "end" : "start").attr("y", 4).text(d => d.name);
   pts.on("mousemove", (ev, d) => showTip(groupTip(d), ev)).on("mouseleave", hideTip)
-    .on("click", (ev, d) => { hideTip(); if (d.kind === "theme") { ideasState.theme = d.name; drawIdeas(); $("#ideaGroups").scrollIntoView({ behavior: "smooth" }); } });
+    .on("click", (ev, d) => { hideTip(); if (d.kind === "theme") { ideasState.theme = d.name; showIdeas(); } });
   svg.append("text").attr("class", "ref-label").attr("x", m.l + iw).attr("y", H - 2).attr("text-anchor", "end").text("Rendimento relativo a 1 mese vs QQQ (punti) →");
 }
 function groupTip(d) {
@@ -1253,11 +1253,19 @@ function renderIdeaCards(R) {
     if (!list.length) return "";
     return `<div class="idea-group"><h3>${esc(s.label)} <small>${list.length} · ${esc(s.desc)}</small></h3><div class="ideas">${list.map(ideaCard).join("")}</div></div>`;
   }).join("") || `<div class="card empty">Nessun setup per questo filtro.</div>`;
+  if (!$("#ideasFold").open) return;   // charts need a visible box: drawn when the section is opened
   host.querySelectorAll("[data-chart]").forEach(el => {
     const i = R.ideas.find(x => x.ticker === el.dataset.chart);
     drawIdeaChart(el, i);
   });
 }
+// clicking a theme (rotation map or table) opens the trade ideas filtered on it
+function showIdeas() {
+  const f = $("#ideasFold");
+  if (f.open) renderIdeaCards(ideasState.report); else f.open = true;   // opening triggers the render below
+  f.scrollIntoView({ behavior: "smooth" });
+}
+$("#ideasFold").addEventListener("toggle", () => { if ($("#ideasFold").open && ideasState.report) renderIdeaCards(ideasState.report); });
 function ideaCard(i) {
   const lv = i.levels, st = i.stats;
   const bars = Math.round(i.conviction / 20);
@@ -1327,7 +1335,7 @@ document.addEventListener("click", e => {
 });
 $("#grpTable").addEventListener("click", e => {
   const tr = e.target.closest("tr[data-g]");
-  if (tr && tr.dataset.kind === "theme") { ideasState.theme = tr.dataset.g; ideasState.side = "all"; renderIdeaCards(ideasState.report); $("#ideaGroups").scrollIntoView({ behavior: "smooth" }); }
+  if (tr && tr.dataset.kind === "theme") { ideasState.theme = tr.dataset.g; ideasState.side = "all"; showIdeas(); }
 });
 $("#view-ideas").addEventListener("click", e => {
   const t = e.target.closest("[data-open], .changes [data-t], #maTable tr[data-t]");

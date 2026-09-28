@@ -30,7 +30,7 @@
     <button class="tab" data-view="watch">I miei titoli</button>
     <button class="tab" data-view="screener">Screener</button>
     <button class="tab" data-view="sectors">Settori</button>
-    <button class="tab" data-view="ideas">Idee</button>
+    <button class="tab" data-view="ideas">Report</button>
   </div>
   <div class="updated"><span class="status" id="status"></span><span id="updated"></span></div>
 </nav>
@@ -127,7 +127,7 @@
     </div>
   </section>
 
-  <!-- IDEAS (twice-daily trend report) -->
+  <!-- REPORT (twice-daily trend report; view id "ideas" kept for saved links) -->
   <section id="view-ideas" class="view" hidden>
     <div class="toolbar">
       <select id="repSel" aria-label="Report"></select>
@@ -153,13 +153,6 @@
 
       <div class="card" id="changesCard"><div class="card-h"><h2>Cosa è cambiato</h2><span class="card-meta" id="changesMeta"></span></div><div id="changes" class="changes"></div></div>
 
-      <div class="toolbar">
-        <div class="chips" id="sideChips"></div>
-        <select id="themeSel" aria-label="Tema"></select>
-        <div class="series-key" id="maKey"></div>
-      </div>
-      <div id="ideaGroups"></div>
-
       <div class="card">
         <div class="card-h"><h2>Tutti i titoli · analisi delle medie mobili</h2><input id="maFind" class="find" type="search" placeholder="Filtra…" aria-label="Filtra titoli"></div>
         <div class="table-wrap tall"><table class="scr" id="maTable"></table></div>
@@ -168,6 +161,18 @@
         <div class="card-h"><h2>Backtest della parte tecnica</h2><div class="seg small" id="btSeg"></div><span class="card-meta" id="btMeta"></span></div>
         <div id="btBody"><div class="empty">Nessun backtest ancora. Dal Terminale: <code>.venv/bin/python backtest.py</code></div></div>
       </div>
+      <details class="card fold ideas-fold" id="ideasFold">
+        <summary><h2>Idee di trading</h2><span class="card-meta">entrata, stop e target · chiuse di default</span></summary>
+        <p class="warn-box">Entrata, stop e target si basano solo sulla parte tecnica (medie 20/40/60, RSI, forza rispetto a QQQ),
+          che il backtest qui sopra non ha dimostrato dare un vantaggio. Usale come spunti da verificare, non come indicazioni operative.
+          Non è una consulenza finanziaria.</p>
+        <div class="toolbar">
+          <div class="chips" id="sideChips"></div>
+          <select id="themeSel" aria-label="Tema"></select>
+          <div class="series-key" id="maKey"></div>
+        </div>
+        <div id="ideaGroups"></div>
+      </details>
       <p class="disclaimer" id="disclaimer"></p>
     </div>
   </section>
