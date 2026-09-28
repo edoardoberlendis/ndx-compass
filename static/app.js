@@ -371,7 +371,7 @@ function lineChart(el, series, o = {}) {
   });
   series.forEach((s, si) => {
     const line = d3.line().defined(p => isNum(p.v)).x((p, i) => x(i)).y(p => y(p.v)).curve(d3.curveMonotoneX);
-    if (si === 0 && o.area !== false && series.length === 1) {
+    if (si === 0 && o.area !== false && (series.length === 1 || o.areaFirst)) {
       const gid = "g" + Math.random().toString(36).slice(2);
       const grad = svg.append("defs").append("linearGradient").attr("id", gid).attr("x1", 0).attr("x2", 0).attr("y1", 0).attr("y2", 1);
       grad.append("stop").attr("offset", "0%").attr("stop-color", s.color).attr("stop-opacity", 0.22);
@@ -381,7 +381,7 @@ function lineChart(el, series, o = {}) {
     }
     g.append("path").datum(s.pts).attr("d", line).attr("fill", "none").attr("stroke", s.color).attr("stroke-width", s.width || 2).attr("stroke-linejoin", "round");
     const last = s.pts.length - 1;
-    if (last >= 0 && isNum(s.pts[last].v)) {
+    if (s.dot !== false && last >= 0 && isNum(s.pts[last].v)) {
       g.append("circle").attr("cx", x(last)).attr("cy", y(s.pts[last].v)).attr("r", 3.5).attr("fill", s.color).attr("stroke", css("--surface")).attr("stroke-width", 2);
     }
   });
@@ -823,10 +823,15 @@ $("#matrix").addEventListener("click", e => { const tr = e.target.closest("tr[da
 // ------------------------------------------------------------ detail drawer
 const drawer = $("#drawer"), scrim = $("#scrim");
 let dRange = "1D", dCompare = false, dInfo = null, dReq = 0;
+// moving averages drawn on the detail chart (daily closes, computed here only for display)
+const MAS = [{ n: 20, color: "--series-1" }, { n: 40, color: "--series-2" }, { n: 60, color: "--series-3" }, { n: 200, color: "--series-4" }];
+const MA_RANGES = ["1M", "6M", "YTD", "1Y"];
+const dMA = new Set(LS.get("dMA", [20, 40, 60, 200]));
+let dDaily = null;   // { t, pts } two years of daily closes for the open stock
 
 function openDetail(t) {
-  state.detail = t; dInfo = null;
-  drawer.innerHTML = `<div class="d-top"></div><div class="d-signal"></div><div class="d-ctrl"></div><div id="dChart" class="chart"></div><div id="dVol" class="chart"></div><div class="d-rest"><div class="loading" style="padding:40px"><div class="spinner"></div></div></div>`;
+  state.detail = t; dInfo = null; dDaily = null;
+  drawer.innerHTML = `<div class="d-top"></div><div class="d-sum"></div><div class="d-ctrl"></div><div id="dChart" class="chart"></div><div id="dVol" class="chart"></div><div class="d-rest"><div class="loading" style="padding:40px"><div class="spinner"></div></div></div>`;
   drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); scrim.hidden = false;
   renderDetailHeader();
   renderDetailCtrl();
@@ -855,11 +860,35 @@ function renderDetailHeader() {
 }
 function renderDetailCtrl() {
   const el = drawer.querySelector(".d-ctrl");
+  const maOk = MA_RANGES.includes(dRange) && !dCompare;
+  const maNote = dCompare ? "medie nascoste durante il confronto" : maOk ? "" : "medie visibili su 1M, 6M, YTD e 1A";
   el.innerHTML = `<div class="seg">${["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "MAX"].map(r => `<button data-r="${r}" class="${r === dRange ? "on" : ""}">${RLAB[r] || r}</button>`).join("")}</div>
-    ${state.detail !== "^NDX" ? `<label class="check"><input type="checkbox" id="dCmp" ${dCompare ? "checked" : ""}> Confronta con il Nasdaq-100</label>` : ""}`;
+    ${state.detail !== "^NDX" ? `<label class="check"><input type="checkbox" id="dCmp" ${dCompare ? "checked" : ""}> Confronta con il Nasdaq-100</label>` : ""}
+    <div class="ma-toggles${maOk ? "" : " off"}"><span class="muted">Medie mobili</span>${MAS.map(m => `<label class="check"><input type="checkbox" data-ma="${m.n}" ${dMA.has(m.n) ? "checked" : ""} ${maOk ? "" : "disabled"}><i style="background:var(${m.color})"></i>${m.n}</label>`).join("")}
+      ${maNote ? `<span class="muted small">${maNote}</span>` : ""}</div>`;
   el.onclick = e => { const b = e.target.closest("[data-r]"); if (b) { dRange = b.dataset.r; renderDetailCtrl(); loadDetailChart(); } };
-  const cb = el.querySelector("#dCmp");
-  if (cb) cb.onchange = () => { dCompare = cb.checked; loadDetailChart(); };
+  el.onchange = e => {
+    if (e.target.id === "dCmp") { dCompare = e.target.checked; renderDetailCtrl(); return loadDetailChart(); }
+    const n = +e.target.dataset.ma;
+    if (!n) return;
+    e.target.checked ? dMA.add(n) : dMA.delete(n);
+    LS.set("dMA", [...dMA]);
+    loadDetailChart();
+  };
+}
+// simple moving averages of the daily closes, aligned to the chart points (each point takes the value of its trading day)
+async function maSeries(t, pts) {
+  const on = MAS.filter(m => dMA.has(m.n));
+  if (!on.length) return [];
+  if (!dDaily || dDaily.t !== t) dDaily = { t, pts: (await getJSON(`/api/history/${encodeURIComponent(t)}/2Y`)).filter(p => isNum(p.c)) };
+  const D = dDaily.pts;
+  return on.map(m => {
+    let sum = 0;
+    const sma = D.map((p, i) => { sum += p.c; if (i >= m.n) sum -= D[i - m.n].c; return i >= m.n - 1 ? sum / m.n : null; });
+    let j = -1;
+    return { n: m.n, color: css(m.color), width: 1.4, dot: false,
+      pts: pts.map(p => { while (j + 1 < D.length && D[j + 1].t <= p.t) j++; return { t: p.t, v: j >= 0 ? sma[j] : null }; }) };
+  });
 }
 const getJSON = async u => { const r = await fetch(u); if (!r.ok) throw new Error(r.statusText); return r.json(); };
 
@@ -889,10 +918,11 @@ async function loadDetailChart() {
         html += `<div class="tip-row"><span>Chiusura</span><b class="num">${fPrice(p.v)}</b></div>
           <div class="tip-row"><span>Ap. / Max / Min</span><span class="num">${fPrice(p.o)} / ${fPrice(p.h)} / ${fPrice(p.l)}</span></div>
           <div class="tip-row"><span>Variazione</span><b class="${sign(chg)}">${fPct(chg)}</b></div>`;
+        html += mas.map(m => `<div class="tip-row"><span><i class="swatch" style="background:${m.color}"></i>Media ${m.n}</span><span class="num">${fPrice(m.pts[i].v)}</span></div>`).join("");
       }
       return html + (isNum(p.vol) && p.vol > 0 ? `<div class="tip-row"><span>Volume</span><span class="num">${fBig(p.vol)}</span></div>` : "");
     };
-    let sPts = null, bnPts = null;
+    let sPts = null, bnPts = null, mas = [];
     if (bench && bench.length) {
       // align benchmark to stock timestamps (last benchmark value at or before each point)
       const B = bench.filter(p => isNum(p.c));
@@ -907,9 +937,16 @@ async function loadDetailChart() {
       chartEl.insertAdjacentHTML("afterbegin", `<div class="series-key"><span><i style="background:${css("--series-1")}"></i>${esc(t)} ${fPct(sPts.at(-1).v - 100)}</span><span><i style="background:${css("--series-2")}"></i>Nasdaq-100 ${fPct((bnPts.at(-1).v ?? 100) - 100)}</span></div>`);
     } else {
       const col = pts.at(-1).v >= base ? css("--up") : css("--down");
-      chart = lineChart(chartEl, [{ pts, color: col }], {
-        height: 280, baseline: rng === "1D" ? base : null, baselineLabel: rng === "1D" ? `Chiusura prec. ${fPrice(base)}` : "", range: rng, tip: tipFor, label: `${t} price`,
+      if (MA_RANGES.includes(rng)) {
+        try { mas = await maSeries(t, pts); } catch { mas = []; }   // chart still works without the averages
+        if (req !== dReq || state.detail !== t) return;
+      }
+      chart = lineChart(chartEl, [{ pts, color: col }, ...mas], {
+        height: 280, baseline: rng === "1D" ? base : null, baselineLabel: rng === "1D" ? `Chiusura prec. ${fPrice(base)}` : "", range: rng, tip: tipFor, label: `${t} price`, areaFirst: true,
       });
+      if (mas.length) chartEl.insertAdjacentHTML("afterbegin", `<div class="series-key">${mas.map(m => {
+        const v = m.pts.at(-1).v, d = isNum(v) ? (pts.at(-1).v / v - 1) * 100 : null;
+        return `<span><i style="background:${m.color}"></i>Media ${m.n} ${fPrice(v)} <b class="${sign(d)}">${isNum(d) ? `prezzo ${fPct(d, 1)}` : ""}</b></span>`; }).join("")}</div>`);
     }
     // volume panel (its own axis-free strip, same x positions)
     if (pts.some(p => p.vol > 0)) {
@@ -941,38 +978,41 @@ async function loadDetailInfo() {
   const q = s.ticker ? s : idx || {};
   const perf = [["1G", q.chgPct], ["1S", q.perf1W], ["1M", q.perf1M], ["3M", q.perf3M], ["6M", q.perf6M], ["YTD", q.perfYTD], ["1A", q.perf1Y]];
   const stat = (l, v) => `<div><span>${l}</span><span>${v}</span></div>`;
+  const vs = k => `<span class="${sign(s[k])}">${fPct(s[k], 1)}</span>`;
+  const pctOf = v => isNum(v) ? fNum(v * 100, 1) + "%" : "—";
   const earn = isNum(i.earningsTimestamp) ? fDate(i.earningsTimestamp, { month: "short", day: "numeric", year: "numeric" }) : "—";
   const rng52 = isNum(s.lo52) && isNum(s.hi52) ? rangeViz(s.lo52, s.hi52, s.price, null, "Range a 52 settimane") : "";
   const tgt = isNum(i.targetLowPrice) && isNum(i.targetHighPrice) && isNum(s.price)
     ? rangeViz(Math.min(i.targetLowPrice, s.price), Math.max(i.targetHighPrice, s.price), s.price, i.targetMeanPrice,
       `Target degli analisti · ${esc(REC[i.recommendationKey] || "—")} · ${i.numberOfAnalystOpinions || 0} analisti`, [i.targetLowPrice, i.targetHighPrice]) : "";
-  drawer.querySelector(".d-rest").innerHTML = `
+  const trend = `<div class="d-sec"><h3>Trend</h3>
     <div class="d-perf">${perf.map(([l, v]) => `<div><div class="l">${l}</div><div class="v ${sign(v)}">${fPct(v, 1)}</div></div>`).join("")}</div>
-    ${s.ticker ? `
-    <div class="d-stats">
+    ${s.ticker ? `<div class="d-stats">
+      ${stat("vs media 20 giorni", vs("vsSma20"))}${stat("vs media 40 giorni", vs("vsSma40"))}
+      ${stat("vs media 60 giorni", vs("vsSma60"))}${stat("Ordine medie 20/40/60", maOrder(s))}
+      ${stat("vs media 50 giorni", vs("vsSma50"))}${stat("vs media 200 giorni", vs("vsSma200"))}
+      ${stat("RSI (14)", fNum(s.rsi, 0))}${stat("Volatilità (20 g, annua)", isNum(s.vol20) ? fNum(s.vol20, 0) + "%" : "—")}
+    </div>${rng52}` : ""}</div>`;
+  const newsSec = data.news?.length ? `<div class="d-sec"><h3>Notizie</h3><div class="news">${data.news.slice(0, 8).map(n => `<a href="${esc(n.url)}" target="_blank" rel="noopener"><div class="nt">${esc(n.title)}</div><div class="nm">${esc(n.publisher || "")} · ${esc(ago(n.time))}</div></a>`).join("")}</div></div>` : "";
+  const company = s.ticker ? `<details class="d-sec fold"><summary><h3>Dati della società</h3><span class="muted small">profilo, bilancio, dati del giorno</span></summary>
+    ${i.longBusinessSummary ? `<p class="about clamp" id="about">${esc(i.longBusinessSummary)}</p>
+      <button class="link-btn" id="aboutMore">Mostra altro</button>${i.website ? ` <a class="link-btn" href="${esc(i.website)}" target="_blank" rel="noopener">${esc(i.website.replace(/^https?:\/\/(www\.)?/, ""))} ↗</a>` : ""}` : ""}
+    <div class="d-stats" style="margin-top:10px">
+      ${stat("Dipendenti", isNum(i.fullTimeEmployees) ? i.fullTimeEmployees.toLocaleString("it-IT") : "—")}${stat("Sede", esc([i.city, i.state || i.country].filter(Boolean).join(", ") || "—"))}
       ${stat("Capitalizzazione", "$" + fBig(s.mcap))}${stat("Peso nell'indice", fNum(s.weight) + "%")}
-      ${stat("Range del giorno", `${fPrice(s.low)} – ${fPrice(s.high)}`)}${stat("Apertura", fPrice(s.open))}
-      ${stat("Volume", fBig(s.volume))}${stat("Volume relativo", fX(s.relVol))}
       ${stat("P/E (ultimi 12 mesi)", fNum(i.trailingPE, 1))}${stat("P/E atteso", fNum(i.forwardPE, 1))}
       ${stat("Utile per azione (12 mesi)", fNum(i.trailingEps, 2))}${stat("Utile per azione atteso", fNum(i.forwardEps, 2))}
       ${stat("P/S", fNum(i.priceToSalesTrailing12Months, 1))}${stat("EV/EBITDA", fNum(i.enterpriseToEbitda, 1))}
       ${stat("Ricavi (12 mesi)", "$" + fBig(i.totalRevenue))}${stat("Crescita ricavi", isNum(i.revenueGrowth) ? fPct(i.revenueGrowth * 100, 1) : "—")}
-      ${stat("Margine lordo", isNum(i.grossMargins) ? fNum(i.grossMargins * 100, 1) + "%" : "—")}${stat("Margine netto", isNum(i.profitMargins) ? fNum(i.profitMargins * 100, 1) + "%" : "—")}
-      ${stat("ROE", isNum(i.returnOnEquity) ? fNum(i.returnOnEquity * 100, 1) + "%" : "—")}${stat("Flusso di cassa libero", "$" + fBig(i.freeCashflow))}
+      ${stat("Margine lordo", pctOf(i.grossMargins))}${stat("Margine netto", pctOf(i.profitMargins))}
+      ${stat("ROE", pctOf(i.returnOnEquity))}${stat("Flusso di cassa libero", "$" + fBig(i.freeCashflow))}
       ${stat("Rendimento dividendo", isNum(i.dividendYield) && i.dividendYield > 0 ? fNum(i.dividendYield, 2) + "%" : "—")}${stat("Beta", fNum(i.beta, 2))}
-      ${stat("RSI (14)", fNum(s.rsi, 0))}${stat("Volatilità (20 g, annua)", isNum(s.vol20) ? fNum(s.vol20, 0) + "%" : "—")}
-      ${stat("vs media 20 giorni", `<span class="${sign(s.vsSma20)}">${fPct(s.vsSma20, 1)}</span>`)}${stat("vs media 40 giorni", `<span class="${sign(s.vsSma40)}">${fPct(s.vsSma40, 1)}</span>`)}
-      ${stat("vs media 60 giorni", `<span class="${sign(s.vsSma60)}">${fPct(s.vsSma60, 1)}</span>`)}${stat("Ordine medie 20/40/60", maOrder(s))}
-      ${stat("vs media 50 giorni", `<span class="${sign(s.vsSma50)}">${fPct(s.vsSma50, 1)}</span>`)}${stat("vs media 200 giorni", `<span class="${sign(s.vsSma200)}">${fPct(s.vsSma200, 1)}</span>`)}
-      ${stat("Short % flottante", isNum(i.shortPercentOfFloat) ? fNum(i.shortPercentOfFloat * 100, 1) + "%" : "—")}${stat("Prossima trimestrale", earn)}
-      ${stat("Dipendenti", isNum(i.fullTimeEmployees) ? i.fullTimeEmployees.toLocaleString("it-IT") : "—")}${stat("Sede", esc([i.city, i.state || i.country].filter(Boolean).join(", ") || "—"))}
-    </div>
-    <div class="d-sec">${rng52}${tgt}</div>
-    ${valuationHTML(data.valuation)}${analystsHTML(data.analysts, s)}` : ""}
-    ${i.longBusinessSummary ? `<div class="d-sec"><h3>Profilo</h3><p class="about clamp" id="about">${esc(i.longBusinessSummary)}</p>
-      <button class="link-btn" id="aboutMore">Mostra altro</button>${i.website ? ` <a class="link-btn" href="${esc(i.website)}" target="_blank" rel="noopener">${esc(i.website.replace(/^https?:\/\/(www\.)?/, ""))} ↗</a>` : ""}</div>` : ""}
-    ${data.news?.length ? `<div class="d-sec"><h3>Notizie</h3><div class="news">${data.news.slice(0, 8).map(n => `<a href="${esc(n.url)}" target="_blank" rel="noopener"><div class="nt">${esc(n.title)}</div><div class="nm">${esc(n.publisher || "")} · ${esc(ago(n.time))}</div></a>`).join("")}</div></div>` : ""}`;
-  drawer.querySelector(".d-signal").innerHTML = signalHTML(data.signal);
+      ${stat("Short % flottante", pctOf(i.shortPercentOfFloat))}${stat("Prossima trimestrale", earn)}
+      ${stat("Apertura", fPrice(s.open))}${stat("Range del giorno", `${fPrice(s.low)} – ${fPrice(s.high)}`)}
+      ${stat("Volume", fBig(s.volume))}${stat("Volume relativo", fX(s.relVol))}
+    </div></details>` : "";
+  drawer.querySelector(".d-rest").innerHTML = trend + (s.ticker ? valuationHTML(data.valuation) + analystsHTML(data.analysts, s, tgt) : "") + newsSec + company;
+  drawer.querySelector(".d-sum").innerHTML = signalHTML(data.signal);
   const more = $("#aboutMore");
   if (more) more.onclick = () => { $("#about").classList.toggle("clamp"); more.textContent = $("#about").classList.contains("clamp") ? "Mostra altro" : "Mostra meno"; };
 }
@@ -991,16 +1031,22 @@ const SIG_CLS = { "Molto positivo": "b2", Positivo: "b1", Neutro: "n", Negativo:
 const SIG_OLD = { "Forte acquisto": "Molto positivo", Acquisto: "Positivo", Vendita: "Negativo", "Forte vendita": "Molto negativo" };
 const sigName = l => SIG_OLD[l] || l;
 const sigBadge = l => l ? `<span class="sg ${SIG_CLS[sigName(l)]}">${esc(sigName(l))}</span>` : "—";
+// "In sintesi": signal plus the first reason of the 3 parts that move the score most (score × effective weight)
 function signalHTML(sig) {
   if (!sig) return "";
-  return `<div class="sigbox"><div class="sig-head">${sigBadge(sig.signal)}<span class="sig-score num ${sign(sig.score)}">${sig.score > 0 ? "+" : ""}${fNum(sig.score, 0)}</span>
+  const top = sig.components.filter(c => c.used && isNum(c.score))
+    .sort((a, b) => Math.abs(b.score * b.effWeight) - Math.abs(a.score * a.effWeight)).slice(0, 3);
+  return `<div class="sigbox"><h3>In sintesi</h3>
+    <div class="sig-head">${sigBadge(sig.signal)}<span class="sig-score num ${sign(sig.score)}">${sig.score > 0 ? "+" : ""}${fNum(sig.score, 0)}</span>
       <span class="muted small">punteggio da −100 a +100 · ≥ +20 positivo, ≤ −20 negativo</span></div>
+    <ol class="top3">${top.map(c => `<li><b>${esc(c.name)}</b> <span class="num ${sign(c.score)}">${c.score > 0 ? "+" : ""}${fNum(c.score, 0)}</span> · ${esc(c.reasons[0] || "")}</li>`).join("")}</ol>
+    <details class="fold"><summary><span class="small">Dettaglio del segnale</span></summary>
     <div class="sig-comps">${sig.components.map(c => `<div class="sig-c ${c.used ? "" : "off"}">
       <div class="sig-cn"><b>${esc(c.name)}</b> <span class="muted">${c.used ? `peso ${fNum(c.effWeight * 100, 0)}%` : "non disponibile"}</span></div>
       <div>${c.used ? scoreBar(c.score) : ""}</div>
       <ul class="why">${c.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>`).join("")}</div>
     <div class="muted small">Combinazione automatica di dati pubblici (pesi: tecnica 40%, analisti 25%, valutazione 20%, notizie 15%).
-      Non è una consulenza finanziaria: usalo come punto di partenza per le tue verifiche.</div></div>`;
+      Non è una consulenza finanziaria: usalo come punto di partenza per le tue verifiche.</div></details></div>`;
 }
 const VAL_CLS = { Economica: "cheap", "In linea": "fair", Cara: "rich" };
 const valBadge = l => l ? `<span class="vb ${VAL_CLS[l]}">${esc(l)}</span>` : "—";
@@ -1017,8 +1063,8 @@ function valuationHTML(v) {
     (P/E e P/S alle ultime chiusure di bilancio). Giudizio: Economica sotto −15%, Cara sopra +18%.</div></div>`;
 }
 const ACT_IT = { up: "Upgrade", down: "Downgrade", init: "Avvio copertura", main: "Conferma", reit: "Conferma" };
-function analystsHTML(a, s) {
-  if (!a) return `<div class="d-sec"><h3>Analisti</h3><div class="muted">Dati degli analisti in caricamento (si aggiornano una volta al giorno)</div></div>`;
+function analystsHTML(a, s, tgt = "") {
+  if (!a) return `<div class="d-sec"><h3>Analisti</h3>${tgt}<div class="muted">Dati degli analisti in caricamento (si aggiornano una volta al giorno)</div></div>`;
   const rt = a.recTrend || [], now = rt[0], old = rt[3];
   const KEYS = [["strongBuy", "Forte acquisto"], ["buy", "Acquisto"], ["hold", "Mantenere"], ["sell", "Vendita"], ["strongSell", "Forte vendita"]];
   const tot = now ? KEYS.reduce((n, [k]) => n + (now[k] || 0), 0) : 0;
@@ -1045,7 +1091,7 @@ function analystsHTML(a, s) {
       <td class="l ${x.action === "up" ? "up" : x.action === "down" ? "down" : ""}">${esc(ACT_IT[x.action] || x.action)}</td>
       <td class="l">${x.from && x.from !== x.to ? esc(x.from) + " → " : ""}${esc(x.to || "")}</td>
       <td class="num">${isNum(x.ptPrior) && x.ptPrior && x.ptPrior !== x.pt ? `${fPrice(x.ptPrior)} → ` : ""}${isNum(x.pt) && x.pt ? `<b class="${x.ptAction === "Raises" ? "up" : x.ptAction === "Lowers" ? "down" : ""}">${fPrice(x.pt)}</b>` : "—"}</td></tr>`).join("")}</tbody></table>` : `<div class="muted">Nessuna azione degli analisti negli ultimi 6 mesi</div>`;
-  return `<div class="d-sec"><h3>Analisti</h3>${bar}<div class="small" style="margin:8px 0">${last30}</div>${est}
+  return `<div class="d-sec"><h3>Analisti</h3>${tgt}${bar}<div class="small" style="margin:8px 0">${last30}</div>${est}
     <h3 style="margin-top:14px">Ultime azioni delle banche d'affari</h3>${table}</div>`;
 }
 

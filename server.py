@@ -601,7 +601,7 @@ def worker():
 _detail_cache: dict[tuple, tuple[float, object]] = {}
 
 RANGES = {"1D": ("1d", "5m"), "5D": ("5d", "15m"), "1M": ("1mo", "1h"), "6M": ("6mo", "1d"),
-          "YTD": ("ytd", "1d"), "1Y": ("1y", "1d"), "5Y": ("5y", "1wk"), "MAX": ("max", "1mo")}
+          "YTD": ("ytd", "1d"), "1Y": ("1y", "1d"), "2Y": ("2y", "1d"), "5Y": ("5y", "1wk"), "MAX": ("max", "1mo")}
 
 
 def cached(key, ttl, fn):

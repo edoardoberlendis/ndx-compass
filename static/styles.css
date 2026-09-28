@@ -18,6 +18,7 @@
   --series-1: #2a78d6;
   --series-2: #eb6834;
   --series-3: #1baf7a;
+  --series-4: #8a5cd0;
   --warn: #b27400;
   --map-bg: #26262a;
   --shadow: 0 8px 28px rgba(0, 0, 0, .14), 0 1px 3px rgba(0, 0, 0, .08);
@@ -44,7 +45,8 @@
     --accent: #3987e5;
     --series-1: #3987e5;
     --series-2: #d95926;
-  --series-3: #199e70;
+    --series-3: #199e70;
+    --series-4: #a07ce6;
     --warn: #e0a31a;
     --map-bg: #0d0d0d;
     --shadow: 0 10px 34px rgba(0, 0, 0, .55), 0 1px 3px rgba(0, 0, 0, .4);
@@ -70,6 +72,7 @@
   --series-1: #3987e5;
   --series-2: #d95926;
   --series-3: #199e70;
+  --series-4: #a07ce6;
   --warn: #e0a31a;
   --map-bg: #0d0d0d;
   --shadow: 0 10px 34px rgba(0, 0, 0, .55), 0 1px 3px rgba(0, 0, 0, .4);
@@ -542,3 +545,16 @@ table.scr, table.matrix { width: 100%; border-collapse: collapse; font-variant-n
 .disclaimer { color: var(--muted); font-size: 11.5px; text-align: center; margin: 4px 0 0; }
 .rrg-label { fill: var(--ink-2); font-size: 11px; font-weight: 600; paint-order: stroke; stroke: var(--surface); stroke-width: 3px; }
 .rrg-q { fill: var(--muted); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+
+/* ------------------------------------------------ detail: summary, MA toggles, folding sections */
+.sigbox h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .03em; color: var(--ink-2); margin: 0 0 8px; }
+.top3 { margin: 4px 0 8px; padding-left: 20px; line-height: 1.5; }
+.top3 li { margin: 2px 0; }
+details.fold > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; gap: 8px; padding: 4px 0; }
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary::before { content: "▸"; color: var(--muted); transition: transform .15s; display: inline-block; }
+details.fold[open] > summary::before { transform: rotate(90deg); }
+details.fold > summary h3 { margin: 0; }
+.ma-toggles { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; width: 100%; }
+.ma-toggles .check i { width: 10px; height: 3px; border-radius: 2px; display: inline-block; }
+.ma-toggles.off .check { opacity: .45; }
