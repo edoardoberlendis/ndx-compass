@@ -47,10 +47,10 @@
         <div class="card-h">
           <h2>Mappa del mercato</h2>
           <div class="seg tf-seg" data-tf-seg></div>
-          <button class="link-btn" data-goto="sectors">Apri in Settori →</button>
+          <button class="link-btn" id="ovUnzoom" hidden>← Tutti i settori</button>
         </div>
         <div class="map" id="ovMap"></div>
-        <div class="map-foot"><div class="legend" data-legend></div><span class="hint">Dimensione = capitalizzazione · clicca un riquadro per i dettagli · clicca un settore per ingrandirlo</span></div>
+        <div class="map-foot"><div class="legend" data-legend></div><span class="hint">Dimensione = capitalizzazione · clicca un riquadro per i dettagli · clicca il nome di un settore per ingrandirlo, di nuovo per tornare</span></div>
       </div>
 
       <div class="ov-side">
@@ -69,10 +69,7 @@
       </div>
     </div>
 
-    <div class="grid-2">
-      <div class="card"><div class="card-h"><h2>Performance dei settori</h2><div class="seg tf-seg small" data-tf-seg></div></div><div id="sectorBars" class="chart"></div></div>
-      <div class="card"><div class="card-h"><h2>Trimestrali</h2><span class="card-meta">prossimi 7 giorni · ★ i miei titoli in cima</span></div><div id="earnings" class="mini-table"></div></div>
-    </div>
+    <div class="card"><div class="card-h"><h2>Trimestrali</h2><span class="card-meta">prossimi 7 giorni · ★ i miei titoli in cima</span></div><div id="earnings" class="mini-table"></div></div>
   </section>
 
   <!-- MY STOCKS (watchlist.json) -->
@@ -98,25 +95,15 @@
     <div class="table-wrap"><table class="scr" id="scr"></table></div>
   </section>
 
-  <!-- SECTORS (market map + sector returns) -->
+  <!-- SECTORS (sector returns; the market map lives in Oggi) -->
   <section id="view-sectors" class="view" hidden>
-    <div class="toolbar">
-      <div class="seg tf-seg" data-tf-seg></div>
-      <div class="seg" id="sizeSeg">
-        <button data-size="mcap" class="on">Capitalizzazione</button><button data-size="equal">Uguale</button>
-      </div>
-      <label class="check"><input type="checkbox" id="cvd"> Colori per daltonici</label>
-      <input id="mapFind" class="find" type="search" placeholder="Evidenzia…" aria-label="Evidenzia titoli">
-      <div class="crumbs" id="crumbs"></div>
-      <div class="legend" data-legend></div>
-    </div>
-    <div class="map big" id="bigMap"></div>
     <div class="card">
-      <div class="card-h"><h2>Rendimenti dei settori</h2><span class="card-meta">pesati per capitalizzazione · clicca una riga per ingrandire il settore nella mappa e vederne i titoli</span></div>
+      <div class="card-h"><h2>Rendimenti dei settori</h2><span class="card-meta">pesati per capitalizzazione · clicca una riga per vedere i titoli del settore, di nuovo per tornare a tutti</span>
+        <button class="btn" id="secAll" hidden>Tutti i settori</button></div>
       <div class="table-wrap"><table class="matrix" id="matrix"></table></div>
     </div>
-    <div class="grid-2 sector-detail">
-      <div class="card">
+    <div class="grid-2 sector-detail" id="secDetail">
+      <div class="card" id="secStocks">
         <div class="card-h"><h2 id="secTitle">Titoli</h2><div class="seg tf-seg small" data-tf-seg></div></div>
         <div id="secBars" class="chart"></div>
       </div>

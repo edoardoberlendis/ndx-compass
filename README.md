@@ -20,7 +20,7 @@ Oppure dal Terminale:
 ## Cosa contiene
 
 - **Oggi**: 4 indicatori (Nasdaq-100, titoli in rialzo/ribasso, % di titoli sopra le medie 20/40/60 e 200, VIX),
-  mappa del mercato, grafico intraday del Nasdaq-100, chi si è mosso e perché, settori, trimestrali dei prossimi 7 giorni
+  mappa del mercato (clic sul nome di un settore per ingrandirlo), grafico intraday del Nasdaq-100, chi si è mosso e perché, trimestrali dei prossimi 7 giorni
   (i miei titoli in cima).
 - **I miei titoli**: i preferiti (★) con prezzo, variazioni, posizione rispetto alle medie, valutazione, analisti, segnale,
   prossima trimestrale e ultima notizia. Salvati in `watchlist.json` nella cartella del progetto.
@@ -38,8 +38,8 @@ Oppure dal Terminale:
   ≥ +50 molto positivo, ≥ +20 positivo, ≤ −20 negativo, ≤ −50 molto negativo. Calcolo in `score.py`.
   È una combinazione meccanica di dati pubblici, **non una consulenza finanziaria**.
 - **Screener**: i 100 titoli con colonne Panoramica / Performance / Valutazione / Tecnica, filtri (anche "Sopra/Sotto 20, 40 e 60", "Valutazione economica/cara", "Upgrade recenti", "Stime in rialzo/calo"), export CSV. La vista Tecnica mostra la distanza dalle medie 20/40/60/50/200.
-- **Settori**: mappa del mercato per settore › industria (colorata per performance 1G…1A) e, sotto, rendimenti dei settori
-  pesati per capitalizzazione. Clic su un settore: la mappa si ingrandisce su quel settore e compaiono i suoi titoli.
+- **Settori**: rendimenti dei settori pesati per capitalizzazione e peso di ogni settore nell'indice. Clic su una riga:
+  compaiono i titoli di quel settore; di nuovo sulla stessa riga (o "Tutti i settori") si torna a tutti.
 - **Report**: il report tecnico generato da `signals.py` (vedi sotto): sintesi, mappa di rotazione, temi, cosa è cambiato,
   tabella delle medie e backtest. Le idee di trading (entrata/stop/target) sono in fondo, chiuse di default.
 - **Scheda titolo**: grafico 1G–MAX, confronto con NDX, fondamentali, target degli analisti, notizie, più:

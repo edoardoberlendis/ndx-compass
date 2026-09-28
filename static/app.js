@@ -13,8 +13,8 @@ const state = {
   bySym: new Map(),
   view: LS.get("view", "overview") === "map" ? "sectors" : LS.get("view", "overview"),   // Mappa is now part of Settori
   tf: LS.get("tf", "1D"),
-  size: LS.get("size", "mcap"),
-  cvd: LS.get("cvd", false),
+  size: "mcap",   // map tiles sized by market cap
+  cvd: false,
   zoom: null,
   cols: LS.get("cols", "overview"),
   preset: "all",
@@ -271,8 +271,7 @@ function renderTreemap(el, opts = {}) {
     if (t) { hideTip(); return openDetail(t.dataset.t); }
     const sh = ev.target.closest(".sector-h");
     if (sh) {
-      if (opts.zoomable) { state.zoom = state.zoom ? null : sh.dataset.sector; if (state.zoom) state.secSel = state.zoom; renderSectors(); }
-      else { state.zoom = state.secSel = sh.dataset.sector; setView("sectors"); }
+      if (opts.zoomable) { state.zoom = state.zoom ? null : sh.dataset.sector; renderOvMap(); }
     }
   };
 }
@@ -295,13 +294,19 @@ function tileTip(s) {
 // ------------------------------------------------------------ overview
 function renderOverview() {
   renderKpis();
-  renderTreemap($("#ovMap"));
+  renderOvMap();
   $$("[data-legend]").forEach(el => el.innerHTML = legendHTML(state.tf));
   renderIndexChart();
-  renderSectorBars($("#sectorBars"), sectors(), state.tf);
   renderEarnings();
   loadWhy();
 }
+
+// Oggi's market map: clicking a sector name zooms on it, clicking again (or "Tutti i settori") shows the whole market
+function renderOvMap() {
+  $("#ovUnzoom").hidden = !state.zoom;
+  renderTreemap($("#ovMap"), { zoomable: true });
+}
+$("#ovUnzoom").addEventListener("click", () => { state.zoom = null; renderOvMap(); });
 
 function renderKpis() {
   const S = stocks(), ndx = state.snap.indices["^NDX"], vix = state.snap.indices["^VIX"];
@@ -456,18 +461,6 @@ function miniTable(el, list, cols, empty = "Nessun elemento") {
   el.onclick = e => { const tr = e.target.closest("tr[data-t]"); if (tr && !e.target.closest(".star")) openDetail(tr.dataset.t); };
 }
 const pill = v => `<span class="pill ${sign(v)}">${fPct(v)}</span>`;
-
-function renderSectorBars(el, secs, tf) {
-  const rows = secs.filter(s => isNum(s[tf])).sort((a, b) => b[tf] - a[tf])
-    .map(s => ({ name: s.name, v: s[tf], label: fMetric(tf, s[tf]), s }));
-  hbars(el, rows, {
-    nameW: 150, rowH: 24,
-    click: r => { state.secSel = state.zoom = r.name; setView("sectors"); },
-    tip: r => `<div class="tip-h">${esc(r.name)}</div><div class="tip-row"><span>${esc(METRICS[tf].label)} (pesato per cap.)</span><b class="${sign(r.v)}">${r.label}</b></div>
-      <div class="tip-row"><span>Titoli</span><b>${r.s.n}</b></div><div class="tip-row"><span>Capitalizzazione</span><b>$${fBig(r.s.mcap)}</b></div>
-      <div class="tip-row"><span>In rialzo oggi</span><b>${r.s.list.filter(x => x.chgPct > 0).length} / ${r.s.n}</b></div>`,
-  });
-}
 
 // ------------------------------------------------------------ signals & presets
 const PRESETS = [
@@ -630,19 +623,6 @@ $("#myTbl").addEventListener("click", e => {
   if (tr && !e.target.closest(".star")) openDetail(tr.dataset.t);
 });
 
-// ------------------------------------------------------------ map view
-function renderMapView() {
-  $$("#sizeSeg button").forEach(b => b.classList.toggle("on", b.dataset.size === state.size));
-  $("#cvd").checked = state.cvd;
-  $("#crumbs").innerHTML = state.zoom ? `<button data-crumb>Tutti i settori</button><span class="muted">›</span><b>${esc(state.zoom)}</b>` : "";
-  $$("[data-legend]").forEach(el => el.innerHTML = legendHTML(state.tf));
-  renderTreemap($("#bigMap"), { zoomable: true, find: $("#mapFind").value });
-}
-$("#sizeSeg").addEventListener("click", e => { const b = e.target.closest("[data-size]"); if (b) { state.size = b.dataset.size; LS.set("size", state.size); renderMapView(); } });
-$("#cvd").addEventListener("change", e => { state.cvd = e.target.checked; LS.set("cvd", state.cvd); renderAll(); });
-$("#mapFind").addEventListener("input", () => renderMapView());
-$("#crumbs").addEventListener("click", e => { if (e.target.closest("[data-crumb]")) { state.zoom = null; renderMapView(); } });
-
 // ------------------------------------------------------------ screener
 const C = {
   star:   { l: "", cls: "l", sort: s => state.watch.has(s.ticker) ? 1 : 0, html: s => `<button class="star ${state.watch.has(s.ticker) ? "on" : ""}" data-star="${esc(s.ticker)}" aria-label="Preferito">${state.watch.has(s.ticker) ? "★" : "☆"}</button>` },
@@ -760,10 +740,10 @@ $("#csvBtn").addEventListener("click", () => {
 });
 
 // ------------------------------------------------------------ sectors view
+// no sector selected = all sectors (only the weights chart); a selected sector also lists its stocks
 function renderSectors() {
-  renderMapView();
   const secs = sectors();
-  if (!state.secSel || !secs.some(s => s.name === state.secSel)) state.secSel = secs[0]?.name;
+  if (state.secSel && !secs.some(s => s.name === state.secSel)) state.secSel = null;
   const tfs = PERF_TFS;
   const colors = Object.fromEntries(tfs.map(tf => [tf, colorFor(tf)]));
   const total = d3.sum(secs, s => s.mcap);
@@ -778,24 +758,27 @@ function renderSectors() {
         <td><span class="up">${adv}</span> / <span class="down">${s.list.filter(x => x.chgPct < 0).length}</span></td></tr>`;
     }).join("")}</tbody>`;
   const sec = secs.find(s => s.name === state.secSel);
+  $("#secAll").hidden = $("#secStocks").hidden = !sec;
+  $("#secDetail").classList.toggle("one", !sec);
+  const wr = secs.map(s => ({ name: s.name, v: s.mcap / total * 100, label: fNum(s.mcap / total * 100, 1) + "%", color: css(s.name === state.secSel ? "--series-2" : "--series-1"), s }));
+  hbars($("#weights"), wr, { nameW: 170, rowH: 26, click: r => { state.secSel = state.secSel === r.name ? null : r.name; renderSectors(); },
+    tip: r => `<div class="tip-h">${esc(r.name)}</div><div class="tip-row"><span>Capitalizzazione</span><b>$${fBig(r.s.mcap)}</b></div><div class="tip-row"><span>I più grandi</span><b>${esc([...r.s.list].sort((a, b) => b.mcap - a.mcap).slice(0, 3).map(x => x.ticker).join(", "))}</b></div>` });
+  if (!sec) return;
   const tf = PERF_TFS.includes(state.tf) ? state.tf : "1D";
   $("#secTitle").textContent = `${sec.name} · ${METRICS[tf].label}`;
   const rows = sec.list.filter(s => isNum(val(s, tf))).sort((a, b) => val(b, tf) - val(a, tf))
     .map(s => ({ name: s.ticker, v: val(s, tf), label: fMetric(tf, val(s, tf)), s }));
   hbars($("#secBars"), rows, { rowH: 22, click: r => openDetail(r.s.ticker),
     tip: r => `<div class="tip-h">${esc(r.s.industry)}</div><b>${esc(r.s.name)}</b><div class="tip-row"><span>${METRICS[tf].label}</span><b class="${sign(r.v)}">${r.label}</b></div><div class="tip-row"><span>Peso</span><b>${fNum(r.s.weight)}%</b></div>` });
-  const wr = secs.map(s => ({ name: s.name, v: s.mcap / total * 100, label: fNum(s.mcap / total * 100, 1) + "%", color: css("--series-1"), s }));
-  hbars($("#weights"), wr, { nameW: 170, rowH: 26, click: r => { state.secSel = state.zoom = r.name; renderSectors(); },
-    tip: r => `<div class="tip-h">${esc(r.name)}</div><div class="tip-row"><span>Capitalizzazione</span><b>$${fBig(r.s.mcap)}</b></div><div class="tip-row"><span>I più grandi</span><b>${esc([...r.s.list].sort((a, b) => b.mcap - a.mcap).slice(0, 3).map(x => x.ticker).join(", "))}</b></div>` });
 }
-// a row zooms the map on that sector; clicking the zoomed sector again shows the whole market
+// a row shows that sector's stocks; the same row again (or "Tutti i settori") goes back to all sectors
 $("#matrix").addEventListener("click", e => {
   const tr = e.target.closest("tr[data-sec]");
   if (!tr) return;
-  state.zoom = state.zoom === tr.dataset.sec ? null : tr.dataset.sec;
-  state.secSel = tr.dataset.sec;
+  state.secSel = state.secSel === tr.dataset.sec ? null : tr.dataset.sec;   // same row again = back to all sectors
   renderSectors();
 });
+$("#secAll").addEventListener("click", () => { state.secSel = null; renderSectors(); });
 
 // ------------------------------------------------------------ detail drawer
 const drawer = $("#drawer"), scrim = $("#scrim");
