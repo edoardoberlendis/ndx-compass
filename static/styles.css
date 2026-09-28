@@ -610,3 +610,10 @@ table.my td.nw a:hover { text-decoration: underline; }
 .band.norm { color: var(--ink-2); }
 .band.nerv { color: var(--warn); }
 .band.fear { color: var(--down); }
+
+/* ------------------------------------------------ news reliability labels (not green/red: they are not good/bad news) */
+.nk { display: inline-block; font-size: 10.5px; font-weight: 650; padding: 1px 6px; border-radius: 4px; margin-right: 4px; white-space: nowrap; vertical-align: 1px; }
+.nk.official { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.nk.news { background: var(--surface-3); color: var(--ink-2); }
+.nk.opinion { background: color-mix(in srgb, var(--series-4) 18%, transparent); color: var(--series-4); }
+.news-opts { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 0 8px; }

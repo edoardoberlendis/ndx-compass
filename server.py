@@ -843,12 +843,13 @@ def api_stock(ticker):
     }, default=clean, allow_nan=False), mimetype="application/json")
 
 
-def latest_news(ticker, name):
-    """Newest headline already downloaded for the signal that names the stock (no extra Yahoo requests)."""
+def recent_news(ticker, name, k=5):
+    """Newest k headlines already downloaded for the signal that name the stock (no extra Yahoo requests).
+    More than one, so the page can skip opinion pieces when the user hides them."""
     items = (store.news_all or {}).get(ticker) or []
     names = name_words(ticker, name)
     hits = [n for n in items if news_time(n) and mentions(f"{n.get('title')} {n.get('summary') or ''}", ticker, names)]
-    return max(hits, key=news_time, default=None)
+    return sorted(hits, key=news_time, reverse=True)[:k]
 
 
 @app.route("/api/watchlist", methods=["GET", "POST"])
@@ -869,9 +870,9 @@ def api_watchlist():
     names = {r["ticker"]: r.get("name") for r in snap["stocks"]} if snap else {}
     news_by = {}
     for t in tickers:
-        n = latest_news(t, names.get(t))
-        if n:
-            news_by[t] = {k: n.get(k) for k in ("title", "url", "publisher", "time")}
+        items = recent_news(t, names.get(t))
+        if items:
+            news_by[t] = [{k: n.get(k) for k in ("title", "url", "publisher", "time")} for n in items]
     return app.response_class(json.dumps({"exists": True, "tickers": tickers, "news": news_by}, default=clean),
                               mimetype="application/json")
 

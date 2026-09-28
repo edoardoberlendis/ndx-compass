@@ -21,7 +21,8 @@ const state = {
   sector: "",
   sort: { key: "mcap", dir: -1 },
   watch: new Set(),              // loaded from watchlist.json at boot (loadWatch)
-  watchNews: {},                 // ticker -> latest headline naming the stock
+  watchNews: {},                 // ticker -> newest headlines naming the stock (newest first)
+  hideOpinion: LS.get("hideOpinion", false),
   mySort: { key: "chgPct", dir: -1 },
   secSel: null,
   detail: null,
@@ -610,15 +611,47 @@ function renderEarnings() {
   }, "Nessuna trimestrale nei prossimi 7 giorni");
 }
 
+// ------------------------------------------------------------ news reliability labels (automatic, approximate)
+// Ufficiale = the company's own releases / SEC filings; Opinione / ipotesi = commentary sites or speculative headlines;
+// everything else = Notizia (news outlets, unknown sources).
+const NEWS_OFFICIAL = /business ?wire|pr ?newswire|globe ?newswire|accesswire|\bsec\b|edgar/i;
+const NEWS_OPINION_SRC = /motley fool|\bfool\b|zacks|seeking alpha|investorplace|simply wall|insider monkey|24\/7 wall|gurufocus|stocktwits|tipranks/i;
+const NEWS_OPINION_TITLE = /\bcould\b|\bmay\b(?!\s+\d)|\bmight\b|should you (buy|sell)|\?|reportedly|sources? (say|said)|\brumou?rs?\b/i;
+const NEWS_KIND = { official: "Ufficiale", news: "Notizia", opinion: "Opinione / ipotesi" };
+function newsKind(n) {
+  const src = n.publisher || "", url = n.url || "";
+  if (NEWS_OFFICIAL.test(src) || /sec\.gov/i.test(url)) return "official";
+  if (NEWS_OPINION_SRC.test(src) || NEWS_OPINION_TITLE.test(n.title || "")) return "opinion";
+  return "news";
+}
+const newsTag = n => { const k = newsKind(n); return `<span class="nk ${k}">${NEWS_KIND[k]}</span>`; };
+const visibleNews = list => state.hideOpinion ? list.filter(n => newsKind(n) !== "opinion") : list;
+// the checkbox + the "automatic and approximate" line, shown wherever news are listed
+const newsOpts = () => `<div class="news-opts"><label class="check"><input type="checkbox" data-hide-op ${state.hideOpinion ? "checked" : ""}> Nascondi opinioni</label>
+  <span class="muted small">Etichette automatiche e approssimative: si basano sulla fonte e sulle parole del titolo.</span></div>`;
+document.addEventListener("change", e => {
+  if (!e.target.matches("[data-hide-op]")) return;
+  state.hideOpinion = e.target.checked; LS.set("hideOpinion", state.hideOpinion);
+  $$("[data-hide-op]").forEach(cb => cb.checked = state.hideOpinion);
+  if (state.view === "overview") renderWhy();
+  if (state.view === "watch") renderMyStocks();
+  if (state.detail) renderDetailNews();
+});
+
 // ------------------------------------------------------------ why they move (rule-based, from /api/movers-why)
-let whyLoadedAt = 0;
+let whyLoadedAt = 0, whyData = null;
+function renderWhy() {
+  if (!whyData) return;
+  $("#whyNewsOpts").innerHTML = newsOpts();
+  $("#whyTop").innerHTML = whyData.top.map(whyItem).join("") || `<div class="empty">Nessun dato</div>`;
+  $("#whyFlop").innerHTML = whyData.flop.map(whyItem).join("") || `<div class="empty">Nessun dato</div>`;
+}
 async function loadWhy() {
   if (Date.now() - whyLoadedAt < 5 * 60_000) return;
   whyLoadedAt = Date.now();
   try {
-    const d = await getJSON("/api/movers-why");
-    $("#whyTop").innerHTML = d.top.map(whyItem).join("") || `<div class="empty">Nessun dato</div>`;
-    $("#whyFlop").innerHTML = d.flop.map(whyItem).join("") || `<div class="empty">Nessun dato</div>`;
+    whyData = await getJSON("/api/movers-why");
+    renderWhy();
   } catch {
     whyLoadedAt = 0;   // retry on the next refresh
     $("#whyTop").innerHTML = $("#whyFlop").innerHTML = `<div class="empty">Notizie non disponibili</div>`;
@@ -629,9 +662,12 @@ function whyItem(x) {
   const tags = x.reasons.map(r => `<span class="${toneCls}">${esc(r)}</span>`).join("")
     + (isNum(x.sectorChg) ? `<span class="sec">${esc(x.sector)} ${fPct(x.sectorChg)}</span>` : "");
   const n = x.news;
-  const news = n ? `<a class="mv-news" href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)} ↗</a>
+  // with opinions hidden the reason stays, but the article it came from is not shown
+  const news = !n ? "" : state.hideOpinion && newsKind(n) === "opinion"
+    ? `<div class="nm">Motivo ricavato da un articolo d'opinione (nascosto)</div>`
+    : `<a class="mv-news" href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)} ↗</a>
       ${n.clause ? `<div class="mv-cl">“${esc(n.clause)}”</div>` : ""}
-      <div class="nm">${esc(n.publisher || "")} · ${esc(ago(n.time))}</div>` : "";
+      <div class="nm">${newsTag(n)} ${esc(n.publisher || "")} · ${esc(ago(n.time))}</div>`;
   return `<div class="mv-it"><div class="mv-h"><b data-open="${esc(x.ticker)}">${esc(x.ticker)}</b><span class="n">${esc(x.name || "")}</span>${pill(x.chgPct)}</div>
     ${tags ? `<div class="mv-tags">${tags}</div>` : ""}<div class="mv-sum">${esc(x.summary)}</div>${news}</div>`;
 }
@@ -666,6 +702,7 @@ async function saveWatch() {
     await fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tickers: [...state.watch] }) });
   } catch (e) { console.warn("watchlist not saved", e); }
 }
+const myNews = t => visibleNews([].concat(state.watchNews[t] || []))[0];   // [].concat: older servers sent one item
 // 1 = price > 20 > 40 > 60, -1 = the opposite, 0 = mixed (same rule as maOrder)
 function maStack(s) {
   const { price: p, sma20: a, sma40: b, sma60: c } = s;
@@ -684,6 +721,7 @@ function renderMyStocks() {
     return (typeof va === "string" ? va.localeCompare(vb) : va - vb) * state.mySort.dir;
   });
   $("#myCount").textContent = `${rows.length} titoli`;
+  $("#myNewsOpts").innerHTML = newsOpts();
   $("#myTbl").innerHTML = `<thead><tr>${MY_COLS.map(k => `<th class="${C[k].cls?.split(" ")[0] || ""} ${state.mySort.key === k ? "sorted" + (state.mySort.dir > 0 ? " asc" : "") : ""}" data-k="${k}">${colHead(k)}</th>`).join("")}</tr></thead>
     <tbody>${rows.map(s => `<tr data-t="${esc(s.ticker)}">${MY_COLS.map(k => `<td class="${C[k].cls || ""}">${C[k].html(s)}</td>`).join("")}</tr>`).join("")
       || `<tr><td colspan="${MY_COLS.length}" class="empty">Nessun titolo: aggiungili con ★ dallo Screener o dalla scheda del titolo</td></tr>`}</tbody>`;
@@ -744,9 +782,9 @@ const C = {
   maOrder: { l: "Ordine medie", cls: "l", sort: s => maStack(s), html: s => maOrder(s) },
   earnings: { l: "Trimestrale", cls: "l", sort: s => daysTo(s.earningsTs), html: s => { const d = daysTo(s.earningsTs);
     return d == null ? "—" : `${fDate(s.earningsTs, { day: "numeric", month: "short" })} <span class="muted">${d < 0.5 ? "oggi" : "tra " + Math.round(d) + " g"}</span>`; } },
-  news:   { l: "Ultima notizia", cls: "l nw", sort: s => { const n = state.watchNews[s.ticker]; return n ? Date.parse(n.time) || n.time * 1000 : null; },
-    html: s => { const n = state.watchNews[s.ticker];
-      return n ? `<a href="${esc(n.url)}" target="_blank" rel="noopener" title="${esc(n.title)}">${esc(n.title)}</a> <span class="muted">${esc(ago(n.time))}</span>` : `<span class="muted">—</span>`; } },
+  news:   { l: "Ultima notizia", cls: "l nw", sort: s => { const n = myNews(s.ticker); return n ? Date.parse(n.time) || n.time * 1000 : null; },
+    html: s => { const n = myNews(s.ticker);
+      return n ? `${newsTag(n)} <a href="${esc(n.url)}" target="_blank" rel="noopener" title="${esc(n.title)}">${esc(n.title)}</a> <span class="muted">${esc(ago(n.time))}</span>` : `<span class="muted">—</span>`; } },
   short:  { l: "Short % flottante", sort: s => s.short, html: s => isNum(s.short) ? fNum(s.short * 100, 1) + "%" : "—" },
 };
 for (const [tf, m] of Object.entries(METRICS)) if (PERF_TFS.includes(tf) && tf !== "1D")
@@ -912,7 +950,8 @@ const MAS = [{ n: 20, color: "--series-1" }, { n: 40, color: "--series-2" }, { n
 const MA_RANGES = ["1M", "6M", "YTD", "1Y"];
 const dMA = new Set(LS.get("dMA", [20, 40, 60, 200]));
 let dDaily = null;   // { t, pts } two years of daily closes for the open stock
-let dFull = LS.get("dFull", false);   // detail as side panel (false) or full screen (true), remembered
+let dFull = LS.get("dFull", false);
+let dNews = [];   // headlines of the open stock (from /api/stock)   // detail as side panel (false) or full screen (true), remembered
 
 function openDetail(t) {
   state.detail = t; dInfo = null; dDaily = null; dRange = "1D";
@@ -1103,7 +1142,8 @@ async function loadDetailInfo() {
       ${stat("RSI (14)", fNum(s.rsi, 0))}${stat("Volatilità (20 g, annua)", isNum(s.vol20) ? fNum(s.vol20, 0) + "%" : "—")}
       ${stat("Beta", fNum(i.beta, 2))}${stat("Short % flottante", pctOf(i.shortPercentOfFloat))}
     </div>${rng52}` : ""}</div>`;
-  const newsSec = data.news?.length ? `<div class="d-sec"><h3>Notizie</h3><div class="news">${data.news.slice(0, 8).map(n => `<a href="${esc(n.url)}" target="_blank" rel="noopener"><div class="nt">${esc(n.title)}</div><div class="nm">${esc(n.publisher || "")} · ${esc(ago(n.time))}</div></a>`).join("")}</div></div>` : "";
+  dNews = data.news || [];
+  const newsSec = dNews.length ? `<div class="d-sec" id="dNews"></div>` : "";
   const company = s.ticker ? `<details class="d-sec fold"><summary><h3>Dati della società</h3><span class="muted small">profilo, sede, dati del giorno</span></summary>
     ${i.longBusinessSummary ? `<p class="about clamp" id="about">${esc(i.longBusinessSummary)}</p>
       <button class="link-btn" id="aboutMore">Mostra altro</button>${i.website ? ` <a class="link-btn" href="${esc(i.website)}" target="_blank" rel="noopener">${esc(i.website.replace(/^https?:\/\/(www\.)?/, ""))} ↗</a>` : ""}` : ""}
@@ -1125,8 +1165,16 @@ async function loadDetailInfo() {
       <div class="d-col">${trend}${s.ticker ? valuationHTML(data.valuation, fundamentals) : ""}</div>
       <div class="d-col">${s.ticker ? analystsHTML(data.analysts, s, tgt) : ""}${newsSec}</div></div>${company}`;
   drawer.querySelector(".d-sum").innerHTML = signalHTML(data.signal);
+  renderDetailNews();
   const more = $("#aboutMore");
   if (more) more.onclick = () => { $("#about").classList.toggle("clamp"); more.textContent = $("#about").classList.contains("clamp") ? "Mostra altro" : "Mostra meno"; };
+}
+function renderDetailNews() {
+  const el = $("#dNews");
+  if (!el) return;
+  const list = visibleNews(dNews).slice(0, 8);
+  el.innerHTML = `<h3>Notizie</h3>${newsOpts()}<div class="news">${list.map(n => `<a href="${esc(n.url)}" target="_blank" rel="noopener"><div class="nt">${esc(n.title)}</div>
+    <div class="nm">${newsTag(n)} ${esc(n.publisher || "")} · ${esc(ago(n.time))}</div></a>`).join("") || `<div class="empty">Solo articoli d'opinione: deseleziona "Nascondi opinioni" per vederli</div>`}</div>`;
 }
 // price vs the 20/40/60-day averages, same wording as the report's "Ordine medie"
 function maOrder(s) {
