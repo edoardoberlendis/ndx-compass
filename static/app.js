@@ -110,6 +110,30 @@ function moveTip(ev) {
 }
 const hideTip = () => tip.classList.remove("show");
 
+// ------------------------------------------------------------ ⓘ explanations (one system for the whole dashboard)
+// info(html) -> small ⓘ icon; hover shows the text, click pins it (touch / trackpad), click elsewhere closes it.
+// Texts are fixed strings written here (plus values formatted by the page), never generated.
+const info = html => html ? `<span class="info" tabindex="0" role="button" aria-label="Spiegazione" data-info="${esc(html)}">ⓘ</span>` : "";
+let infoPinned = null;
+function infoShow(el) {
+  const r = el.getBoundingClientRect();
+  showTip(`<div class="info-tip">${el.dataset.info}</div>`, { clientX: r.right, clientY: r.bottom });
+}
+document.addEventListener("mouseover", e => { const el = e.target.closest?.(".info"); if (el && !infoPinned) infoShow(el); });
+document.addEventListener("mouseout", e => { const el = e.target.closest?.(".info"); if (el && !infoPinned) hideTip(); });
+document.addEventListener("focusin", e => { if (e.target.classList?.contains("info")) infoShow(e.target); });
+document.addEventListener("focusout", e => { if (e.target.classList?.contains("info") && infoPinned !== e.target) hideTip(); });
+// capture phase: a click on ⓘ must not also sort a column or toggle a filter
+document.addEventListener("click", e => {
+  const el = e.target.closest(".info");
+  if (el) {
+    e.stopPropagation(); e.preventDefault();
+    if (infoPinned === el) { infoPinned = null; hideTip(); } else { infoPinned = el; infoShow(el); }
+    return;
+  }
+  if (infoPinned) { infoPinned = null; hideTip(); }
+}, true);
+
 // ------------------------------------------------------------ sparkline (inline SVG)
 function spark(values, w = 80, h = 22, base = null, color = null) {
   if (!values || values.length < 2) return `<svg width="${w}" height="${h}"></svg>`;
@@ -179,7 +203,7 @@ function renderAll() {
 }
 
 function renderTape() {
-  const order = ["^NDX", "^GSPC", "^DJI", "^RUT", "^VIX", "^TNX", "DX-Y.NYB", "GC=F", "CL=F", "BTC-USD"];
+  const order = ["^NDX", "^GSPC", "^DJI", "^RUT", "^VIX", "^VXN", "^TNX", "DX-Y.NYB", "GC=F", "CL=F", "BTC-USD"];
   const idx = state.snap.indices;
   $("#tape").innerHTML = order.filter(k => idx[k]).map(k => {
     const x = idx[k], d = k === "^TNX" ? 3 : 2;
@@ -301,6 +325,27 @@ function renderOverview() {
   loadWhy();
 }
 
+// indicative volatility bands (same for VIX and VXN)
+function volBand(v) {
+  if (!isNum(v)) return { name: "—", cls: "" };
+  return v < 15 ? { name: "calmo", cls: "calm", key: 0 } : v < 20 ? { name: "normale", cls: "norm", key: 1 }
+    : v < 30 ? { name: "nervosismo", cls: "nerv", key: 2 } : { name: "paura", cls: "fear", key: 3 };
+}
+function volInfo(vix, vxn) {
+  const line = (n, x) => x ? `<b>${n}</b> ${fNum(x.price, 1)} (${fPct(x.chgPct, 1)} oggi): <b>${volBand(x.price).name}</b>` : `<b>${n}</b> non disponibile`;
+  const ref = vxn || vix;   // VXN is the Nasdaq-100's own gauge
+  const effect = ["Mercato tranquillo: di solito movimenti giornalieri piccoli. Attenzione però all'eccesso di fiducia.",
+    "Oscillazioni nella media: nessun segnale particolare.",
+    "Oscillazioni più ampie del solito: le azioni tendono a muoversi di più, in entrambe le direzioni, e i cali possono essere bruschi.",
+    "Forte agitazione, di solito durante cali marcati: movimenti giornalieri molto ampi. A volte i picchi di paura hanno coinciso con i minimi, ma non è una regola."][volBand(ref?.price).key ?? 1];
+  return `<b>Cosa misurano.</b> Il VIX indica quanto il mercato si aspetta che l'S&P 500 oscilli nei prossimi 30 giorni, ricavato dai prezzi delle opzioni.
+    Il VXN fa lo stesso per il Nasdaq-100: di solito è più alto, perché i titoli tecnologici oscillano di più.<br><br>
+    ${line("VIX", vix)}<br>${line("VXN", vxn)}<br><br>
+    <b>Fasce indicative:</b> sotto 15 calmo · 15–20 normale · 20–30 nervosismo · sopra 30 paura.<br><br>
+    <b>Cosa comporta ora${vxn ? " (secondo il VXN)" : ""}:</b> ${effect}<br>
+    <span class="muted">Quando la volatilità sale, di solito le azioni scendono: per questo la sua variazione è in rosso se sale.</span>`;
+}
+
 // Oggi's market map: clicking a sector name zooms on it, clicking again (or "Tutti i settori") shows the whole market
 function renderOvMap() {
   $("#ovUnzoom").hidden = !state.zoom;
@@ -309,7 +354,7 @@ function renderOvMap() {
 $("#ovUnzoom").addEventListener("click", () => { state.zoom = null; renderOvMap(); });
 
 function renderKpis() {
-  const S = stocks(), ndx = state.snap.indices["^NDX"], vix = state.snap.indices["^VIX"];
+  const S = stocks(), ndx = state.snap.indices["^NDX"], vix = state.snap.indices["^VIX"], vxn = state.snap.indices["^VXN"];
   const adv = S.filter(s => s.chgPct > 0).length, dec = S.filter(s => s.chgPct < 0).length, unch = S.length - adv - dec;
   const med = d3.median(S, s => s.chgPct);
   const above = k => Math.round(S.filter(s => s[k] > 0).length / S.length * 100);
@@ -321,7 +366,9 @@ function renderKpis() {
       `<div class="breadth-bar"><i style="width:${adv}%;background:var(--up)"></i><i style="width:${unch}%;background:var(--baseline)"></i><i style="width:${dec}%;background:var(--down)"></i></div>`),
     kpi("Sopra le medie 20 / 40 / 60 · 200", `${above("vsSma20")} / ${above("vsSma40")} / ${above("vsSma60")} <span class="muted">·</span> ${above("vsSma200")}%`,
       "% dei titoli con il prezzo sopra la media"),
-    vix ? kpi("Volatilità (VIX)", fNum(vix.price, 2), `<span class="${sign(-vix.chgPct)}">${fPct(vix.chgPct)}</span> oggi`) : "",
+    vix || vxn ? kpi(`Volatilità VIX / VXN ${info(volInfo(vix, vxn))}`,
+      [vix, vxn].map(x => x ? fNum(x.price, 2) : "—").join(` <span class="muted">/</span> `),
+      [["VIX", vix], ["VXN", vxn]].filter(([, x]) => x).map(([n, x]) => `${n} <span class="${sign(-x.chgPct)}">${fPct(x.chgPct, 1)}</span> <b class="band ${volBand(x.price).cls}">${volBand(x.price).name}</b>`).join(" · ")) : "",
   ].join("");
 }
 
@@ -491,6 +538,35 @@ const PRESETS = [
   { id: "sigSell", label: "Segnale negativo", f: s => s.sigScore <= -20, desc: "segnale finale Negativo o Molto negativo" },
   { id: "estDown", label: "Stime in calo", f: s => s.epsRev30 < -3, desc: "stima utile del prossimo anno abbassata di oltre il 3% in 30 giorni" },
 ];
+// ⓘ text for every screener quick filter
+const PRESET_INFO = {
+  all: "Tutti i titoli del Nasdaq-100, senza filtri.",
+  watch: "Solo i titoli che hai segnato con ★ (gli stessi della scheda I miei titoli).",
+  gainers: "Titoli saliti più del 2% oggi rispetto alla chiusura precedente.",
+  losers: "Titoli scesi più del 2% oggi rispetto alla chiusura precedente.",
+  gapup: "Il titolo ha aperto oltre l'1,5% sopra la chiusura di ieri: di solito dopo una notizia uscita a mercato chiuso.",
+  gapdown: "Il titolo ha aperto oltre l'1,5% sotto la chiusura di ieri: di solito dopo una notizia uscita a mercato chiuso.",
+  volume: "Oggi si scambia almeno 1,5 volte il volume normale per quest'ora: c'è più interesse del solito, spesso per una notizia.",
+  earnings: "Presenta i conti trimestrali entro 14 giorni: in quei giorni il prezzo può muoversi molto.",
+  above3: "Prezzo sopra le medie a 20, 40 e 60 giorni: il trend di breve e medio periodo è positivo.",
+  below3: "Prezzo sotto le medie a 20, 40 e 60 giorni: il trend di breve e medio periodo è negativo.",
+  golden: "Prezzo sopra le medie a 50 e 200 giorni: trend di medio e lungo periodo positivo.",
+  broken: "Prezzo sotto la media a 200 giorni: trend di lungo periodo negativo. Molti investitori usano la 200 come spartiacque.",
+  highs: "Entro il 2% dal prezzo più alto delle ultime 52 settimane: titoli forti.",
+  lows: "Entro il 5% dal prezzo più basso delle ultime 52 settimane: titoli deboli (o possibili occasioni, da verificare).",
+  overbought: "RSI sopra 70: il titolo è salito molto e in fretta. A volte segue una pausa, ma nei trend forti può restare ipercomprato a lungo.",
+  oversold: "RSI sotto 30: il titolo è sceso molto e in fretta. A volte segue un rimbalzo, ma nei trend deboli può restare ipervenduto a lungo.",
+  cheap: "Più economica dei titoli dello stesso settore e/o della propria storia (P/E, P/S, EV/EBITDA): in media oltre il 15% sotto i confronti.",
+  rich: "Più cara dei titoli dello stesso settore e/o della propria storia: in media oltre il 18% sopra i confronti.",
+  value: "Il prezzo è meno di 20 volte gli utili attesi nei prossimi 12 mesi.",
+  upside: "Il prezzo obiettivo medio degli analisti è oltre il 20% sopra il prezzo attuale.",
+  upgrades: "Negli ultimi 30 giorni le banche d'affari hanno alzato il giudizio più volte di quante l'abbiano abbassato.",
+  estUp: "Negli ultimi 30 giorni gli analisti hanno alzato di oltre il 3% la stima degli utili del prossimo anno.",
+  estDown: "Negli ultimi 30 giorni gli analisti hanno abbassato di oltre il 3% la stima degli utili del prossimo anno.",
+  sigBuy: "Segnale finale Positivo o Molto positivo (punteggio da +20 in su). È una combinazione meccanica, non un consiglio d'acquisto.",
+  sigNeutral: "Segnale finale Neutro: punteggio tra −20 e +20.",
+  sigSell: "Segnale finale Negativo o Molto negativo (punteggio da −20 in giù). È una combinazione meccanica, non un consiglio di vendita.",
+};
 // screener quick filters grouped by topic (same filters, only laid out in rows)
 const PRESET_GROUPS = [
   { label: "", ids: ["all", "watch"] },
@@ -608,7 +684,7 @@ function renderMyStocks() {
     return (typeof va === "string" ? va.localeCompare(vb) : va - vb) * state.mySort.dir;
   });
   $("#myCount").textContent = `${rows.length} titoli`;
-  $("#myTbl").innerHTML = `<thead><tr>${MY_COLS.map(k => `<th class="${C[k].cls?.split(" ")[0] || ""} ${state.mySort.key === k ? "sorted" + (state.mySort.dir > 0 ? " asc" : "") : ""}" data-k="${k}">${esc(C[k].l)}</th>`).join("")}</tr></thead>
+  $("#myTbl").innerHTML = `<thead><tr>${MY_COLS.map(k => `<th class="${C[k].cls?.split(" ")[0] || ""} ${state.mySort.key === k ? "sorted" + (state.mySort.dir > 0 ? " asc" : "") : ""}" data-k="${k}">${colHead(k)}</th>`).join("")}</tr></thead>
     <tbody>${rows.map(s => `<tr data-t="${esc(s.ticker)}">${MY_COLS.map(k => `<td class="${C[k].cls || ""}">${C[k].html(s)}</td>`).join("")}</tr>`).join("")
       || `<tr><td colspan="${MY_COLS.length}" class="empty">Nessun titolo: aggiungili con ★ dallo Screener o dalla scheda del titolo</td></tr>`}</tbody>`;
 }
@@ -636,7 +712,7 @@ const C = {
   price:  { l: "Prezzo", sort: s => s.price, html: s => fPrice(s.price) },
   chgPct: { l: "Var.", sort: s => s.chgPct, html: s => `<span class="${sign(s.chgPct)}">${fPct(s.chgPct)}</span>` },
   volume: { l: "Volume", sort: s => s.volume, html: s => fBig(s.volume) },
-  relVol: { l: "Vol rel.", sort: s => s.relVol, html: s => fX(s.relVol) },
+  relVol: { l: "Volume relativo", sort: s => s.relVol, html: s => fX(s.relVol) },
   d30:    { l: "30 giorni", nosort: true, html: s => spark(s.d30, 90, 22, null) },
   pe:     { l: "P/E", sort: s => s.pe, html: s => fNum(s.pe, 1) },
   fpe:    { l: "P/E atteso", sort: s => s.fpe, html: s => fNum(s.fpe, 1) },
@@ -652,8 +728,8 @@ const C = {
   ps:     { l: "P/S", sort: s => s.ps, html: s => fNum(s.ps, 1) },
   evEbitda: { l: "EV/EBITDA", sort: s => s.evEbitda, html: s => fNum(s.evEbitda, 1) },
   peg:    { l: "PEG", sort: s => s.peg, html: s => fNum(s.peg, 2) },
-  anl30:  { l: "Up/Down 30 g", sort: s => (s.up30 || 0) - (s.down30 || 0), html: s => isNum(s.up30) ? `<span class="up">${s.up30}↑</span> <span class="down">${s.down30}↓</span>` : "—" },
-  epsRev30: { l: "Stime 30 g", sort: s => s.epsRev30, html: s => `<span class="${sign(s.epsRev30)}">${fPct(s.epsRev30, 1)}</span>` },
+  anl30:  { l: "Upgrade/downgrade 30 g", sort: s => (s.up30 || 0) - (s.down30 || 0), html: s => isNum(s.up30) ? `<span class="up">${s.up30}↑</span> <span class="down">${s.down30}↓</span>` : "—" },
+  epsRev30: { l: "Revisione stime 30 g", sort: s => s.epsRev30, html: s => `<span class="${sign(s.epsRev30)}">${fPct(s.epsRev30, 1)}</span>` },
   rsi:    { l: "RSI 14", sort: s => s.rsi, html: s => { const v = s.rsi; return isNum(v) ? `<span class="${v > 70 ? "down" : v < 30 ? "up" : ""}">${v.toFixed(0)}</span>` : "—"; } },
   vsSma20: { l: "vs media 20", sort: s => s.vsSma20, html: s => `<span class="${sign(s.vsSma20)}">${fPct(s.vsSma20, 1)}</span>` },
   vsSma40: { l: "vs media 40", sort: s => s.vsSma40, html: s => `<span class="${sign(s.vsSma40)}">${fPct(s.vsSma40, 1)}</span>` },
@@ -661,10 +737,10 @@ const C = {
   vsSma50: { l: "vs media 50", sort: s => s.vsSma50, html: s => `<span class="${sign(s.vsSma50)}">${fPct(s.vsSma50, 1)}</span>` },
   vsSma200: { l: "vs media 200", sort: s => s.vsSma200, html: s => `<span class="${sign(s.vsSma200)}">${fPct(s.vsSma200, 1)}</span>` },
   range52: { l: "Range 52 sett.", sort: s => s.range52, html: s => isNum(s.range52) ? `<span class="range-bar" title="${fPrice(s.lo52)} – ${fPrice(s.hi52)}"><i style="left:${s.range52}%"></i></span>` : "—" },
-  fromHi52: { l: "Da max", sort: s => s.fromHi52, html: s => `<span class="${sign(s.fromHi52)}">${fPct(s.fromHi52, 1)}</span>` },
-  fromLo52: { l: "Da min", sort: s => s.fromLo52, html: s => `<span class="${sign(s.fromLo52)}">${fPct(s.fromLo52, 1)}</span>` },
-  gapPct: { l: "Gap", sort: s => s.gapPct, html: s => `<span class="${sign(s.gapPct)}">${fPct(s.gapPct)}</span>` },
-  vol20:  { l: "Volatilità", sort: s => s.vol20, html: s => isNum(s.vol20) ? fNum(s.vol20, 0) + "%" : "—" },
+  fromHi52: { l: "Dal max 52 sett.", sort: s => s.fromHi52, html: s => `<span class="${sign(s.fromHi52)}">${fPct(s.fromHi52, 1)}</span>` },
+  fromLo52: { l: "Dal min 52 sett.", sort: s => s.fromLo52, html: s => `<span class="${sign(s.fromLo52)}">${fPct(s.fromLo52, 1)}</span>` },
+  gapPct: { l: "Gap in apertura", sort: s => s.gapPct, html: s => `<span class="${sign(s.gapPct)}">${fPct(s.gapPct)}</span>` },
+  vol20:  { l: "Volatilità 20 g", sort: s => s.vol20, html: s => isNum(s.vol20) ? fNum(s.vol20, 0) + "%" : "—" },
   maOrder: { l: "Ordine medie", cls: "l", sort: s => maStack(s), html: s => maOrder(s) },
   earnings: { l: "Trimestrale", cls: "l", sort: s => daysTo(s.earningsTs), html: s => { const d = daysTo(s.earningsTs);
     return d == null ? "—" : `${fDate(s.earningsTs, { day: "numeric", month: "short" })} <span class="muted">${d < 0.5 ? "oggi" : "tra " + Math.round(d) + " g"}</span>`; } },
@@ -675,6 +751,53 @@ const C = {
 };
 for (const [tf, m] of Object.entries(METRICS)) if (PERF_TFS.includes(tf) && tf !== "1D")
   C[m.key] = { l: m.label, sort: s => s[m.key], html: s => `<span class="${sign(s[m.key])}">${fPct(s[m.key])}</span>` };
+// ⓘ text for every screener / "I miei titoli" column
+const COL_INFO = {
+  sector: "Settore economico della società (classificazione di Yahoo Finance).",
+  industry: "Il ramo più specifico dentro il settore.",
+  mcap: "Capitalizzazione: quanto vale in borsa la società (prezzo × numero di azioni).",
+  weight: "Peso stimato del titolo nel Nasdaq-100, calcolato dalla capitalizzazione.",
+  price: "Ultimo prezzo, in dollari.",
+  chgPct: "Variazione di oggi rispetto alla chiusura precedente.",
+  volume: "Numero di azioni scambiate oggi.",
+  relVol: "Volume di oggi diviso il volume medio, tenendo conto dell'ora del giorno. 1× = normale, 2× = il doppio del solito: c'è più interesse, spesso per una notizia.",
+  d30: "Andamento del prezzo negli ultimi 30 giorni.",
+  pe: "P/E: prezzo diviso l'utile per azione degli ultimi 12 mesi. Più basso = più economico, ma va confrontato con il settore e con la crescita.",
+  fpe: "P/E atteso: come il P/E, ma con gli utili stimati dagli analisti per i prossimi 12 mesi.",
+  divYield: "Rendimento del dividendo: dividendi pagati in un anno diviso il prezzo.",
+  beta: "Quanto il titolo si muove rispetto al mercato: 1 = come il mercato, 1,5 = circa il 50% in più, sotto 1 = meno.",
+  revGrowth: "Crescita dei ricavi rispetto allo stesso periodo dell'anno prima.",
+  margin: "Margine netto: quanta parte dei ricavi diventa utile.",
+  target: "Prezzo obiettivo medio degli analisti, a 12 mesi.",
+  upside: "Potenziale: di quanto il target medio degli analisti è sopra (o sotto) il prezzo attuale.",
+  rec: "Giudizio medio degli analisti, da Forte acquisto a Vendita.",
+  signal: "Segnale finale della dashboard, da −100 a +100: tecnica 40%, analisti 25%, valutazione 20%, notizie 15%. È una combinazione meccanica, non una consulenza finanziaria.",
+  valLabel: "Confronto dei multipli (P/E, P/S, EV/EBITDA) con i titoli dello stesso settore e con la storia del titolo. Economica = in media oltre il 15% sotto, Cara = oltre il 18% sopra.",
+  ps: "P/S: capitalizzazione diviso i ricavi di un anno. Utile per le società con pochi utili.",
+  evEbitda: "EV/EBITDA: valore dell'azienda (compresi i debiti, meno la cassa) diviso il margine operativo lordo. Permette di confrontare società con debiti diversi.",
+  peg: "PEG: P/E diviso la crescita attesa degli utili. Intorno a 1 = prezzo in linea con la crescita; sopra 2 = la crescita si paga cara.",
+  anl30: "Quante volte negli ultimi 30 giorni le banche d'affari hanno alzato (upgrade ↑) o abbassato (downgrade ↓) il giudizio sul titolo.",
+  epsRev30: "Di quanto è cambiata in 30 giorni la stima media degli utili del prossimo anno. Positivo = gli analisti sono diventati più ottimisti.",
+  rsi: "RSI a 14 giorni, da 0 a 100: misura la forza dei movimenti recenti. Sopra 70 = ipercomprato (salito molto e in fretta), sotto 30 = ipervenduto.",
+  vsSma20: "Distanza del prezzo dalla media degli ultimi 20 giorni (trend di breve). Positivo = il prezzo è sopra la media.",
+  vsSma40: "Distanza del prezzo dalla media degli ultimi 40 giorni (trend di breve-medio periodo).",
+  vsSma60: "Distanza del prezzo dalla media degli ultimi 60 giorni (trend di medio periodo).",
+  vsSma50: "Distanza del prezzo dalla media degli ultimi 50 giorni (trend di medio periodo, molto seguita).",
+  vsSma200: "Distanza del prezzo dalla media degli ultimi 200 giorni (trend di lungo periodo). Sotto la 200 molti considerano il titolo in fase debole.",
+  range52: "Dove si trova il prezzo tra il minimo (a sinistra) e il massimo (a destra) delle ultime 52 settimane.",
+  fromHi52: "Di quanto il prezzo è sotto il massimo delle ultime 52 settimane.",
+  fromLo52: "Di quanto il prezzo è sopra il minimo delle ultime 52 settimane.",
+  gapPct: "Differenza tra il prezzo di apertura di oggi e la chiusura di ieri: spesso nasce da notizie uscite a mercato chiuso.",
+  vol20: "Volatilità: quanto oscilla il prezzo, misurata sugli ultimi 20 giorni e riportata su base annua. Più alta = più rischio.",
+  short: "Quota delle azioni vendute allo scoperto, cioè da chi scommette sul ribasso. Oltre il 10% indica molto pessimismo.",
+  maOrder: "Ordine delle medie: rialzista se prezzo > media 20 > 40 > 60, ribassista se al contrario, misto negli altri casi.",
+  earnings: "Data della prossima presentazione dei conti trimestrali.",
+  news: "Ultima notizia che nomina la società, tra quelle scaricate dal server.",
+  perf1W: "Variazione del prezzo nell'ultima settimana.", perf1M: "Variazione del prezzo nell'ultimo mese.",
+  perf3M: "Variazione del prezzo negli ultimi 3 mesi.", perf6M: "Variazione del prezzo negli ultimi 6 mesi.",
+  perfYTD: "Variazione del prezzo da inizio anno.", perf1Y: "Variazione del prezzo nell'ultimo anno.",
+};
+const colHead = k => `${esc(C[k].l)}${COL_INFO[k] ? " " + info(COL_INFO[k]) : ""}`;
 const COLSETS = {
   overview: ["star", "ticker", "name", "sector", "industry", "mcap", "weight", "price", "chgPct", "signal", "volume", "relVol", "d30"],
   performance: ["star", "ticker", "name", "price", "chgPct", "perf1W", "perf1M", "perf3M", "perf6M", "perfYTD", "perf1Y", "vol20", "d30"],
@@ -705,12 +828,12 @@ function renderScreener() {
   const secs = [...new Set(S.map(s => s.sector))].sort();
   if (sel.options.length !== secs.length + 1) sel.innerHTML = `<option value="">Tutti i settori</option>` + secs.map(s => `<option>${esc(s)}</option>`).join("");
   sel.value = state.sector;
-  const chip = p => `<button data-p="${p.id}" class="${p.id === state.preset ? "on" : ""}" title="${esc(p.desc || "")}">${esc(p.label)}<span>${S.filter(p.f).length}</span></button>`;
+  const chip = p => `<button data-p="${p.id}" class="${p.id === state.preset ? "on" : ""}">${esc(p.label)}<span>${S.filter(p.f).length}</span>${info(PRESET_INFO[p.id])}</button>`;
   $("#presets").innerHTML = PRESET_GROUPS.map(g => `<div class="chip-row"><span class="chip-g">${esc(g.label)}</span>${g.ids.map(id => chip(PRESETS.find(p => p.id === id))).join("")}</div>`).join("");
   const rows = screenerRows();
   const cols = COLSETS[state.cols];
   $("#scrCount").textContent = `${rows.length} di ${S.length}`;
-  $("#scr").innerHTML = `<thead><tr>${cols.map(k => `<th class="${C[k].cls?.split(" ")[0] || ""} ${state.sort.key === k ? "sorted" + (state.sort.dir > 0 ? " asc" : "") : ""}" data-k="${k}">${esc(C[k].l)}</th>`).join("")}</tr></thead>
+  $("#scr").innerHTML = `<thead><tr>${cols.map(k => `<th class="${C[k].cls?.split(" ")[0] || ""} ${state.sort.key === k ? "sorted" + (state.sort.dir > 0 ? " asc" : "") : ""}" data-k="${k}">${colHead(k)}</th>`).join("")}</tr></thead>
     <tbody>${rows.map(s => `<tr data-t="${esc(s.ticker)}">${cols.map(k => `<td class="${C[k].cls || ""}">${C[k].html(s)}</td>`).join("")}</tr>`).join("")}</tbody>`;
   if (!rows.length) $("#scr").insertAdjacentHTML("beforeend", `<tbody><tr><td colspan="${cols.length}" class="empty">Nessun titolo corrisponde ai filtri</td></tr></tbody>`);
 }
@@ -1193,20 +1316,48 @@ function renderBacktest() {
 }
 $("#btSeg").addEventListener("click", e => { const b = e.target.closest("[data-bt]"); if (b) { bt.hz = b.dataset.bt; renderBacktest(); } });
 
+// explanations adapted to the current values (fixed wording, numbers from the report)
+const HORIZON = { 20: "breve", 40: "breve-medio", 60: "medio" };
+function qqqInfo(n, vs, slope) {
+  if (!isNum(vs)) return "";
+  let t = `QQQ (il fondo che replica il Nasdaq-100) è ${fNum(Math.abs(vs), 1)}% ${vs >= 0 ? "sopra" : "sotto"} la sua media degli ultimi ${n} giorni:
+    trend di ${HORIZON[n]} periodo <b>${vs >= 0 ? "positivo" : "negativo"}</b>.`;
+  if (Math.abs(vs) > 5) t += ` La distanza è ampia: dopo allunghi così a volte il prezzo rallenta o torna verso la media.`;
+  if (isNum(slope)) t += `<br><br>La media a ${n} ${slope > 0.05 ? "sale" : slope < -0.05 ? "scende" : "è quasi piatta"} (${fPct(slope, 2)} a settimana):
+    ${slope > 0.05 ? "la direzione di fondo è verso l'alto" : slope < -0.05 ? "la direzione di fondo è verso il basso" : "nessuna direzione chiara"}.
+    La pendenza dice dove va la media, la distanza dice dove si trova il prezzo rispetto a lei.`;
+  return t;
+}
+function rsiInfo(v) {
+  if (!isNum(v)) return "";
+  return `RSI a 14 giorni di QQQ: ${fNum(v, 0)} su 100. Misura la forza dei movimenti recenti.
+    ${v > 70 ? "Sopra 70 = ipercomprato: è salito molto e in fretta." : v < 30 ? "Sotto 30 = ipervenduto: è sceso molto e in fretta." : "Tra 30 e 70: nessun eccesso."}`;
+}
+function breadthInfo(n, v, bull, bear) {
+  if (!isNum(v)) return "";
+  const lvl = v >= 70 ? "partecipazione ampia: il movimento coinvolge la maggior parte dei titoli."
+    : v >= 50 ? "più della metà è sopra: partecipazione discreta."
+    : v >= 30 ? "meno della metà è sopra: l'indice è sostenuto da pochi titoli, oppure è debole."
+    : "partecipazione molto debole: la maggior parte dei titoli è sotto la media.";
+  let t = `Il ${Math.round(v)}% dei titoli del Nasdaq-100 ha il prezzo sopra la propria media a ${n} giorni: ${lvl}
+    Se l'indice sale ma questa quota scende, il rialzo si sta restringendo.`;
+  if (isNum(bull)) t += `<br><br>${Math.round(bull)}% dei titoli ha le medie in ordine rialzista (20 sopra 40 sopra 60), ${Math.round(bear)}% in ordine ribassista.`;
+  return t;
+}
 function renderBrief(R) {
   const g = R.regime, q = g.qqq, b = g.breadth;
   const col = { long: "--up", selective: "--warn", defensive: "--down" }[g.bias] || "--muted";
-  const cell = (l, v, s, cls = "") => `<div><div class="l">${l}</div><div class="v ${cls}">${v}</div><div class="s">${s}</div></div>`;
+  const cell = (l, v, s, cls = "", tipHtml = "") => `<div><div class="l">${l} ${info(tipHtml)}</div><div class="v ${cls}">${v}</div><div class="s">${s}</div></div>`;
   $("#brief").innerHTML = `<div>
       <span class="regime"><i style="background:var(${col})"></i>${esc(g.label)}</span>
       <p class="hl">${esc(R.headline)}</p><p class="rt">${esc(g.text)}</p></div>
     <div class="bstats">
-      ${cell("QQQ vs media 20", fPct(q.vs20, 1), `pendenza media 20: ${fPct(q.slope20, 2)}/sett.`, sign(q.vs20))}
-      ${cell("QQQ vs media 40", fPct(q.vs40, 1), `RSI ${fNum(q.rsi, 0)}`, sign(q.vs40))}
-      ${cell("QQQ vs media 60", fPct(q.vs60, 1), `pendenza media 60: ${fPct(q.slope60, 2)}/sett.`, sign(q.vs60))}
-      ${cell("Sopra media 20", pctR(b["20"]), "dei titoli del Nasdaq-100")}
-      ${cell("Sopra media 40", pctR(b["40"]), "dei titoli del Nasdaq-100")}
-      ${cell("Sopra media 60", pctR(b["60"]), `${Math.round(g.bullShare)}% medie in ordine rialzista · ${Math.round(g.bearShare)}% ribassista`)}
+      ${cell("QQQ vs media 20", fPct(q.vs20, 1), `pendenza media 20: ${fPct(q.slope20, 2)}/sett.`, sign(q.vs20), qqqInfo(20, q.vs20, q.slope20))}
+      ${cell("QQQ vs media 40", fPct(q.vs40, 1), `RSI ${fNum(q.rsi, 0)}`, sign(q.vs40), qqqInfo(40, q.vs40, q.slope40) + "<br><br>" + rsiInfo(q.rsi))}
+      ${cell("QQQ vs media 60", fPct(q.vs60, 1), `pendenza media 60: ${fPct(q.slope60, 2)}/sett.`, sign(q.vs60), qqqInfo(60, q.vs60, q.slope60))}
+      ${cell("Sopra media 20", pctR(b["20"]), "dei titoli del Nasdaq-100", "", breadthInfo(20, b["20"]))}
+      ${cell("Sopra media 40", pctR(b["40"]), "dei titoli del Nasdaq-100", "", breadthInfo(40, b["40"]))}
+      ${cell("Sopra media 60", pctR(b["60"]), `${Math.round(g.bullShare)}% medie in ordine rialzista · ${Math.round(g.bearShare)}% ribassista`, "", breadthInfo(60, b["60"], g.bullShare, g.bearShare))}
     </div>`;
 }
 

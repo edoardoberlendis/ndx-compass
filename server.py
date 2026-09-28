@@ -41,7 +41,7 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 ET = ZoneInfo("America/New_York")
 INDEX = "^NDX"
 BENCHMARKS = {"^NDX": "Nasdaq-100", "^GSPC": "S&P 500", "^DJI": "Dow Jones", "^RUT": "Russell 2000",
-              "^VIX": "VIX", "^TNX": "Treasury 10 anni", "DX-Y.NYB": "Dollaro", "BTC-USD": "Bitcoin",
+              "^VIX": "VIX", "^VXN": "VXN", "^TNX": "Treasury 10 anni", "DX-Y.NYB": "Dollaro", "BTC-USD": "Bitcoin",
               "GC=F": "Oro", "CL=F": "Petrolio"}
 
 # Italian display names for Wikipedia's ICB sectors / subsectors (unknown names pass through unchanged)

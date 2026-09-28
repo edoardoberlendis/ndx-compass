@@ -19,7 +19,7 @@ Oppure dal Terminale:
 
 ## Cosa contiene
 
-- **Oggi**: 4 indicatori (Nasdaq-100, titoli in rialzo/ribasso, % di titoli sopra le medie 20/40/60 e 200, VIX),
+- **Oggi**: 4 indicatori (Nasdaq-100, titoli in rialzo/ribasso, % di titoli sopra le medie 20/40/60 e 200, volatilità VIX e VXN con la fascia: calmo/normale/nervosismo/paura),
   mappa del mercato (clic sul nome di un settore per ingrandirlo), grafico intraday del Nasdaq-100, chi si è mosso e perché, trimestrali dei prossimi 7 giorni
   (i miei titoli in cima).
 - **I miei titoli**: i preferiti (★) con prezzo, variazioni, posizione rispetto alle medie, valutazione, analisti, segnale,
@@ -53,6 +53,10 @@ Oppure dal Terminale:
     ricavi con la loro revisione a 30/90 giorni, ultime azioni delle banche d'affari.
   Questi dati si scaricano una volta al giorno in background (circa 15 secondi) in `cache/analysts.json`.
   Si apre cliccando un titolo o con `http://localhost:8100/#NVDA`.
+
+- **Spiegazioni ⓘ**: passando il mouse (o cliccando) sull'icona ⓘ compare una spiegazione breve: volatilità in Oggi, indicatori
+  della sintesi del Report (adattati ai valori attuali), ogni filtro e ogni colonna dello Screener e di I miei titoli.
+  I testi sono scritti nel codice (`static/app.js`, cerca `COL_INFO` e `PRESET_INFO`).
 
 Interfaccia, report e nomi di settori/temi sono in italiano. Nomi delle società, descrizioni e notizie
 arrivano da Yahoo Finance e restano in inglese.
