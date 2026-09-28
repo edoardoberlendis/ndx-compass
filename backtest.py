@@ -2,7 +2,7 @@
 
 Every STEP trading days over the last ~10 years it recomputes, for each of TODAY's Nasdaq-100 stocks,
 the same technical score the dashboard uses (signals.metrics: 20/40/60-day averages, RSI, strength vs
-QQQ), puts it in the same bands as the final signal (score.level: Forte acquisto … Forte vendita) and
+QQQ), puts it in the same bands as the final signal (score.level: Molto positivo … Molto negativo) and
 measures what happened 1, 3 and 6 months later, for the stock and for QQQ over the same days.
 
     .venv/bin/python backtest.py          # ~30 s, writes reports/backtest.json (shown in the Ideas tab)
@@ -30,7 +30,7 @@ MAS = signals.MAS                     # (20, 40, 60)
 HORIZONS = {"1M": 21, "3M": 63, "6M": 126}
 STEP = 5                              # one observation per stock per week
 YEARS = "10y"
-BANDS = ["Forte acquisto", "Acquisto", "Neutro", "Vendita", "Forte vendita"]
+BANDS = ["Molto positivo", "Positivo", "Neutro", "Negativo", "Molto negativo"]
 OUT = os.path.join(ROOT, "reports", "backtest.json")
 
 LIMITS = [

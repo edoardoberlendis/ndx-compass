@@ -4,7 +4,7 @@ Every component is a score from -100 (clearly negative) to +100 (clearly positiv
 reasons behind it. A component without data is left out and the other weights are rescaled, so a
 stock with no analyst coverage is judged on the remaining parts (the detail panel says so).
 
-    >= +50 Forte acquisto · >= +20 Acquisto · between Neutro · <= -20 Vendita · <= -50 Forte vendita
+    >= +50 Molto positivo · >= +20 Positivo · between Neutro · <= -20 Negativo · <= -50 Molto negativo
 
 This is a mechanical combination of public data, not investment advice.
 """
@@ -26,14 +26,14 @@ MARKET_PIECE = r"futures|stock market|wall street|\bs&p\b|\bdow\b|nasdaq(?!-100 
 
 def level(score):
     if score >= 50:
-        return "Forte acquisto"
+        return "Molto positivo"
     if score >= 20:
-        return "Acquisto"
+        return "Positivo"
     if score > -20:
         return "Neutro"
     if score > -50:
-        return "Vendita"
-    return "Forte vendita"
+        return "Negativo"
+    return "Molto negativo"
 
 
 def _clamp(x, lo=-100, hi=100):

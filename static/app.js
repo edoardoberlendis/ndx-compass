@@ -560,8 +560,8 @@ const PRESETS = [
   { id: "rich", label: "Valutazione cara", f: s => s.valLabel === "Cara", desc: "più cara del settore e/o della propria storia" },
   { id: "upgrades", label: "Upgrade recenti", f: s => s.up30 > s.down30, desc: "più upgrade che downgrade negli ultimi 30 giorni" },
   { id: "estUp", label: "Stime in rialzo", f: s => s.epsRev30 > 3, desc: "stima utile del prossimo anno alzata di oltre il 3% in 30 giorni" },
-  { id: "sigBuy", label: "Segnale di acquisto", f: s => s.sigScore >= 20, desc: "segnale finale Acquisto o Forte acquisto" },
-  { id: "sigSell", label: "Segnale di vendita", f: s => s.sigScore <= -20, desc: "segnale finale Vendita o Forte vendita" },
+  { id: "sigBuy", label: "Segnale positivo", f: s => s.sigScore >= 20, desc: "segnale finale Positivo o Molto positivo" },
+  { id: "sigSell", label: "Segnale negativo", f: s => s.sigScore <= -20, desc: "segnale finale Negativo o Molto negativo" },
   { id: "estDown", label: "Stime in calo", f: s => s.epsRev30 < -3, desc: "stima utile del prossimo anno abbassata di oltre il 3% in 30 giorni" },
 ];
 function daysTo(ts) {
@@ -986,12 +986,15 @@ function maOrder(s) {
 }
 // ------------------------------------------------------------ detail: valuation & analysts (daily data, analysts.py)
 // final signal (score.py): technical 40% + analysts 25% + valuation 20% + news 15%
-const SIG_CLS = { "Forte acquisto": "b2", Acquisto: "b1", Neutro: "n", Vendita: "s1", "Forte vendita": "s2" };
-const sigBadge = l => l ? `<span class="sg ${SIG_CLS[l]}">${esc(l)}</span>` : "—";
+const SIG_CLS = { "Molto positivo": "b2", Positivo: "b1", Neutro: "n", Negativo: "s1", "Molto negativo": "s2" };
+// reports and backtests saved before the rename still carry the old band names
+const SIG_OLD = { "Forte acquisto": "Molto positivo", Acquisto: "Positivo", Vendita: "Negativo", "Forte vendita": "Molto negativo" };
+const sigName = l => SIG_OLD[l] || l;
+const sigBadge = l => l ? `<span class="sg ${SIG_CLS[sigName(l)]}">${esc(sigName(l))}</span>` : "—";
 function signalHTML(sig) {
   if (!sig) return "";
   return `<div class="sigbox"><div class="sig-head">${sigBadge(sig.signal)}<span class="sig-score num ${sign(sig.score)}">${sig.score > 0 ? "+" : ""}${fNum(sig.score, 0)}</span>
-      <span class="muted small">punteggio da −100 a +100 · ≥ +20 acquisto, ≤ −20 vendita</span></div>
+      <span class="muted small">punteggio da −100 a +100 · ≥ +20 positivo, ≤ −20 negativo</span></div>
     <div class="sig-comps">${sig.components.map(c => `<div class="sig-c ${c.used ? "" : "off"}">
       <div class="sig-cn"><b>${esc(c.name)}</b> <span class="muted">${c.used ? `peso ${fNum(c.effWeight * 100, 0)}%` : "non disponibile"}</span></div>
       <div>${c.used ? scoreBar(c.score) : ""}</div>
@@ -1125,7 +1128,7 @@ function renderBacktest() {
       <td>${fNum(x.n, 0)}</td><td>${pc(x.ret)}</td><td>${pc(x.qqq)}</td><td><b>${pc(x.excess)}</b></td><td>${pc(x.excessMedian)}</td>
       <td>${fNum(x.beat, 1)}%</td><td>${x.band === "Tutti i titoli" ? "—" : pc(x.vsAll)}</td></tr>`).join("")}</tbody></table></div>`;
   const years = `<h4 class="bt-h">Extra-rendimento medio a 3 mesi rispetto a QQQ, anno per anno</h4>
-    <div class="table-wrap"><table class="scr"><thead><tr><th class="l">Anno</th>${B.bands.map(b => `<th>${esc(b)}</th>`).join("")}<th>Tutti</th></tr></thead>
+    <div class="table-wrap"><table class="scr"><thead><tr><th class="l">Anno</th>${B.bands.map(b => `<th>${esc(sigName(b))}</th>`).join("")}<th>Tutti</th></tr></thead>
     <tbody>${B.byYear.map(y => `<tr><td class="l">${y.year}</td>${B.bands.map(b => `<td>${isNum(y[b]) ? pc(y[b]) : "—"}</td>`).join("")}<td>${pc(y.all)}</td></tr>`).join("")}</tbody></table></div>`;
   const limits = `<h4 class="bt-h">Limiti: leggili prima di fidarti dei numeri</h4><ul class="why bt-lim">${B.limits.map(l => `<li><b>${esc(l.title)}.</b> ${esc(l.text)}</li>`).join("")}</ul>
     <p class="muted small">Il calcolo del punteggio nel backtest coincide con quello della dashboard (differenza massima su casi di controllo: ${fNum(B.checkMaxDiff, 2)}).
