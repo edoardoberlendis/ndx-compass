@@ -37,9 +37,9 @@ Oppure dal Terminale:
   nominano la società, notizie scaricate ogni 2 ore). Se una parte manca, il suo peso va alle altre. Le soglie:
   ≥ +50 molto positivo, ≥ +20 positivo, ≤ −20 negativo, ≤ −50 molto negativo. Calcolo in `score.py`.
   È una combinazione meccanica di dati pubblici, **non una consulenza finanziaria**.
-- **Mappa**: mappa a tutto schermo per settore › industria, colorata per performance 1G…1A.
 - **Screener**: i 100 titoli con colonne Panoramica / Performance / Valutazione / Tecnica, filtri (anche "Sopra/Sotto 20, 40 e 60", "Valutazione economica/cara", "Upgrade recenti", "Stime in rialzo/calo"), export CSV. La vista Tecnica mostra la distanza dalle medie 20/40/60/50/200.
-- **Settori**: rendimenti dei settori pesati per capitalizzazione.
+- **Settori**: mappa del mercato per settore › industria (colorata per performance 1G…1A) e, sotto, rendimenti dei settori
+  pesati per capitalizzazione. Clic su un settore: la mappa si ingrandisce su quel settore e compaiono i suoi titoli.
 - **Idee**: il report tecnico generato da `signals.py` (vedi sotto).
 - **Scheda titolo**: grafico 1G–MAX, confronto con NDX, fondamentali, target degli analisti, notizie, più:
   - **Valutazione** (Economica / In linea / Cara): P/E atteso, P/S ed EV/EBITDA contro la mediana dei titoli dello

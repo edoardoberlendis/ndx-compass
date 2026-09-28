@@ -11,7 +11,7 @@ const LS = {
 const state = {
   snap: null,
   bySym: new Map(),
-  view: LS.get("view", "overview"),
+  view: LS.get("view", "overview") === "map" ? "sectors" : LS.get("view", "overview"),   // Mappa is now part of Settori
   tf: LS.get("tf", "1D"),
   size: LS.get("size", "mcap"),
   cvd: LS.get("cvd", false),
@@ -172,7 +172,6 @@ function renderAll() {
   syncTfSegs();
   if (state.view === "overview") renderOverview();
   if (state.view === "watch") renderMyStocks();
-  if (state.view === "map") renderMapView();
   if (state.view === "screener") renderScreener();
   if (state.view === "sectors") renderSectors();
   if (state.view === "ideas") renderIdeas();
@@ -272,8 +271,8 @@ function renderTreemap(el, opts = {}) {
     if (t) { hideTip(); return openDetail(t.dataset.t); }
     const sh = ev.target.closest(".sector-h");
     if (sh) {
-      if (opts.zoomable) { state.zoom = state.zoom ? null : sh.dataset.sector; renderMapView(); }
-      else { state.zoom = sh.dataset.sector; setView("map"); }
+      if (opts.zoomable) { state.zoom = state.zoom ? null : sh.dataset.sector; if (state.zoom) state.secSel = state.zoom; renderSectors(); }
+      else { state.zoom = state.secSel = sh.dataset.sector; setView("sectors"); }
     }
   };
 }
@@ -462,7 +461,7 @@ function renderSectorBars(el, secs, tf) {
     .map(s => ({ name: s.name, v: s[tf], label: fMetric(tf, s[tf]), s }));
   hbars(el, rows, {
     nameW: 150, rowH: 24,
-    click: r => { state.secSel = r.name; setView("sectors"); },
+    click: r => { state.secSel = state.zoom = r.name; setView("sectors"); },
     tip: r => `<div class="tip-h">${esc(r.name)}</div><div class="tip-row"><span>${esc(METRICS[tf].label)} (pesato per cap.)</span><b class="${sign(r.v)}">${r.label}</b></div>
       <div class="tip-row"><span>Titoli</span><b>${r.s.n}</b></div><div class="tip-row"><span>Capitalizzazione</span><b>$${fBig(r.s.mcap)}</b></div>
       <div class="tip-row"><span>In rialzo oggi</span><b>${r.s.list.filter(x => x.chgPct > 0).length} / ${r.s.n}</b></div>`,
@@ -751,6 +750,7 @@ $("#csvBtn").addEventListener("click", () => {
 
 // ------------------------------------------------------------ sectors view
 function renderSectors() {
+  renderMapView();
   const secs = sectors();
   if (!state.secSel || !secs.some(s => s.name === state.secSel)) state.secSel = secs[0]?.name;
   const tfs = PERF_TFS;
@@ -774,10 +774,17 @@ function renderSectors() {
   hbars($("#secBars"), rows, { rowH: 22, click: r => openDetail(r.s.ticker),
     tip: r => `<div class="tip-h">${esc(r.s.industry)}</div><b>${esc(r.s.name)}</b><div class="tip-row"><span>${METRICS[tf].label}</span><b class="${sign(r.v)}">${r.label}</b></div><div class="tip-row"><span>Peso</span><b>${fNum(r.s.weight)}%</b></div>` });
   const wr = secs.map(s => ({ name: s.name, v: s.mcap / total * 100, label: fNum(s.mcap / total * 100, 1) + "%", color: css("--series-1"), s }));
-  hbars($("#weights"), wr, { nameW: 170, rowH: 26, click: r => { state.secSel = r.name; renderSectors(); },
+  hbars($("#weights"), wr, { nameW: 170, rowH: 26, click: r => { state.secSel = state.zoom = r.name; renderSectors(); },
     tip: r => `<div class="tip-h">${esc(r.name)}</div><div class="tip-row"><span>Capitalizzazione</span><b>$${fBig(r.s.mcap)}</b></div><div class="tip-row"><span>I più grandi</span><b>${esc([...r.s.list].sort((a, b) => b.mcap - a.mcap).slice(0, 3).map(x => x.ticker).join(", "))}</b></div>` });
 }
-$("#matrix").addEventListener("click", e => { const tr = e.target.closest("tr[data-sec]"); if (tr) { state.secSel = tr.dataset.sec; renderSectors(); } });
+// a row zooms the map on that sector; clicking the zoomed sector again shows the whole market
+$("#matrix").addEventListener("click", e => {
+  const tr = e.target.closest("tr[data-sec]");
+  if (!tr) return;
+  state.zoom = state.zoom === tr.dataset.sec ? null : tr.dataset.sec;
+  state.secSel = tr.dataset.sec;
+  renderSectors();
+});
 
 // ------------------------------------------------------------ detail drawer
 const drawer = $("#drawer"), scrim = $("#scrim");
@@ -1367,7 +1374,7 @@ document.addEventListener("keydown", e => {
 });
 
 // ------------------------------------------------------------ views, theme, resize
-const VIEWS = ["overview", "watch", "map", "screener", "sectors", "ideas"];
+const VIEWS = ["overview", "watch", "screener", "sectors", "ideas"];
 function setView(v) {
   state.view = v; LS.set("view", v);
   if (location.hash.slice(1) !== v) history.replaceState(null, "", "#" + v);
@@ -1407,7 +1414,8 @@ addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { if 
   await loadWatch();
   const h = decodeURIComponent(location.hash.slice(1));
   if (VIEWS.includes(h)) state.view = h;
+  if (h === "map") state.view = "sectors";
   setView(state.view);
-  if (h && !VIEWS.includes(h) && quoteFor(h.toUpperCase())) openDetail(h.toUpperCase());
+  if (h && h !== "map" && !VIEWS.includes(h) && quoteFor(h.toUpperCase())) openDetail(h.toUpperCase());
 })();
 })();

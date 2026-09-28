@@ -28,7 +28,6 @@
   <div class="tablist" role="tablist">
     <button class="tab active" data-view="overview">Oggi</button>
     <button class="tab" data-view="watch">I miei titoli</button>
-    <button class="tab" data-view="map">Mappa</button>
     <button class="tab" data-view="screener">Screener</button>
     <button class="tab" data-view="sectors">Settori</button>
     <button class="tab" data-view="ideas">Idee</button>
@@ -48,7 +47,7 @@
         <div class="card-h">
           <h2>Mappa del mercato</h2>
           <div class="seg tf-seg" data-tf-seg></div>
-          <button class="link-btn" data-goto="map">Schermo intero →</button>
+          <button class="link-btn" data-goto="sectors">Apri in Settori →</button>
         </div>
         <div class="map" id="ovMap"></div>
         <div class="map-foot"><div class="legend" data-legend></div><span class="hint">Dimensione = capitalizzazione · clicca un riquadro per i dettagli · clicca un settore per ingrandirlo</span></div>
@@ -84,21 +83,6 @@
     </div>
   </section>
 
-  <!-- MAP -->
-  <section id="view-map" class="view" hidden>
-    <div class="toolbar">
-      <div class="seg tf-seg" data-tf-seg></div>
-      <div class="seg" id="sizeSeg">
-        <button data-size="mcap" class="on">Capitalizzazione</button><button data-size="equal">Uguale</button>
-      </div>
-      <label class="check"><input type="checkbox" id="cvd"> Colori per daltonici</label>
-      <input id="mapFind" class="find" type="search" placeholder="Evidenzia…" aria-label="Evidenzia titoli">
-      <div class="crumbs" id="crumbs"></div>
-      <div class="legend" data-legend></div>
-    </div>
-    <div class="map big" id="bigMap"></div>
-  </section>
-
   <!-- SCREENER -->
   <section id="view-screener" class="view" hidden>
     <div class="toolbar">
@@ -114,10 +98,21 @@
     <div class="table-wrap"><table class="scr" id="scr"></table></div>
   </section>
 
-  <!-- SECTORS -->
+  <!-- SECTORS (market map + sector returns) -->
   <section id="view-sectors" class="view" hidden>
+    <div class="toolbar">
+      <div class="seg tf-seg" data-tf-seg></div>
+      <div class="seg" id="sizeSeg">
+        <button data-size="mcap" class="on">Capitalizzazione</button><button data-size="equal">Uguale</button>
+      </div>
+      <label class="check"><input type="checkbox" id="cvd"> Colori per daltonici</label>
+      <input id="mapFind" class="find" type="search" placeholder="Evidenzia…" aria-label="Evidenzia titoli">
+      <div class="crumbs" id="crumbs"></div>
+      <div class="legend" data-legend></div>
+    </div>
+    <div class="map big" id="bigMap"></div>
     <div class="card">
-      <div class="card-h"><h2>Rendimenti dei settori</h2><span class="card-meta">pesati per capitalizzazione · clicca una riga per il dettaglio</span></div>
+      <div class="card-h"><h2>Rendimenti dei settori</h2><span class="card-meta">pesati per capitalizzazione · clicca una riga per ingrandire il settore nella mappa e vederne i titoli</span></div>
       <div class="table-wrap"><table class="matrix" id="matrix"></table></div>
     </div>
     <div class="grid-2 sector-detail">
