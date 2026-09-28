@@ -1,0 +1,57 @@
+#!/bin/bash
+# Nasdaq-100 Monitor launcher: start the local server if needed, then open the dashboard.
+DIR="$(cd "$(dirname "$0")/../../.." && pwd)"          # project folder that contains this .app
+PORT=8100
+URL="http://localhost:$PORT/"
+PY="$DIR/.venv/bin/python"                              # project virtualenv (created by run.sh or below)
+PY312="/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12"   # python.org installer
+# Script-only app bundles can be launched under Rosetta; force native arm64 on Apple silicon
+# so Python loads the arm64 builds of numpy/pandas.
+if [ "$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ]; then ARCH="/usr/bin/arch -arm64"; else ARCH=""; fi
+PYRUN="$ARCH $PY"
+LOG="$DIR/cache/server.log"
+mkdir -p "$DIR/cache"
+
+alert() { /usr/bin/osascript -e "display alert \"Nasdaq-100 Monitor\" message \"$1\" as critical" >/dev/null; }
+up() { /usr/bin/curl -s -o /dev/null --max-time 1 "$URL"; }
+
+if up; then
+  choice=$(/usr/bin/osascript -e 'button returned of (display dialog "Il server della dashboard è acceso." buttons {"Ferma server", "Apri dashboard"} default button "Apri dashboard" with title "Nasdaq-100 Monitor")' 2>/dev/null)
+  if [ "$choice" = "Ferma server" ]; then
+    /usr/sbin/lsof -ti tcp:$PORT | xargs kill 2>/dev/null
+    /usr/bin/osascript -e 'display notification "Server fermato" with title "Nasdaq-100 Monitor"'
+  elif [ -n "$choice" ]; then
+    open "$URL"
+  fi
+  exit 0
+fi
+
+if [ ! -f "$DIR/server.py" ]; then
+  alert "Non trovo server.py accanto all'app. Tieni l'app dentro la cartella Nasdaq100 (per una scorciatoia trascinala nel Dock)."
+  exit 1
+fi
+# macOS privacy (TCC): an app started from the Finder may see files in Desktop / Documents / Downloads
+# but not read or write them ("Operation not permitted"), so the server could never start.
+if ! head -c 1 "$DIR/server.py" >/dev/null 2>&1 || ! touch "$LOG" 2>/dev/null; then
+  alert "macOS non permette a questa app di leggere o scrivere nella cartella $DIR. Succede quando il progetto è nella Scrivania, in Documenti o in Download. Sposta la cartella altrove (per esempio nella cartella Inizio) oppure dai all'app l'Accesso completo al disco in Impostazioni di Sistema, Privacy e sicurezza. Dal Terminale puoi sempre usare ./run.sh"
+  exit 1
+fi
+if [ ! -x "$PY" ]; then
+  [ -x "$PY312" ] || { alert "Python 3.12 non trovato. Installalo da python.org e riapri l'app."; exit 1; }
+  $ARCH "$PY312" -m venv "$DIR/.venv" >>"$LOG" 2>&1 || { alert "Non riesco a creare .venv. Guarda cache/server.log"; exit 1; }
+fi
+if ! $PYRUN -c "import flask, yfinance, pandas, numpy, requests, lxml" 2>/dev/null; then
+  /usr/bin/osascript -e 'display notification "Installo le librerie Python (primo avvio)…" with title "Nasdaq-100 Monitor"'
+  $PYRUN -m pip install -q -r "$DIR/requirements.txt" >>"$LOG" 2>&1 || { alert "Non riesco a installare le librerie Python. Guarda cache/server.log"; exit 1; }
+fi
+
+cd "$DIR"
+nohup $PYRUN server.py >>"$LOG" 2>&1 &
+disown
+for i in $(seq 1 40); do up && break; sleep 0.5; done
+if up; then
+  /usr/bin/osascript -e 'display notification "Carico i dati di mercato… (circa 20 secondi)" with title "Nasdaq-100 Monitor"'
+  open "$URL"
+else
+  alert "Il server non è partito. Guarda cache/server.log nella cartella del progetto."
+fi

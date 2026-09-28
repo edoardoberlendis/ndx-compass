@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nasdaq-100 Monitor</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='1' y='1' width='8' height='9' fill='%231f9d55'/><rect x='10' y='1' width='5' height='5' fill='%23d6393b'/><rect x='10' y='7' width='5' height='3' fill='%231f9d55'/><rect x='1' y='11' width='14' height='4' fill='%23555'/></svg>">
+<link rel="stylesheet" href="/static/styles.css">
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo" aria-hidden="true"><i></i><i></i><i></i><i></i></span><b>NDX</b><span class="brand-sub">Monitor</span></div>
+  <div class="tape" id="tape" aria-label="Indici di riferimento"></div>
+  <div class="top-right">
+    <div class="search">
+      <input id="q" type="search" placeholder="Cerca ticker o società" autocomplete="off" spellcheck="false" aria-label="Cerca titoli">
+      <kbd>/</kbd>
+      <div class="sugg" id="sugg" role="listbox"></div>
+    </div>
+    <button id="themeBtn" class="icon-btn" title="Tema chiaro / scuro" aria-label="Cambia tema">
+      <svg viewBox="0 0 20 20" width="16" height="16"><circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 3a7 7 0 0 1 0 14z" fill="currentColor"/></svg>
+    </button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <div class="tablist" role="tablist">
+    <button class="tab active" data-view="overview">Panoramica</button>
+    <button class="tab" data-view="map">Mappa</button>
+    <button class="tab" data-view="screener">Screener</button>
+    <button class="tab" data-view="sectors">Settori</button>
+    <button class="tab" data-view="ideas">Idee</button>
+  </div>
+  <div class="updated"><span class="status" id="status"></span><span id="updated"></span></div>
+</nav>
+
+<main>
+  <div id="loading" class="loading"><div class="spinner"></div><p>Caricamento dati di mercato…</p><small>Il primo caricamento scarica circa 110 serie da Yahoo Finance e richiede una ventina di secondi.</small></div>
+
+  <!-- OVERVIEW -->
+  <section id="view-overview" class="view" hidden>
+    <div class="kpis" id="kpis"></div>
+
+    <div class="ov-grid">
+      <div class="card map-card">
+        <div class="card-h">
+          <h2>Mappa del mercato</h2>
+          <div class="seg tf-seg" data-tf-seg></div>
+          <button class="link-btn" data-goto="map">Schermo intero →</button>
+        </div>
+        <div class="map" id="ovMap"></div>
+        <div class="map-foot"><div class="legend" data-legend></div><span class="hint">Dimensione = capitalizzazione · clicca un riquadro per i dettagli · clicca un settore per ingrandirlo</span></div>
+      </div>
+
+      <div class="ov-side">
+        <div class="card">
+          <div class="card-h"><h2>Nasdaq-100 · oggi</h2><span class="card-meta" id="ndxHead"></span></div>
+          <div id="ndxChart" class="chart"></div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h2>Ampiezza di mercato · oggi</h2><span class="card-meta">titoli in rialzo meno titoli in ribasso</span></div>
+          <div id="breadthChart" class="chart"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid-4">
+      <div class="card"><div class="card-h"><h2>Migliori del giorno</h2></div><div id="gainers" class="mini-table"></div></div>
+      <div class="card"><div class="card-h"><h2>Peggiori del giorno</h2></div><div id="losers" class="mini-table"></div></div>
+      <div class="card"><div class="card-h"><h2>Volumi insoliti</h2><span class="card-meta">vs media a 3 mesi, rapportati all'ora</span></div><div id="active" class="mini-table"></div></div>
+      <div class="card"><div class="card-h"><h2>Chi muove l'indice</h2><span class="card-meta">punti indice stimati (pesati per capitalizzazione)</span></div><div id="movers" class="chart"></div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><h2>Perché si muovono</h2><span class="card-meta" id="whyMeta">motivi ricavati dalle notizie con regole automatiche · da verificare leggendo l'articolo</span></div>
+      <div class="mv-cols">
+        <div><h4>Migliori del giorno</h4><div id="whyTop" class="mv-list"><div class="empty">Caricamento notizie…</div></div></div>
+        <div><h4>Peggiori del giorno</h4><div id="whyFlop" class="mv-list"><div class="empty">Caricamento notizie…</div></div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><h2>Segnale finale</h2><span class="card-meta">tecnica 40% · analisti 25% · valutazione 20% · notizie 15% · clicca un titolo per le motivazioni · non è una consulenza finanziaria</span></div>
+      <div class="mv-cols">
+        <div><h4>Segnali più positivi</h4><div id="sigTop" class="mini-table"></div></div>
+        <div><h4>Segnali più negativi</h4><div id="sigFlop" class="mini-table"></div></div>
+      </div>
+    </div>
+
+    <div class="grid-3">
+      <div class="card"><div class="card-h"><h2>Performance dei settori</h2><div class="seg tf-seg small" data-tf-seg></div></div><div id="sectorBars" class="chart"></div></div>
+      <div class="card"><div class="card-h"><h2>Segnali</h2><span class="card-meta">clicca per filtrare</span></div><div id="signals" class="signals"></div></div>
+      <div class="card"><div class="card-h"><h2>Preferiti</h2><span class="card-meta">clicca ★ su un titolo per aggiungerlo qui</span></div><div id="watch" class="mini-table"></div></div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card"><div class="card-h"><h2>Calendario trimestrali</h2><span class="card-meta">prossimi 30 giorni</span></div><div id="earnings" class="mini-table"></div></div>
+      <div class="card"><div class="card-h"><h2>Notizie</h2></div><div id="news" class="news"></div></div>
+    </div>
+  </section>
+
+  <!-- MAP -->
+  <section id="view-map" class="view" hidden>
+    <div class="toolbar">
+      <div class="seg tf-seg" data-tf-seg></div>
+      <div class="seg" id="sizeSeg">
+        <button data-size="mcap" class="on">Capitalizzazione</button><button data-size="equal">Uguale</button>
+      </div>
+      <label class="check"><input type="checkbox" id="cvd"> Colori per daltonici</label>
+      <input id="mapFind" class="find" type="search" placeholder="Evidenzia…" aria-label="Evidenzia titoli">
+      <div class="crumbs" id="crumbs"></div>
+      <div class="legend" data-legend></div>
+    </div>
+    <div class="map big" id="bigMap"></div>
+  </section>
+
+  <!-- SCREENER -->
+  <section id="view-screener" class="view" hidden>
+    <div class="toolbar">
+      <div class="seg" id="colSeg">
+        <button data-cols="overview" class="on">Panoramica</button><button data-cols="performance">Performance</button><button data-cols="valuation">Valutazione</button><button data-cols="technical">Tecnica</button>
+      </div>
+      <select id="sectorSel" aria-label="Settore"></select>
+      <input id="scrFind" class="find" type="search" placeholder="Filtra ticker / nome…" aria-label="Filtra">
+      <span class="count" id="scrCount"></span>
+      <button class="btn" id="csvBtn">Esporta CSV</button>
+    </div>
+    <div class="chips" id="presets"></div>
+    <div class="table-wrap"><table class="scr" id="scr"></table></div>
+  </section>
+
+  <!-- SECTORS -->
+  <section id="view-sectors" class="view" hidden>
+    <div class="card">
+      <div class="card-h"><h2>Rendimenti dei settori</h2><span class="card-meta">pesati per capitalizzazione · clicca una riga per il dettaglio</span></div>
+      <div class="table-wrap"><table class="matrix" id="matrix"></table></div>
+    </div>
+    <div class="grid-2 sector-detail">
+      <div class="card">
+        <div class="card-h"><h2 id="secTitle">Titoli</h2><div class="seg tf-seg small" data-tf-seg></div></div>
+        <div id="secBars" class="chart"></div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h2>Peso nell'indice per settore</h2><span class="card-meta">quota della capitalizzazione totale</span></div>
+        <div id="weights" class="chart"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- IDEAS (twice-daily trend report) -->
+  <section id="view-ideas" class="view" hidden>
+    <div class="toolbar">
+      <select id="repSel" aria-label="Report"></select>
+      <span class="muted" id="repMeta"></span>
+      <span class="count" id="repJob"></span>
+      <button class="btn" id="runBtn">Genera report ora</button>
+    </div>
+    <div id="ideasEmpty" class="card empty" hidden>Nessun report. Clicca <b>Genera report ora</b> oppure attendi l'esecuzione programmata (08:30 e 22:30, lun–ven).</div>
+    <div id="ideasBody">
+      <div class="card brief" id="brief"></div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-h"><h2>Mappa di rotazione</h2><div class="seg small" data-grp-seg><button data-grp="themes" class="on">Temi</button><button data-grp="sectors">Settori</button></div></div>
+          <div id="rrg" class="chart"></div>
+          <p class="hint">x: rendimento vs QQQ a 1 mese · y: vs QQQ a 1 settimana. I gruppi tendono a ruotare in senso orario: In miglioramento → Leader → In indebolimento → In ritardo.</p>
+        </div>
+        <div class="card">
+          <div class="card-h"><h2 id="grpTitle">Temi</h2><span class="card-meta">struttura medie 20/40/60 · Δ vs report precedente</span></div>
+          <div class="table-wrap"><table class="scr grp" id="grpTable"></table></div>
+        </div>
+      </div>
+
+      <div class="card" id="changesCard"><div class="card-h"><h2>Cosa è cambiato</h2><span class="card-meta" id="changesMeta"></span></div><div id="changes" class="changes"></div></div>
+
+      <div class="toolbar">
+        <div class="chips" id="sideChips"></div>
+        <select id="themeSel" aria-label="Tema"></select>
+        <div class="series-key" id="maKey"></div>
+      </div>
+      <div id="ideaGroups"></div>
+
+      <div class="card">
+        <div class="card-h"><h2>Tutti i titoli · analisi delle medie mobili</h2><input id="maFind" class="find" type="search" placeholder="Filtra…" aria-label="Filtra titoli"></div>
+        <div class="table-wrap tall"><table class="scr" id="maTable"></table></div>
+      </div>
+      <div class="card" id="btCard">
+        <div class="card-h"><h2>Backtest della parte tecnica</h2><div class="seg small" id="btSeg"></div><span class="card-meta" id="btMeta"></span></div>
+        <div id="btBody"><div class="empty">Nessun backtest ancora. Dal Terminale: <code>.venv/bin/python backtest.py</code></div></div>
+      </div>
+      <p class="disclaimer" id="disclaimer"></p>
+    </div>
+  </section>
+</main>
+
+<div id="scrim" class="scrim" hidden></div>
+<aside id="drawer" class="drawer" aria-hidden="true"></aside>
+<div id="tip" class="tip" role="tooltip"></div>
+
+<footer class="foot">Dati: Yahoo Finance tramite yfinance (quotazioni possibili in ritardo) · elenco titoli: Wikipedia · pesi nell'indice stimati dalla capitalizzazione. Non è una consulenza finanziaria.</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

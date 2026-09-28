@@ -1,0 +1,1404 @@
+/* Nasdaq-100 Monitor — frontend */
+(() => {
+"use strict";
+
+// ------------------------------------------------------------ state
+const LS = {
+  get(k, d) { try { const v = localStorage.getItem("ndx." + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("ndx." + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
+};
+
+const state = {
+  snap: null,
+  bySym: new Map(),
+  view: LS.get("view", "overview"),
+  tf: LS.get("tf", "1D"),
+  size: LS.get("size", "mcap"),
+  cvd: LS.get("cvd", false),
+  zoom: null,
+  cols: LS.get("cols", "overview"),
+  preset: "all",
+  sector: "",
+  sort: { key: "mcap", dir: -1 },
+  watch: new Set(LS.get("watch", ["NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA"])),
+  secSel: null,
+  detail: null,
+  prevPrices: new Map(),
+};
+
+const METRICS = {
+  "1D":  { key: "chgPct",  label: "1G",       dom: [-3, 0, 3] },
+  "1W":  { key: "perf1W",  label: "1S",       dom: [-6, 0, 6] },
+  "1M":  { key: "perf1M",  label: "1M",       dom: [-10, 0, 10] },
+  "3M":  { key: "perf3M",  label: "3M",       dom: [-20, 0, 20] },
+  "6M":  { key: "perf6M",  label: "6M",       dom: [-30, 0, 30] },
+  "YTD": { key: "perfYTD", label: "YTD",      dom: [-40, 0, 40] },
+  "1Y":  { key: "perf1Y",  label: "1A",       dom: [-50, 0, 50] },
+  "RV":  { key: "relVol",  label: "Vol rel.", dom: [0, 1, 3], kind: "seq", fmt: v => fNum(v, 2) + "×" },
+  "HI":  { key: "fromHi52", label: "vs max 52 sett.", dom: [-40, -15, 0] },
+};
+const PERF_TFS = ["1D", "1W", "1M", "3M", "6M", "YTD", "1Y"];
+
+// ------------------------------------------------------------ formatting
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const isNum = v => typeof v === "number" && isFinite(v);
+const sign = v => !isNum(v) || Math.abs(v) < 0.005 ? "flat" : v > 0 ? "up" : "down";
+const fPct = (v, d = 2) => isNum(v) ? (v > 0 ? "+" : "") + fNum(v, d) + "%" : "—";
+const fNum = (v, d = 2) => isNum(v) ? v.toLocaleString("it-IT", { minimumFractionDigits: d, maximumFractionDigits: d }) : "—";
+const fPrice = v => isNum(v) ? fNum(v, v >= 1000 ? 2 : 2) : "—";
+const fChg = v => isNum(v) ? (v > 0 ? "+" : "") + fNum(v, 2) : "—";
+const fBig = v => {
+  if (!isNum(v)) return "—";
+  const a = Math.abs(v);
+  if (a >= 1e12) return fNum(v / 1e12, 2) + "T";
+  if (a >= 1e9) return fNum(v / 1e9, a >= 1e11 ? 0 : 1) + "Mld";
+  if (a >= 1e6) return fNum(v / 1e6, 1) + "Mln";
+  if (a >= 1e3) return fNum(v / 1e3, 0) + "K";
+  return fNum(v, 0);
+};
+// whole percent; "—" when missing (e.g. old reports built with the 30-day average)
+const pctR = v => isNum(v) ? Math.round(v) + "%" : "—";
+const fX = v => isNum(v) ? fNum(v, 2) + "×" : "—";
+const fMetric = (tf, v) => !isNum(v) ? "—" : METRICS[tf].fmt ? METRICS[tf].fmt(v) : fPct(v);
+const tz = "America/New_York";
+const fTime = t => new Date(t * 1000).toLocaleTimeString("it-IT", { timeZone: tz, hour: "numeric", minute: "2-digit" });
+const fDate = (t, o = { month: "short", day: "numeric" }) => new Date(t * 1000).toLocaleDateString("it-IT", { timeZone: tz, ...o });
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const REC = { strong_buy: "Forte acquisto", buy: "Acquisto", hold: "Mantenere", underperform: "Sottoperformance", sell: "Vendita", none: "—" };
+// display names for the report's rotation phases (the English keys are also CSS classes)
+const QLAB = { Leading: "Leader", Weakening: "In indebolimento", Lagging: "In ritardo", Improving: "In miglioramento" };
+const RLAB = { "1D": "1G", "5D": "5G", "1Y": "1A", "5Y": "5A", MAX: "Max" };
+
+// ------------------------------------------------------------ color
+function tileColors() {
+  return state.cvd
+    ? { neg: "#c8561f", mid: "#45454a", pos: "#2a6fc9", na: "#333" }
+    : { neg: "#d6393b", mid: "#45454a", pos: "#1f9d55", na: "#333" };
+}
+function colorFor(tf) {
+  const m = METRICS[tf], c = tileColors();
+  const range = m.kind === "seq" ? ["#2f2f33", c.mid, c.pos === "#1f9d55" ? "#2a6fc9" : "#2a6fc9"] : [c.neg, c.mid, c.pos];
+  const s = d3.scaleLinear().domain(m.dom).range(range).interpolate(d3.interpolateLab).clamp(true);
+  return v => isNum(v) ? s(v) : c.na;
+}
+function legendHTML(tf) {
+  const m = METRICS[tf], col = colorFor(tf);
+  const [a, mid, b] = m.dom;
+  const steps = m.kind === "seq" ? [0, 0.5, 1, 1.5, 2, 3] : [a, (a + mid) / 1.5, (a + mid) / 3, mid, (b + mid) / 3, (b + mid) / 1.5, b];
+  const lab = v => m.kind === "seq" ? fNum(v, v % 1 ? 1 : 0) + "×" : (v > 0 ? "+" : "") + fNum(v, Math.abs(v) < 10 && v % 1 ? 1 : 0) + "%";
+  return `<span>${esc(m.label)}</span><span class="ramp">${steps.map(v => `<i style="background:${col(v)}">${lab(v)}</i>`).join("")}</span>`;
+}
+
+// ------------------------------------------------------------ tooltip
+const tip = $("#tip");
+function showTip(html, ev) {
+  tip.innerHTML = html;
+  tip.classList.add("show");
+  moveTip(ev);
+}
+function moveTip(ev) {
+  const pad = 14, r = tip.getBoundingClientRect();
+  let x = ev.clientX + pad, y = ev.clientY + pad;
+  if (x + r.width > innerWidth - 8) x = ev.clientX - r.width - pad;
+  if (y + r.height > innerHeight - 8) y = Math.max(8, innerHeight - r.height - 8);
+  tip.style.left = Math.max(8, x) + "px";
+  tip.style.top = y + "px";
+}
+const hideTip = () => tip.classList.remove("show");
+
+// ------------------------------------------------------------ sparkline (inline SVG)
+function spark(values, w = 80, h = 22, base = null, color = null) {
+  if (!values || values.length < 2) return `<svg width="${w}" height="${h}"></svg>`;
+  const lo = Math.min(...values, base ?? Infinity), hi = Math.max(...values, base ?? -Infinity);
+  const sx = i => (i / (values.length - 1)) * (w - 2) + 1;
+  const sy = v => hi === lo ? h / 2 : h - 2 - ((v - lo) / (hi - lo)) * (h - 4);
+  const pts = values.map((v, i) => sx(i).toFixed(1) + "," + sy(v).toFixed(1)).join(" ");
+  const ref = base ?? values[0];
+  const col = color || (values[values.length - 1] >= ref ? css("--up") : css("--down"));
+  const bl = base != null ? `<line x1="0" x2="${w}" y1="${sy(base).toFixed(1)}" y2="${sy(base).toFixed(1)}" stroke="${css("--baseline")}" stroke-width="1"/>` : "";
+  return `<svg width="${w}" height="${h}" aria-hidden="true">${bl}<polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+}
+
+// ------------------------------------------------------------ data
+async function load() {
+  const r = await fetch("/api/snapshot", { cache: "no-store" });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+  const snap = await r.json();
+  if (state.snap) state.snap.stocks.forEach(s => state.prevPrices.set(s.ticker, s.price));
+  state.snap = snap;
+  state.bySym = new Map(snap.stocks.map(s => [s.ticker, s]));
+  $("#loading").hidden = true;
+  renderAll();
+}
+
+let nextAt = 0;
+async function tick() {
+  try { await load(); } catch (e) { console.warn("refresh failed", e); }
+  nextAt = Date.now() + 60_000;
+}
+setInterval(() => {
+  if (!state.snap) return;
+  const s = Math.max(0, Math.round((nextAt - Date.now()) / 1000));
+  const t = new Date(state.snap.lastQuote || state.snap.asOf);
+  $("#updated").textContent = `Aggiornato ${t.toLocaleTimeString("it-IT", { timeZone: tz, hour: "numeric", minute: "2-digit", second: "2-digit" })} ora NY · prossimo aggiornamento tra ${s} s`;
+  if (s === 0 && Date.now() > nextAt) { nextAt = Date.now() + 60_000; tick(); }
+}, 1000);
+
+// ------------------------------------------------------------ helpers over snapshot
+const stocks = () => state.snap ? state.snap.stocks : [];
+const val = (s, tf) => s[METRICS[tf].key];
+function capWeighted(list, key) {
+  let w = 0, acc = 0;
+  for (const s of list) if (isNum(s[key]) && isNum(s.mcap)) { w += s.mcap; acc += s.mcap * s[key]; }
+  return w ? acc / w : null;
+}
+function sectors() {
+  const g = d3.group(stocks(), s => s.sector);
+  return [...g].map(([name, list]) => {
+    const o = { name, list, n: list.length, mcap: d3.sum(list, s => s.mcap || 0) };
+    for (const tf of Object.keys(METRICS)) o[tf] = tf === "RV" ? d3.median(list, s => s.relVol) : capWeighted(list, METRICS[tf].key);
+    return o;
+  }).sort((a, b) => b.mcap - a.mcap);
+}
+
+// ------------------------------------------------------------ render all
+function renderAll() {
+  renderTape();
+  renderStatus();
+  syncTfSegs();
+  if (state.view === "overview") renderOverview();
+  if (state.view === "map") renderMapView();
+  if (state.view === "screener") renderScreener();
+  if (state.view === "sectors") renderSectors();
+  if (state.view === "ideas") renderIdeas();
+  if (state.detail) renderDetailHeader();
+}
+
+function renderTape() {
+  const order = ["^NDX", "^GSPC", "^DJI", "^RUT", "^VIX", "^TNX", "DX-Y.NYB", "GC=F", "CL=F", "BTC-USD"];
+  const idx = state.snap.indices;
+  $("#tape").innerHTML = order.filter(k => idx[k]).map(k => {
+    const x = idx[k], d = k === "^TNX" ? 3 : 2;
+    return `<button class="tape-item" data-sym="${esc(k)}"><span class="l">${esc(x.label)}</span>
+      <span class="v">${fNum(x.price, d)}<span class="${sign(x.chgPct)}">${fPct(x.chgPct)}</span></span></button>`;
+  }).join("");
+}
+$("#tape").addEventListener("click", e => { const b = e.target.closest("[data-sym]"); if (b) openDetail(b.dataset.sym); });
+
+function renderStatus() {
+  const st = state.snap.status;
+  const label = { open: "Mercato aperto", pre: "Pre-apertura", post: "Dopo la chiusura", closed: "Mercato chiuso" }[st] || st;
+  const el = $("#status");
+  el.className = "status " + st;
+  el.textContent = label;
+}
+
+// ------------------------------------------------------------ timeframe segs
+function syncTfSegs() {
+  $$("[data-tf-seg]").forEach(seg => {
+    const small = seg.classList.contains("small");
+    const tfs = small ? PERF_TFS : Object.keys(METRICS);
+    if (!seg.dataset.built || seg.dataset.built !== String(tfs.length)) {
+      seg.innerHTML = tfs.map(tf => `<button data-tf="${tf}">${esc(METRICS[tf].label)}</button>`).join("");
+      seg.dataset.built = tfs.length;
+    }
+    seg.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.tf === state.tf));
+  });
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-tf-seg] button");
+  if (!b) return;
+  state.tf = b.dataset.tf; LS.set("tf", state.tf);
+  renderAll();
+});
+
+// ------------------------------------------------------------ treemap
+function renderTreemap(el, opts = {}) {
+  const W = el.clientWidth, H = el.clientHeight;
+  if (!W || !H) return;
+  const tf = state.tf, color = colorFor(tf);
+  let list = stocks();
+  if (state.zoom && opts.zoomable) list = list.filter(s => s.sector === state.zoom);
+  const sizeOf = s => state.size === "equal" ? 1 : Math.max(s.mcap || 0, 1);
+  const tree = { children: [...d3.group(list, s => s.sector)].map(([sec, ss]) => ({
+    name: sec, children: [...d3.group(ss, s => s.industry)].map(([ind, xs]) => ({ name: ind, children: xs })),
+  })) };
+  const root = d3.hierarchy(tree).sum(d => d.ticker ? sizeOf(d) : 0).sort((a, b) => b.value - a.value);
+  d3.treemap().size([W, H]).tile(d3.treemapSquarify.ratio(1.2))
+    .paddingOuter(d => d.depth === 1 ? 1 : d.depth === 2 ? 0.5 : 0)
+    .paddingTop(d => d.depth === 1 ? 17 : d.depth === 2 ? 0.5 : 0)
+    .paddingInner(d => d.depth === 0 ? 3 : 1)
+    .round(true)(root);
+
+  const find = (opts.find || "").trim().toUpperCase();
+  const finds = find ? find.split(/[\s,]+/).filter(Boolean) : [];
+  const secAgg = new Map(sectors().map(s => [s.name, s]));
+  let html = "";
+  for (const sec of root.children || []) {
+    const w = sec.x1 - sec.x0, h = sec.y1 - sec.y0, agg = secAgg.get(sec.data.name);
+    html += `<div class="sector-box" style="left:${sec.x0}px;top:${sec.y0}px;width:${w}px;height:${h}px">
+      <div class="sector-h" data-sector="${esc(sec.data.name)}" title="Ingrandisci ${esc(sec.data.name)}">${esc(sec.data.name)}${agg && w > 110 ? `<span class="sv">${fMetric(tf, agg[tf])}</span>` : ""}</div></div>`;
+  }
+  for (const leaf of root.leaves()) {
+    const s = leaf.data, w = leaf.x1 - leaf.x0, h = leaf.y1 - leaf.y0;
+    if (w < 1 || h < 1) continue;
+    const v = val(s, tf);
+    const fs = Math.min(w / (s.ticker.length * 0.68 + 0.5), h / 2.4, 38);
+    let inner = "";
+    if (fs >= 7.5) {
+      inner = `<span class="tk" style="font-size:${fs.toFixed(1)}px">${esc(s.ticker)}</span>`;
+      const fs2 = Math.max(8.5, fs * 0.56);
+      if (h > fs + fs2 + 6 && w > fs2 * 3.8) inner += `<span class="pc" style="font-size:${fs2.toFixed(1)}px">${fMetric(tf, v)}</span>`;
+    }
+    const dim = finds.length && !finds.some(f => s.ticker.startsWith(f) || s.name.toUpperCase().includes(f)) ? " dim" : "";
+    const prev = state.prevPrices.get(s.ticker);
+    const flash = prev != null && prev !== s.price && tf === "1D" ? " flash" : "";
+    html += `<div class="tile${dim}${flash}" data-t="${esc(s.ticker)}" style="left:${leaf.x0}px;top:${leaf.y0}px;width:${w}px;height:${h}px;background:${color(v)}">${inner}</div>`;
+  }
+  el.innerHTML = html;
+  el.onmousemove = ev => {
+    const t = ev.target.closest(".tile");
+    if (!t) return hideTip();
+    showTip(tileTip(state.bySym.get(t.dataset.t)), ev);
+  };
+  el.onmouseleave = hideTip;
+  el.onclick = ev => {
+    const t = ev.target.closest(".tile");
+    if (t) { hideTip(); return openDetail(t.dataset.t); }
+    const sh = ev.target.closest(".sector-h");
+    if (sh) {
+      if (opts.zoomable) { state.zoom = state.zoom ? null : sh.dataset.sector; renderMapView(); }
+      else { state.zoom = sh.dataset.sector; setView("map"); }
+    }
+  };
+}
+
+function tileTip(s) {
+  if (!s) return "";
+  const tf = state.tf, color = colorFor(tf);
+  const peers = stocks().filter(p => p.industry === s.industry).sort((a, b) => (b.mcap || 0) - (a.mcap || 0)).slice(0, 10);
+  const v = val(s, tf);
+  return `<div class="tip-h">${esc(s.sector)} › ${esc(s.industry)}</div>
+    <div class="tip-main"><b>${esc(s.ticker)}</b><span class="num">${fPrice(s.price)} <span class="${sign(s.chgPct)}">${fPct(s.chgPct)}</span></span></div>
+    <div class="tip-name">${esc(s.name)} · ${fBig(s.mcap)} · ${fNum(s.weight, 2)}% peso</div>
+    ${spark(s.spark, 330, 52, s.prevClose)}
+    ${tf !== "1D" ? `<div class="tip-row" style="margin-top:6px"><span>${esc(METRICS[tf].label)}</span><b class="${tf === "RV" ? "" : sign(v)}">${fMetric(tf, v)}</b></div>` : ""}
+    ${peers.length > 1 ? `<table class="tip-peers">${peers.map(p => `<tr class="${p.ticker === s.ticker ? "me" : ""}">
+      <td>${esc(p.ticker)}</td><td>${spark(p.spark, 70, 16, p.prevClose)}</td><td class="num">${fPrice(p.price)}</td>
+      <td><span class="chip" style="background:${color(val(p, tf))}">${fMetric(tf, val(p, tf))}</span></td></tr>`).join("")}</table>` : ""}`;
+}
+
+// ------------------------------------------------------------ overview
+function renderOverview() {
+  renderKpis();
+  renderTreemap($("#ovMap"));
+  $$("[data-legend]").forEach(el => el.innerHTML = legendHTML(state.tf));
+  renderIndexChart();
+  renderBreadth();
+  renderMovers();
+  renderLists();
+  renderSectorBars($("#sectorBars"), sectors(), state.tf);
+  renderSignals();
+  renderWatch();
+  renderEarnings();
+  renderSignalLists();
+  loadNews();
+  loadWhy();
+}
+
+function renderKpis() {
+  const S = stocks(), ndx = state.snap.indices["^NDX"], vix = state.snap.indices["^VIX"];
+  const adv = S.filter(s => s.chgPct > 0).length, dec = S.filter(s => s.chgPct < 0).length, unch = S.length - adv - dec;
+  const med = d3.median(S, s => s.chgPct);
+  const above = k => S.filter(s => s[k] > 0).length / S.length * 100;
+  const a50 = above("vsSma50");
+  const a200 = S.filter(s => s.vsSma200 > 0).length / S.length * 100;
+  const hi = S.filter(s => s.fromHi52 > -2).length, lo = S.filter(s => s.fromLo52 < 2).length;
+  const top = [...S].sort((a, b) => Math.abs(b.contrib) - Math.abs(a.contrib))[0];
+  const kpi = (l, v, s, extra = "") => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s}</div>${extra}</div>`;
+  $("#kpis").innerHTML = [
+    ndx ? kpi("Nasdaq-100", fNum(ndx.price, 2), `<span class="${sign(ndx.chg)}">${fChg(ndx.chg)} (${fPct(ndx.chgPct)})</span> · da inizio anno <span class="${sign(ndx.perfYTD)}">${fPct(ndx.perfYTD, 1)}</span>`) : "",
+    kpi("In rialzo / In ribasso", `<span class="up">${adv}</span> <span class="muted">/</span> <span class="down">${dec}</span>`,
+      `${unch} invariati · mediana ${fPct(med)}`,
+      `<div class="breadth-bar"><i style="width:${adv}%;background:var(--up)"></i><i style="width:${unch}%;background:var(--baseline)"></i><i style="width:${dec}%;background:var(--down)"></i></div>`),
+    kpi("Sopra le medie 20 / 40 / 60", `${Math.round(above("vsSma20"))} / ${Math.round(above("vsSma40"))} / ${Math.round(above("vsSma60"))}%`,
+      `media 50: ${Math.round(a50)}% · media 200: ${Math.round(a200)}%`),
+    kpi("Estremi a 52 settimane", `<span class="up">${hi}</span> <span class="muted">/</span> <span class="down">${lo}</span>`, "entro il 2% dal massimo / minimo"),
+    top ? kpi("Chi pesa di più sull'indice", esc(top.ticker), `<span class="${sign(top.contrib)}">${top.contrib > 0 ? "+" : ""}${fNum(top.contrib, 1)} punti</span> · ${fPct(top.chgPct)}`) : "",
+    vix ? kpi("Volatilità (VIX)", fNum(vix.price, 2), `<span class="${sign(-vix.chgPct)}">${fPct(vix.chgPct)}</span> oggi`) : "",
+    kpi("Capitalizzazione totale", "$" + fBig(state.snap.totalMcap), `${S.length} titoli`),
+  ].join("");
+  $$("#kpis .kpi").forEach((el, i) => { if (i === 4 && top) { el.style.cursor = "pointer"; el.onclick = () => openDetail(top.ticker); } });
+}
+
+// generic line chart (index-based x so overnight/weekend gaps collapse)
+function lineChart(el, series, o = {}) {
+  el.innerHTML = "";
+  const W = el.clientWidth || 360, H = o.height || 200;
+  const m = { t: 12, r: o.pctAxis ? 48 : 58, b: 22, l: 6 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const main = series[0].pts;
+  const n = o.slots || main.length;
+  const x = d3.scaleLinear().domain([0, Math.max(1, n - 1)]).range([0, iw]);
+  const all = series.flatMap(s => s.pts.map(p => p.v)).filter(isNum);
+  if (o.baseline != null) all.push(o.baseline);
+  (o.refs || []).forEach(r => isNum(r.v) && all.push(r.v));
+  const [lo, hi] = d3.extent(all);
+  const padY = (hi - lo) * 0.08 || 1;
+  const y = d3.scaleLinear().domain([lo - padY, hi + padY]).range([ih, 0]).nice(5);
+  const svg = d3.select(el).append("svg").attr("width", W).attr("height", H).attr("role", "img").attr("aria-label", o.label || "chart");
+  const g = svg.append("g").attr("transform", `translate(${m.l},${m.t})`);
+  g.append("g").attr("class", "gridline").call(d3.axisLeft(y).ticks(5).tickSize(-iw).tickFormat("")).attr("transform", `translate(0,0)`);
+  g.append("g").attr("class", "axis").attr("transform", `translate(${iw},0)`)
+    .call(d3.axisRight(y).ticks(5).tickSize(0).tickPadding(6).tickFormat(o.yFmt || (v => fNum(v, v >= 1000 ? 0 : 2)))).select(".domain").remove();
+  // x ticks from timestamps
+  const tickIdx = pickTicks(main, o.range, 6);
+  g.append("g").attr("class", "axis").attr("transform", `translate(0,${ih})`)
+    .call(d3.axisBottom(x).tickValues(tickIdx).tickSize(0).tickPadding(8).tickFormat(i => tickLabel(main[i]?.t, o.range)))
+    .select(".domain").attr("stroke", css("--baseline"));
+  if (o.baseline != null) {
+    g.append("line").attr("x1", 0).attr("x2", iw).attr("y1", y(o.baseline)).attr("y2", y(o.baseline)).attr("stroke", css("--baseline")).attr("stroke-width", 1);
+    if (o.baselineLabel) { // put the label on whichever side of the reference line the series is not
+      const lastV = main.at(-1)?.v, above = isNum(lastV) && lastV >= o.baseline;
+      g.append("text").attr("class", "ref-label").attr("x", iw - 4).attr("text-anchor", "end")
+        .attr("y", y(o.baseline) + (above ? 13 : -5)).text(o.baselineLabel); }
+  }
+  (o.refs || []).filter(r => isNum(r.v)).forEach(r => {
+    g.append("line").attr("x1", 0).attr("x2", iw).attr("y1", y(r.v)).attr("y2", y(r.v)).attr("stroke", r.color).attr("stroke-width", 1).attr("opacity", 0.8);
+    g.append("text").attr("class", "ref-label").attr("x", 3).attr("y", y(r.v) - 3).text(r.label);
+  });
+  series.forEach((s, si) => {
+    const line = d3.line().defined(p => isNum(p.v)).x((p, i) => x(i)).y(p => y(p.v)).curve(d3.curveMonotoneX);
+    if (si === 0 && o.area !== false && series.length === 1) {
+      const gid = "g" + Math.random().toString(36).slice(2);
+      const grad = svg.append("defs").append("linearGradient").attr("id", gid).attr("x1", 0).attr("x2", 0).attr("y1", 0).attr("y2", 1);
+      grad.append("stop").attr("offset", "0%").attr("stop-color", s.color).attr("stop-opacity", 0.22);
+      grad.append("stop").attr("offset", "100%").attr("stop-color", s.color).attr("stop-opacity", 0);
+      const area = d3.area().defined(p => isNum(p.v)).x((p, i) => x(i)).y0(ih).y1(p => y(p.v)).curve(d3.curveMonotoneX);
+      g.append("path").datum(s.pts).attr("d", area).attr("fill", `url(#${gid})`);
+    }
+    g.append("path").datum(s.pts).attr("d", line).attr("fill", "none").attr("stroke", s.color).attr("stroke-width", s.width || 2).attr("stroke-linejoin", "round");
+    const last = s.pts.length - 1;
+    if (last >= 0 && isNum(s.pts[last].v)) {
+      g.append("circle").attr("cx", x(last)).attr("cy", y(s.pts[last].v)).attr("r", 3.5).attr("fill", s.color).attr("stroke", css("--surface")).attr("stroke-width", 2);
+    }
+  });
+  // crosshair
+  const xl = g.append("line").attr("class", "xhair").attr("y1", 0).attr("y2", ih).style("opacity", 0);
+  const dots = series.map(s => g.append("circle").attr("r", 4).attr("fill", s.color).attr("stroke", css("--surface")).attr("stroke-width", 2).style("opacity", 0));
+  g.append("rect").attr("width", iw).attr("height", ih).attr("fill", "transparent")
+    .on("mousemove", ev => {
+      const [mx] = d3.pointer(ev);
+      const i = Math.max(0, Math.min(main.length - 1, Math.round(x.invert(mx))));
+      xl.attr("x1", x(i)).attr("x2", x(i)).style("opacity", 1);
+      series.forEach((s, si) => { const p = s.pts[i]; if (p && isNum(p.v)) dots[si].attr("cx", x(i)).attr("cy", y(p.v)).style("opacity", 1); });
+      showTip(o.tip ? o.tip(i) : "", ev);
+      if (o.onHover) o.onHover(i);
+    })
+    .on("mouseleave", () => { xl.style("opacity", 0); dots.forEach(d => d.style("opacity", 0)); hideTip(); if (o.onHover) o.onHover(null); });
+  return { x, y, svg, g, m, iw, ih };
+}
+function pickTicks(pts, range, want) {
+  if (!pts.length) return [];
+  if (range === "1D") {
+    const out = [];
+    pts.forEach((p, i) => { const d = new Date(p.t * 1000); const mm = +d.toLocaleString("en-US", { timeZone: tz, minute: "numeric" }); const hh = +d.toLocaleString("en-US", { timeZone: tz, hour: "numeric", hour12: false }); if (mm === 0 && hh % 1 === 0) out.push(i); });
+    return out.length > want ? out.filter((_, k) => k % 2 === 0) : out;
+  }
+  if (range === "5D") {
+    const out = []; let last = "";
+    pts.forEach((p, i) => { const d = fDate(p.t); if (d !== last) { out.push(i); last = d; } });
+    return out;
+  }
+  const step = Math.max(1, Math.floor(pts.length / want));
+  return d3.range(0, pts.length, step).slice(0, want);
+}
+function tickLabel(t, range) {
+  if (t == null) return "";
+  if (range === "1D") return fTime(t).replace(":00", "");
+  if (range === "5Y") return fDate(t, { year: "numeric" });
+  if (range === "MAX") return fDate(t, { year: "numeric" });
+  if (range === "1Y" || range === "YTD" || range === "6M") return fDate(t, { month: "short" });
+  return fDate(t);
+}
+
+function renderIndexChart() {
+  const ndx = state.snap.indices["^NDX"];
+  const el = $("#ndxChart");
+  if (!ndx || !ndx.spark?.length) { el.innerHTML = `<div class="empty">Nessun dato intraday per ora</div>`; return; }
+  $("#ndxHead").innerHTML = `<span class="num">${fNum(ndx.price, 2)}</span> <span class="${sign(ndx.chg)}">${fChg(ndx.chg)} (${fPct(ndx.chgPct)})</span>`;
+  const pts = ndx.spark.map((v, i) => ({ t: ndx.sparkT[i], v }));
+  const col = ndx.price >= ndx.prevClose ? css("--up") : css("--down");
+  lineChart(el, [{ pts, color: col }], {
+    height: 210, baseline: ndx.prevClose, baselineLabel: `Chiusura prec. ${fNum(ndx.prevClose, 0)}`, range: "1D", label: "Nasdaq-100 intraday",
+    tip: i => { const p = pts[i]; const c = (p.v / ndx.prevClose - 1) * 100;
+      return `<div class="tip-h">${fTime(p.t)} ora NY</div><div class="tip-row"><span>NDX</span><b class="num">${fNum(p.v, 2)}</b></div>
+        <div class="tip-row"><span>vs chiusura prec.</span><b class="${sign(c)}">${fPct(c)}</b></div>`; },
+  });
+}
+
+function renderBreadth() {
+  const el = $("#breadthChart"), B = state.snap.breadth || [];
+  el.innerHTML = "";
+  if (!B.length) { el.innerHTML = `<div class="empty">Nessun dato intraday per ora</div>`; return; }
+  const W = el.clientWidth || 360, H = 150, m = { t: 8, r: 40, b: 22, l: 6 }, iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const net = B.map(b => b.adv - b.dec);
+  const ext = Math.max(10, d3.max(net, Math.abs));
+  const x = d3.scaleBand().domain(d3.range(B.length)).range([0, iw]).paddingInner(B.length > 60 ? 0.15 : 0.25);
+  const y = d3.scaleLinear().domain([-ext, ext]).range([ih, 0]).nice(4);
+  const svg = d3.select(el).append("svg").attr("width", W).attr("height", H).attr("role", "img").attr("aria-label", "Saldo tra titoli in rialzo e in ribasso durante la giornata");
+  const g = svg.append("g").attr("transform", `translate(${m.l},${m.t})`);
+  g.append("g").attr("class", "gridline").call(d3.axisLeft(y).ticks(4).tickSize(-iw).tickFormat(""));
+  g.append("g").attr("class", "axis").attr("transform", `translate(${iw},0)`).call(d3.axisRight(y).ticks(4).tickSize(0).tickPadding(6).tickFormat(d => d > 0 ? "+" + d : d)).select(".domain").remove();
+  const ticks = pickTicks(B, "1D", 6);
+  g.append("g").attr("class", "axis").attr("transform", `translate(0,${ih})`)
+    .call(d3.axisBottom(x).tickValues(ticks).tickSize(0).tickPadding(8).tickFormat(i => tickLabel(B[i].t, "1D"))).select(".domain").remove();
+  const up = css("--up"), dn = css("--down");
+  g.selectAll("rect.b").data(net).join("rect").attr("class", "b")
+    .attr("x", (_, i) => x(i)).attr("width", x.bandwidth())
+    .attr("y", d => d >= 0 ? y(d) : y(0)).attr("height", d => Math.max(1, Math.abs(y(d) - y(0))))
+    .attr("fill", d => d >= 0 ? up : dn).attr("rx", Math.min(1.5, x.bandwidth() / 2));
+  g.append("line").attr("x1", 0).attr("x2", iw).attr("y1", y(0)).attr("y2", y(0)).attr("stroke", css("--baseline"));
+  g.append("rect").attr("width", iw).attr("height", ih).attr("fill", "transparent")
+    .on("mousemove", ev => {
+      const [mx] = d3.pointer(ev); const i = Math.max(0, Math.min(B.length - 1, Math.floor(mx / x.step())));
+      const b = B[i];
+      showTip(`<div class="tip-h">${fTime(b.t)} ora NY</div>
+        <div class="tip-row"><span>In rialzo</span><b class="up">${b.adv}</b></div>
+        <div class="tip-row"><span>In ribasso</span><b class="down">${b.dec}</b></div>
+        <div class="tip-row"><span>Titolo mediano</span><b class="${sign(b.median)}">${fPct(b.median)}</b></div>`, ev);
+    }).on("mouseleave", hideTip);
+}
+
+// horizontal diverging bars (used for movers, sectors, sector members)
+function hbars(el, rows, o) {
+  el.innerHTML = "";
+  if (!rows.length) { el.innerHTML = `<div class="empty">Nessun dato</div>`; return; }
+  const W = el.clientWidth || 360, rh = o.rowH || 22, H = rows.length * rh + 4;
+  const nameW = o.nameW || 64, valW = o.valW || 58, iw = W - nameW - valW;
+  const ext = d3.max(rows, r => Math.abs(r.v)) || 1;
+  const hasNeg = rows.some(r => r.v < 0), hasPos = rows.some(r => r.v > 0);
+  const x = d3.scaleLinear().domain([hasNeg ? -ext : 0, hasPos ? ext : 0]).range([0, iw]);
+  const svg = d3.select(el).append("svg").attr("width", W).attr("height", H);
+  const up = css("--up"), dn = css("--down");
+  const row = svg.selectAll("g").data(rows).join("g").attr("class", "bar-row").attr("transform", (_, i) => `translate(0,${i * rh})`);
+  row.append("rect").attr("class", "hit").attr("width", W).attr("height", rh).attr("fill", "transparent").attr("rx", 4);
+  row.append("text").attr("class", "bar-name").attr("x", 4).attr("y", rh / 2 + 4).text(r => r.name);
+  row.append("rect").attr("x", r => nameW + Math.min(x(0), x(r.v))).attr("y", 5).attr("height", rh - 10)
+    .attr("width", r => Math.max(1.5, Math.abs(x(r.v) - x(0)))).attr("rx", 2)
+    .attr("fill", r => r.color || (r.v >= 0 ? up : dn));
+  row.append("text").attr("class", "bar-label").attr("x", W - 4).attr("y", rh / 2 + 4).attr("text-anchor", "end").text(r => r.label);
+  svg.append("line").attr("x1", nameW + x(0)).attr("x2", nameW + x(0)).attr("y1", 0).attr("y2", H).attr("stroke", css("--baseline"));
+  row.on("mousemove", (ev, r) => o.tip && showTip(o.tip(r), ev)).on("mouseleave", hideTip)
+    .on("click", (ev, r) => { hideTip(); o.click && o.click(r); });
+}
+
+function renderMovers() {
+  const S = stocks().filter(s => isNum(s.contrib));
+  const sorted = [...S].sort((a, b) => b.contrib - a.contrib);
+  const rows = [...sorted.slice(0, 6), ...sorted.slice(-6)].filter((r, i, a) => a.indexOf(r) === i)
+    .map(s => ({ name: s.ticker, v: s.contrib, label: (s.contrib > 0 ? "+" : "") + fNum(s.contrib, 1), s }));
+  hbars($("#movers"), rows, {
+    rowH: 21, click: r => openDetail(r.s.ticker),
+    tip: r => `<div class="tip-h">${esc(r.s.name)}</div><div class="tip-row"><span>Punti</span><b class="${sign(r.v)}">${r.label}</b></div>
+      <div class="tip-row"><span>Variazione</span><b class="${sign(r.s.chgPct)}">${fPct(r.s.chgPct)}</b></div><div class="tip-row"><span>Peso</span><b>${fNum(r.s.weight)}%</b></div>`,
+  });
+}
+
+function miniTable(el, list, cols, empty = "Nessun elemento") {
+  if (!list.length) { el.innerHTML = `<div class="empty">${empty}</div>`; return; }
+  el.innerHTML = `<table>${list.map(s => `<tr data-t="${esc(s.ticker)}">${cols(s)}</tr>`).join("")}</table>`;
+  el.onclick = e => { const tr = e.target.closest("tr[data-t]"); if (tr && !e.target.closest(".star")) openDetail(tr.dataset.t); };
+}
+const pill = v => `<span class="pill ${sign(v)}">${fPct(v)}</span>`;
+
+function renderLists() {
+  const S = stocks();
+  const byChg = [...S].filter(s => isNum(s.chgPct)).sort((a, b) => b.chgPct - a.chgPct);
+  const row = s => `<td class="t">${esc(s.ticker)}</td><td class="n">${esc(s.name)}</td><td>${spark(s.spark, 60, 18, s.prevClose)}</td><td class="r num">${fPrice(s.price)}</td><td class="r">${pill(s.chgPct)}</td>`;
+  miniTable($("#gainers"), byChg.slice(0, 8), row);
+  miniTable($("#losers"), byChg.slice(-8).reverse(), row);
+  const act = [...S].filter(s => isNum(s.relVol)).sort((a, b) => b.relVol - a.relVol).slice(0, 8);
+  miniTable($("#active"), act, s => `<td class="t">${esc(s.ticker)}</td><td class="n">${esc(s.name)}</td><td class="r num"><b>${fX(s.relVol)}</b></td><td class="r num muted">${fBig(s.volume)}</td><td class="r">${pill(s.chgPct)}</td>`);
+}
+
+function renderSectorBars(el, secs, tf) {
+  const rows = secs.filter(s => isNum(s[tf])).sort((a, b) => b[tf] - a[tf])
+    .map(s => ({ name: s.name, v: s[tf], label: fMetric(tf, s[tf]), s }));
+  hbars(el, rows, {
+    nameW: 150, rowH: 24,
+    click: r => { state.secSel = r.name; setView("sectors"); },
+    tip: r => `<div class="tip-h">${esc(r.name)}</div><div class="tip-row"><span>${esc(METRICS[tf].label)} (pesato per cap.)</span><b class="${sign(r.v)}">${r.label}</b></div>
+      <div class="tip-row"><span>Titoli</span><b>${r.s.n}</b></div><div class="tip-row"><span>Capitalizzazione</span><b>$${fBig(r.s.mcap)}</b></div>
+      <div class="tip-row"><span>In rialzo oggi</span><b>${r.s.list.filter(x => x.chgPct > 0).length} / ${r.s.n}</b></div>`,
+  });
+}
+
+// ------------------------------------------------------------ signals & presets
+const PRESETS = [
+  { id: "all", label: "Tutti", f: () => true },
+  { id: "watch", label: "★ Preferiti", f: s => state.watch.has(s.ticker) },
+  { id: "gainers", label: "Su > 2% oggi", f: s => s.chgPct > 2 },
+  { id: "losers", label: "Giù > 2% oggi", f: s => s.chgPct < -2 },
+  { id: "highs", label: "Vicino al max 52 sett.", f: s => s.fromHi52 > -2, desc: "entro il 2% dal massimo a 52 settimane" },
+  { id: "lows", label: "Vicino al min 52 sett.", f: s => s.fromLo52 < 5, desc: "entro il 5% dal minimo a 52 settimane" },
+  { id: "volume", label: "Volumi insoliti", f: s => s.relVol >= 1.5, desc: "volume relativo ≥ 1,5×" },
+  { id: "gapup", label: "Gap al rialzo", f: s => s.gapPct > 1.5, desc: "apertura oltre l'1,5% sopra la chiusura precedente" },
+  { id: "gapdown", label: "Gap al ribasso", f: s => s.gapPct < -1.5, desc: "apertura oltre l'1,5% sotto la chiusura precedente" },
+  { id: "overbought", label: "Ipercomprato", f: s => s.rsi > 70, desc: "RSI(14) sopra 70" },
+  { id: "oversold", label: "Ipervenduto", f: s => s.rsi < 30, desc: "RSI(14) sotto 30" },
+  { id: "above3", label: "Sopra 20, 40 e 60", f: s => s.vsSma20 > 0 && s.vsSma40 > 0 && s.vsSma60 > 0, desc: "prezzo sopra le medie a 20, 40 e 60 giorni" },
+  { id: "below3", label: "Sotto 20, 40 e 60", f: s => s.vsSma20 < 0 && s.vsSma40 < 0 && s.vsSma60 < 0, desc: "prezzo sotto le medie a 20, 40 e 60 giorni" },
+  { id: "golden", label: "Sopra medie 50 e 200", f: s => s.vsSma50 > 0 && s.vsSma200 > 0 },
+  { id: "broken", label: "Sotto media 200", f: s => s.vsSma200 < 0 },
+  { id: "earnings", label: "Trimestrale ≤ 14 g", f: s => daysTo(s.earningsTs) != null && daysTo(s.earningsTs) <= 14, desc: "conti in uscita nelle prossime due settimane" },
+  { id: "value", label: "P/E atteso < 20", f: s => s.fpe > 0 && s.fpe < 20 },
+  { id: "upside", label: "Potenziale analisti > 20%", f: s => s.upside > 20 },
+  { id: "cheap", label: "Valutazione economica", f: s => s.valLabel === "Economica", desc: "più economica del settore e/o della propria storia" },
+  { id: "rich", label: "Valutazione cara", f: s => s.valLabel === "Cara", desc: "più cara del settore e/o della propria storia" },
+  { id: "upgrades", label: "Upgrade recenti", f: s => s.up30 > s.down30, desc: "più upgrade che downgrade negli ultimi 30 giorni" },
+  { id: "estUp", label: "Stime in rialzo", f: s => s.epsRev30 > 3, desc: "stima utile del prossimo anno alzata di oltre il 3% in 30 giorni" },
+  { id: "sigBuy", label: "Segnale di acquisto", f: s => s.sigScore >= 20, desc: "segnale finale Acquisto o Forte acquisto" },
+  { id: "sigSell", label: "Segnale di vendita", f: s => s.sigScore <= -20, desc: "segnale finale Vendita o Forte vendita" },
+  { id: "estDown", label: "Stime in calo", f: s => s.epsRev30 < -3, desc: "stima utile del prossimo anno abbassata di oltre il 3% in 30 giorni" },
+];
+function daysTo(ts) {
+  if (!isNum(ts)) return null;
+  const d = (ts * 1000 - Date.now()) / 864e5;
+  return d >= -0.5 ? d : null;
+}
+
+function renderSignals() {
+  const ids = ["above3", "below3", "highs", "lows", "volume", "gapup", "gapdown", "overbought", "oversold", "earnings"];
+  const S = stocks();
+  $("#signals").innerHTML = ids.map(id => {
+    const p = PRESETS.find(x => x.id === id);
+    const hits = S.filter(p.f).sort((a, b) => (b.mcap || 0) - (a.mcap || 0));
+    return `<button class="signal" data-preset="${id}"><span class="sl">${esc(p.label)}</span><span class="sc">${hits.length}</span>
+      <span class="st">${hits.length ? hits.slice(0, 8).map(h => esc(h.ticker)).join(" · ") : esc(p.desc || "nessuno al momento")}</span></button>`;
+  }).join("");
+}
+$("#signals").addEventListener("click", e => {
+  const b = e.target.closest("[data-preset]");
+  if (b) { state.preset = b.dataset.preset; setView("screener"); }
+});
+
+function renderWatch() {
+  const list = [...state.watch].map(t => state.bySym.get(t)).filter(Boolean);
+  miniTable($("#watch"), list, s => `<td class="t">${esc(s.ticker)}</td><td>${spark(s.spark, 70, 18, s.prevClose)}</td><td class="r num">${fPrice(s.price)}</td><td class="r">${pill(s.chgPct)}</td>
+    <td class="r"><button class="star on" data-star="${esc(s.ticker)}" title="Rimuovi dai preferiti">★</button></td>`, "Aggiungi titoli con ★ dallo screener o dalla scheda del titolo");
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-star]");
+  if (!b) return;
+  e.stopPropagation();
+  toggleWatch(b.dataset.star);
+});
+function toggleWatch(t) {
+  state.watch.has(t) ? state.watch.delete(t) : state.watch.add(t);
+  LS.set("watch", [...state.watch]);
+  if (state.view === "overview") renderWatch();
+  if (state.view === "screener") renderScreener();
+  if (state.detail === t) renderDetailHeader();
+}
+
+function renderSignalLists() {
+  const S = stocks().filter(s => isNum(s.sigScore)).sort((a, b) => b.sigScore - a.sigScore);
+  const row = s => `<td class="t">${esc(s.ticker)}</td><td class="n">${esc(s.name)}</td><td class="r">${sigBadge(s.signal)}</td><td class="r">${scoreBar(s.sigScore)}</td>`;
+  miniTable($("#sigTop"), S.filter(s => s.sigScore > 0).slice(0, 8), row, "Nessun segnale positivo");
+  miniTable($("#sigFlop"), S.filter(s => s.sigScore < 0).slice(-8).reverse(), row, "Nessun segnale negativo");
+}
+
+function renderEarnings() {
+  const list = stocks().filter(s => { const d = daysTo(s.earningsTs); return d != null && d <= 30; })
+    .sort((a, b) => a.earningsTs - b.earningsTs).slice(0, 10);
+  miniTable($("#earnings"), list, s => {
+    const d = Math.round(daysTo(s.earningsTs));
+    return `<td class="t">${esc(s.ticker)}</td><td class="n">${esc(s.name)}</td>
+      <td class="r num">${fDate(s.earningsTs, { weekday: "short", month: "short", day: "numeric" })}</td>
+      <td class="r muted num">${d <= 0 ? "oggi" : "tra " + d + " g"}</td><td class="r num muted">${fBig(s.mcap)}</td>`;
+  }, "Nessuna trimestrale nei prossimi 30 giorni");
+}
+
+let newsLoadedAt = 0;
+async function loadNews() {
+  if (Date.now() - newsLoadedAt < 5 * 60_000) return;
+  newsLoadedAt = Date.now();
+  try {
+    const items = await (await fetch("/api/news")).json();
+    $("#news").innerHTML = items.slice(0, 9).map(n => `<a href="${esc(n.url)}" target="_blank" rel="noopener">
+      <div class="nt">${esc(n.title)}</div><div class="nm"><span class="tag">${esc(n.ticker)}</span>${esc(n.publisher || "")} · ${esc(ago(n.time))}</div></a>`).join("") || `<div class="empty">Nessuna notizia</div>`;
+  } catch { $("#news").innerHTML = `<div class="empty">Notizie non disponibili</div>`; }
+}
+// ------------------------------------------------------------ why they move (rule-based, from /api/movers-why)
+let whyLoadedAt = 0;
+async function loadWhy() {
+  if (Date.now() - whyLoadedAt < 5 * 60_000) return;
+  whyLoadedAt = Date.now();
+  try {
+    const d = await getJSON("/api/movers-why");
+    $("#whyTop").innerHTML = d.top.map(whyItem).join("") || `<div class="empty">Nessun dato</div>`;
+    $("#whyFlop").innerHTML = d.flop.map(whyItem).join("") || `<div class="empty">Nessun dato</div>`;
+  } catch {
+    whyLoadedAt = 0;   // retry on the next refresh
+    $("#whyTop").innerHTML = $("#whyFlop").innerHTML = `<div class="empty">Notizie non disponibili</div>`;
+  }
+}
+function whyItem(x) {
+  const toneCls = x.tone > 0 ? "pos" : x.tone < 0 ? "neg" : "";
+  const tags = x.reasons.map(r => `<span class="${toneCls}">${esc(r)}</span>`).join("")
+    + (isNum(x.sectorChg) ? `<span class="sec">${esc(x.sector)} ${fPct(x.sectorChg)}</span>` : "");
+  const n = x.news;
+  const news = n ? `<a class="mv-news" href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)} ↗</a>
+      ${n.clause ? `<div class="mv-cl">“${esc(n.clause)}”</div>` : ""}
+      <div class="nm">${esc(n.publisher || "")} · ${esc(ago(n.time))}</div>` : "";
+  return `<div class="mv-it"><div class="mv-h"><b data-open="${esc(x.ticker)}">${esc(x.ticker)}</b><span class="n">${esc(x.name || "")}</span>${pill(x.chgPct)}</div>
+    ${tags ? `<div class="mv-tags">${tags}</div>` : ""}<div class="mv-sum">${esc(x.summary)}</div>${news}</div>`;
+}
+$(".mv-cols").addEventListener("click", e => { const b = e.target.closest("[data-open]"); if (b) openDetail(b.dataset.open); });
+
+function ago(t) {
+  const ms = typeof t === "number" ? t * 1000 : Date.parse(t);
+  if (!isFinite(ms)) return "";
+  const m = Math.round((Date.now() - ms) / 60000);
+  if (m < 60) return m + " min fa";
+  if (m < 1440) return Math.round(m / 60) + " h fa";
+  return Math.round(m / 1440) + " g fa";
+}
+
+// ------------------------------------------------------------ map view
+function renderMapView() {
+  $$("#sizeSeg button").forEach(b => b.classList.toggle("on", b.dataset.size === state.size));
+  $("#cvd").checked = state.cvd;
+  $("#crumbs").innerHTML = state.zoom ? `<button data-crumb>Tutti i settori</button><span class="muted">›</span><b>${esc(state.zoom)}</b>` : "";
+  $$("[data-legend]").forEach(el => el.innerHTML = legendHTML(state.tf));
+  renderTreemap($("#bigMap"), { zoomable: true, find: $("#mapFind").value });
+}
+$("#sizeSeg").addEventListener("click", e => { const b = e.target.closest("[data-size]"); if (b) { state.size = b.dataset.size; LS.set("size", state.size); renderMapView(); } });
+$("#cvd").addEventListener("change", e => { state.cvd = e.target.checked; LS.set("cvd", state.cvd); renderAll(); });
+$("#mapFind").addEventListener("input", () => renderMapView());
+$("#crumbs").addEventListener("click", e => { if (e.target.closest("[data-crumb]")) { state.zoom = null; renderMapView(); } });
+
+// ------------------------------------------------------------ screener
+const C = {
+  star:   { l: "", cls: "l", sort: s => state.watch.has(s.ticker) ? 1 : 0, html: s => `<button class="star ${state.watch.has(s.ticker) ? "on" : ""}" data-star="${esc(s.ticker)}" aria-label="Preferito">${state.watch.has(s.ticker) ? "★" : "☆"}</button>` },
+  ticker: { l: "Ticker", cls: "l tk", sort: s => s.ticker, html: s => esc(s.ticker) },
+  name:   { l: "Società", cls: "l nm", sort: s => s.name, html: s => esc(s.name) },
+  sector: { l: "Settore", cls: "l", sort: s => s.sector, html: s => esc(s.sector) },
+  industry: { l: "Industria", cls: "l", sort: s => s.industry, html: s => esc(s.industry) },
+  mcap:   { l: "Capitalizz.", sort: s => s.mcap, html: s => fBig(s.mcap) },
+  weight: { l: "Peso", sort: s => s.weight, html: s => fNum(s.weight) + "%" },
+  price:  { l: "Prezzo", sort: s => s.price, html: s => fPrice(s.price) },
+  chgPct: { l: "Var.", sort: s => s.chgPct, html: s => `<span class="${sign(s.chgPct)}">${fPct(s.chgPct)}</span>` },
+  volume: { l: "Volume", sort: s => s.volume, html: s => fBig(s.volume) },
+  relVol: { l: "Vol rel.", sort: s => s.relVol, html: s => fX(s.relVol) },
+  d30:    { l: "30 giorni", nosort: true, html: s => spark(s.d30, 90, 22, null) },
+  pe:     { l: "P/E", sort: s => s.pe, html: s => fNum(s.pe, 1) },
+  fpe:    { l: "P/E atteso", sort: s => s.fpe, html: s => fNum(s.fpe, 1) },
+  divYield: { l: "Rend. div.", sort: s => s.divYield, html: s => isNum(s.divYield) && s.divYield > 0 ? fNum(s.divYield, 2) + "%" : "—" },
+  beta:   { l: "Beta", sort: s => s.beta, html: s => fNum(s.beta, 2) },
+  revGrowth: { l: "Crescita ricavi", sort: s => s.revGrowth, html: s => isNum(s.revGrowth) ? `<span class="${sign(s.revGrowth)}">${fPct(s.revGrowth * 100, 1)}</span>` : "—" },
+  margin: { l: "Margine netto", sort: s => s.margin, html: s => isNum(s.margin) ? fNum(s.margin * 100, 1) + "%" : "—" },
+  target: { l: "Target", sort: s => s.target, html: s => fPrice(s.target) },
+  upside: { l: "Potenziale", sort: s => s.upside, html: s => `<span class="${sign(s.upside)}">${fPct(s.upside, 1)}</span>` },
+  rec:    { l: "Analisti", cls: "l", sort: s => s.recMean, html: s => esc(REC[s.rec] || "—") },
+  signal: { l: "Segnale", cls: "l", sort: s => s.sigScore, html: s => s.signal ? `${sigBadge(s.signal)} <span class="muted num">${fNum(s.sigScore, 0)}</span>` : "—" },
+  valLabel: { l: "Valutazione", cls: "l", sort: s => s.valRatio, html: s => valBadge(s.valLabel) },
+  ps:     { l: "P/S", sort: s => s.ps, html: s => fNum(s.ps, 1) },
+  evEbitda: { l: "EV/EBITDA", sort: s => s.evEbitda, html: s => fNum(s.evEbitda, 1) },
+  peg:    { l: "PEG", sort: s => s.peg, html: s => fNum(s.peg, 2) },
+  anl30:  { l: "Up/Down 30 g", sort: s => (s.up30 || 0) - (s.down30 || 0), html: s => isNum(s.up30) ? `<span class="up">${s.up30}↑</span> <span class="down">${s.down30}↓</span>` : "—" },
+  epsRev30: { l: "Stime 30 g", sort: s => s.epsRev30, html: s => `<span class="${sign(s.epsRev30)}">${fPct(s.epsRev30, 1)}</span>` },
+  rsi:    { l: "RSI 14", sort: s => s.rsi, html: s => { const v = s.rsi; return isNum(v) ? `<span class="${v > 70 ? "down" : v < 30 ? "up" : ""}">${v.toFixed(0)}</span>` : "—"; } },
+  vsSma20: { l: "vs media 20", sort: s => s.vsSma20, html: s => `<span class="${sign(s.vsSma20)}">${fPct(s.vsSma20, 1)}</span>` },
+  vsSma40: { l: "vs media 40", sort: s => s.vsSma40, html: s => `<span class="${sign(s.vsSma40)}">${fPct(s.vsSma40, 1)}</span>` },
+  vsSma60: { l: "vs media 60", sort: s => s.vsSma60, html: s => `<span class="${sign(s.vsSma60)}">${fPct(s.vsSma60, 1)}</span>` },
+  vsSma50: { l: "vs media 50", sort: s => s.vsSma50, html: s => `<span class="${sign(s.vsSma50)}">${fPct(s.vsSma50, 1)}</span>` },
+  vsSma200: { l: "vs media 200", sort: s => s.vsSma200, html: s => `<span class="${sign(s.vsSma200)}">${fPct(s.vsSma200, 1)}</span>` },
+  range52: { l: "Range 52 sett.", sort: s => s.range52, html: s => isNum(s.range52) ? `<span class="range-bar" title="${fPrice(s.lo52)} – ${fPrice(s.hi52)}"><i style="left:${s.range52}%"></i></span>` : "—" },
+  fromHi52: { l: "Da max", sort: s => s.fromHi52, html: s => `<span class="${sign(s.fromHi52)}">${fPct(s.fromHi52, 1)}</span>` },
+  fromLo52: { l: "Da min", sort: s => s.fromLo52, html: s => `<span class="${sign(s.fromLo52)}">${fPct(s.fromLo52, 1)}</span>` },
+  gapPct: { l: "Gap", sort: s => s.gapPct, html: s => `<span class="${sign(s.gapPct)}">${fPct(s.gapPct)}</span>` },
+  vol20:  { l: "Volatilità", sort: s => s.vol20, html: s => isNum(s.vol20) ? fNum(s.vol20, 0) + "%" : "—" },
+  short:  { l: "Short % flottante", sort: s => s.short, html: s => isNum(s.short) ? fNum(s.short * 100, 1) + "%" : "—" },
+};
+for (const [tf, m] of Object.entries(METRICS)) if (PERF_TFS.includes(tf) && tf !== "1D")
+  C[m.key] = { l: m.label, sort: s => s[m.key], html: s => `<span class="${sign(s[m.key])}">${fPct(s[m.key])}</span>` };
+const COLSETS = {
+  overview: ["star", "ticker", "name", "sector", "industry", "mcap", "weight", "price", "chgPct", "signal", "volume", "relVol", "d30"],
+  performance: ["star", "ticker", "name", "price", "chgPct", "perf1W", "perf1M", "perf3M", "perf6M", "perfYTD", "perf1Y", "vol20", "d30"],
+  valuation: ["star", "ticker", "name", "mcap", "signal", "valLabel", "pe", "fpe", "ps", "evEbitda", "peg", "divYield", "revGrowth", "margin", "target", "upside", "rec", "anl30", "epsRev30"],
+  technical: ["star", "ticker", "name", "price", "chgPct", "signal", "rsi", "vsSma20", "vsSma40", "vsSma60", "vsSma50", "vsSma200", "range52", "fromHi52", "fromLo52", "gapPct", "relVol", "short"],
+};
+
+function screenerRows() {
+  const p = PRESETS.find(x => x.id === state.preset) || PRESETS[0];
+  const q = $("#scrFind").value.trim().toLowerCase();
+  const col = C[state.sort.key] || C.mcap;
+  return stocks().filter(p.f)
+    .filter(s => !state.sector || s.sector === state.sector)
+    .filter(s => !q || s.ticker.toLowerCase().includes(q) || s.name.toLowerCase().includes(q) || s.industry.toLowerCase().includes(q))
+    .sort((a, b) => {
+      const va = col.sort(a), vb = col.sort(b);
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      return (typeof va === "string" ? va.localeCompare(vb) : va - vb) * state.sort.dir;
+    });
+}
+
+function renderScreener() {
+  const S = stocks();
+  $$("#colSeg button").forEach(b => b.classList.toggle("on", b.dataset.cols === state.cols));
+  const sel = $("#sectorSel");
+  const secs = [...new Set(S.map(s => s.sector))].sort();
+  if (sel.options.length !== secs.length + 1) sel.innerHTML = `<option value="">Tutti i settori</option>` + secs.map(s => `<option>${esc(s)}</option>`).join("");
+  sel.value = state.sector;
+  $("#presets").innerHTML = PRESETS.map(p => `<button data-p="${p.id}" class="${p.id === state.preset ? "on" : ""}" title="${esc(p.desc || "")}">${esc(p.label)}<span>${S.filter(p.f).length}</span></button>`).join("");
+  const rows = screenerRows();
+  const cols = COLSETS[state.cols];
+  $("#scrCount").textContent = `${rows.length} di ${S.length}`;
+  $("#scr").innerHTML = `<thead><tr>${cols.map(k => `<th class="${C[k].cls?.split(" ")[0] || ""} ${state.sort.key === k ? "sorted" + (state.sort.dir > 0 ? " asc" : "") : ""}" data-k="${k}">${esc(C[k].l)}</th>`).join("")}</tr></thead>
+    <tbody>${rows.map(s => `<tr data-t="${esc(s.ticker)}">${cols.map(k => `<td class="${C[k].cls || ""}">${C[k].html(s)}</td>`).join("")}</tr>`).join("")}</tbody>`;
+  if (!rows.length) $("#scr").insertAdjacentHTML("beforeend", `<tbody><tr><td colspan="${cols.length}" class="empty">Nessun titolo corrisponde ai filtri</td></tr></tbody>`);
+}
+$("#colSeg").addEventListener("click", e => { const b = e.target.closest("[data-cols]"); if (b) { state.cols = b.dataset.cols; LS.set("cols", state.cols); renderScreener(); } });
+$("#presets").addEventListener("click", e => { const b = e.target.closest("[data-p]"); if (b) { state.preset = b.dataset.p; renderScreener(); } });
+$("#sectorSel").addEventListener("change", e => { state.sector = e.target.value; renderScreener(); });
+$("#scrFind").addEventListener("input", () => renderScreener());
+$("#scr").addEventListener("click", e => {
+  const th = e.target.closest("th[data-k]");
+  if (th) {
+    const k = th.dataset.k; if (C[k].nosort) return;
+    state.sort = state.sort.key === k ? { key: k, dir: -state.sort.dir } : { key: k, dir: ["ticker", "name", "sector", "industry", "rec"].includes(k) ? 1 : -1 };
+    return renderScreener();
+  }
+  const tr = e.target.closest("tr[data-t]");
+  if (tr && !e.target.closest(".star")) openDetail(tr.dataset.t);
+});
+$("#csvBtn").addEventListener("click", () => {
+  const keys = ["ticker", "name", "sector", "industry", "price", "chgPct", "mcap", "weight", "volume", "relVol", "perf1W", "perf1M", "perf3M", "perf6M", "perfYTD", "perf1Y",
+    "signal", "sigScore", "pe", "fpe", "ps", "evEbitda", "peg", "valLabel", "divYield", "beta", "target", "upside", "up30", "down30", "epsRev30", "rsi", "vsSma20", "vsSma40", "vsSma60", "vsSma50", "vsSma200", "hi52", "lo52", "fromHi52"];
+  const q = v => v == null ? "" : typeof v === "string" ? `"${v.replace(/"/g, '""')}"` : +v.toFixed(4);
+  const csv = [keys.join(","), ...screenerRows().map(s => keys.map(k => q(s[k])).join(","))].join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = `nasdaq100_${state.snap.session}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+// ------------------------------------------------------------ sectors view
+function renderSectors() {
+  const secs = sectors();
+  if (!state.secSel || !secs.some(s => s.name === state.secSel)) state.secSel = secs[0]?.name;
+  const tfs = PERF_TFS;
+  const colors = Object.fromEntries(tfs.map(tf => [tf, colorFor(tf)]));
+  const total = d3.sum(secs, s => s.mcap);
+  const maxW = d3.max(secs, s => s.mcap / total);
+  $("#matrix").innerHTML = `<thead><tr><th class="l">Settore</th><th>Titoli</th><th class="l">Peso</th>${tfs.map(tf => `<th>${METRICS[tf].label}</th>`).join("")}<th>Rialzo / Ribasso</th></tr></thead>
+    <tbody>${secs.map(s => {
+      const w = s.mcap / total * 100;
+      const adv = s.list.filter(x => x.chgPct > 0).length;
+      return `<tr data-sec="${esc(s.name)}" class="${s.name === state.secSel ? "sel" : ""}"><td class="l"><b>${esc(s.name)}</b></td><td>${s.n}</td>
+        <td class="l"><span class="wbar" style="width:${(w / (maxW * 100) * 90).toFixed(0)}px"></span>${fNum(w, 1)}%</td>
+        ${tfs.map(tf => `<td class="heat" style="background:${colors[tf](s[tf])}">${fPct(s[tf])}</td>`).join("")}
+        <td><span class="up">${adv}</span> / <span class="down">${s.list.filter(x => x.chgPct < 0).length}</span></td></tr>`;
+    }).join("")}</tbody>`;
+  const sec = secs.find(s => s.name === state.secSel);
+  const tf = PERF_TFS.includes(state.tf) ? state.tf : "1D";
+  $("#secTitle").textContent = `${sec.name} · ${METRICS[tf].label}`;
+  const rows = sec.list.filter(s => isNum(val(s, tf))).sort((a, b) => val(b, tf) - val(a, tf))
+    .map(s => ({ name: s.ticker, v: val(s, tf), label: fMetric(tf, val(s, tf)), s }));
+  hbars($("#secBars"), rows, { rowH: 22, click: r => openDetail(r.s.ticker),
+    tip: r => `<div class="tip-h">${esc(r.s.industry)}</div><b>${esc(r.s.name)}</b><div class="tip-row"><span>${METRICS[tf].label}</span><b class="${sign(r.v)}">${r.label}</b></div><div class="tip-row"><span>Peso</span><b>${fNum(r.s.weight)}%</b></div>` });
+  const wr = secs.map(s => ({ name: s.name, v: s.mcap / total * 100, label: fNum(s.mcap / total * 100, 1) + "%", color: css("--series-1"), s }));
+  hbars($("#weights"), wr, { nameW: 170, rowH: 26, click: r => { state.secSel = r.name; renderSectors(); },
+    tip: r => `<div class="tip-h">${esc(r.name)}</div><div class="tip-row"><span>Capitalizzazione</span><b>$${fBig(r.s.mcap)}</b></div><div class="tip-row"><span>I più grandi</span><b>${esc([...r.s.list].sort((a, b) => b.mcap - a.mcap).slice(0, 3).map(x => x.ticker).join(", "))}</b></div>` });
+}
+$("#matrix").addEventListener("click", e => { const tr = e.target.closest("tr[data-sec]"); if (tr) { state.secSel = tr.dataset.sec; renderSectors(); } });
+
+// ------------------------------------------------------------ detail drawer
+const drawer = $("#drawer"), scrim = $("#scrim");
+let dRange = "1D", dCompare = false, dInfo = null, dReq = 0;
+
+function openDetail(t) {
+  state.detail = t; dInfo = null;
+  drawer.innerHTML = `<div class="d-top"></div><div class="d-signal"></div><div class="d-ctrl"></div><div id="dChart" class="chart"></div><div id="dVol" class="chart"></div><div class="d-rest"><div class="loading" style="padding:40px"><div class="spinner"></div></div></div>`;
+  drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); scrim.hidden = false;
+  renderDetailHeader();
+  renderDetailCtrl();
+  loadDetailChart();
+  loadDetailInfo();
+}
+function closeDetail() {
+  state.detail = null; drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); scrim.hidden = true; hideTip();
+}
+scrim.addEventListener("click", closeDetail);
+
+function quoteFor(t) {
+  return state.bySym.get(t) || state.snap.indices[t] || null;
+}
+function renderDetailHeader() {
+  const t = state.detail, s = quoteFor(t), top = drawer.querySelector(".d-top");
+  if (!top) return;
+  const name = s?.name || s?.label || dInfo?.longName || t;
+  top.innerHTML = `<div class="d-head"><div><div class="tt">${esc(t)}</div><div class="nm">${esc(dInfo?.longName || name)}</div>
+      ${s?.sector ? `<div class="sec">${esc(s.sector)} › ${esc(s.industry)} · ${fNum(s.weight)}% dell'indice</div>` : ""}</div>
+      <div class="actions">${state.bySym.has(t) ? `<button class="icon-btn star ${state.watch.has(t) ? "on" : ""}" data-star="${esc(t)}" title="Preferiti">${state.watch.has(t) ? "★" : "☆"}</button>` : ""}
+      <button class="icon-btn close-btn" id="dClose" aria-label="Chiudi">×</button></div></div>
+    ${s ? `<div class="d-price"><span class="p num">${fPrice(s.price)}</span><span class="c ${sign(s.chg)}">${fChg(s.chg)} (${fPct(s.chgPct)})</span>
+      <span class="when">${state.snap.status === "open" ? "in tempo reale · " : "ultimo · "}${esc(new Date(state.snap.lastQuote || state.snap.asOf).toLocaleTimeString("it-IT", { timeZone: tz, hour: "numeric", minute: "2-digit" }))} ora NY</span></div>` : ""}`;
+  $("#dClose").onclick = closeDetail;
+}
+function renderDetailCtrl() {
+  const el = drawer.querySelector(".d-ctrl");
+  el.innerHTML = `<div class="seg">${["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "MAX"].map(r => `<button data-r="${r}" class="${r === dRange ? "on" : ""}">${RLAB[r] || r}</button>`).join("")}</div>
+    ${state.detail !== "^NDX" ? `<label class="check"><input type="checkbox" id="dCmp" ${dCompare ? "checked" : ""}> Confronta con il Nasdaq-100</label>` : ""}`;
+  el.onclick = e => { const b = e.target.closest("[data-r]"); if (b) { dRange = b.dataset.r; renderDetailCtrl(); loadDetailChart(); } };
+  const cb = el.querySelector("#dCmp");
+  if (cb) cb.onchange = () => { dCompare = cb.checked; loadDetailChart(); };
+}
+const getJSON = async u => { const r = await fetch(u); if (!r.ok) throw new Error(r.statusText); return r.json(); };
+
+async function loadDetailChart() {
+  const t = state.detail, req = ++dReq, rng = dRange;
+  const chartEl = $("#dChart"), volEl = $("#dVol");
+  chartEl.innerHTML = `<div class="empty" style="height:260px">Caricamento grafico…</div>`; volEl.innerHTML = "";
+  try {
+    const [h, bench] = await Promise.all([
+      getJSON(`/api/history/${encodeURIComponent(t)}/${rng}`),
+      dCompare && t !== "^NDX" ? getJSON(`/api/history/${encodeURIComponent("^NDX")}/${rng}`) : null,
+    ]);
+    if (req !== dReq || state.detail !== t) return;
+    const pts = h.filter(p => isNum(p.c)).map(p => ({ t: p.t, v: p.c, o: p.o, h: p.h, l: p.l, vol: p.v }));
+    if (!pts.length) { chartEl.innerHTML = `<div class="empty">Nessuno storico dei prezzi</div>`; return; }
+    const q = quoteFor(t);
+    const base = rng === "1D" && q?.prevClose ? q.prevClose : pts[0].v;
+    let chart;
+    const tipFor = i => {
+      const p = pts[i], chg = (p.v / base - 1) * 100;
+      const when = ["1D", "5D", "1M"].includes(rng) ? `${fDate(p.t, { weekday: "short", month: "short", day: "numeric" })} ${fTime(p.t)}` : fDate(p.t, { month: "short", day: "numeric", year: "numeric" });
+      let html = `<div class="tip-h">${when}</div>`;
+      if (bnPts) {
+        html += `<div class="tip-row"><span><i class="swatch" style="background:${css("--series-1")}"></i>${esc(t)}</span><b class="${sign(sPts[i].v - 100)}">${fPct(sPts[i].v - 100)}</b></div>
+                 <div class="tip-row"><span><i class="swatch" style="background:${css("--series-2")}"></i>Nasdaq-100</span><b class="${sign(bnPts[i].v - 100)}">${isNum(bnPts[i].v) ? fPct(bnPts[i].v - 100) : "—"}</b></div>`;
+      } else {
+        html += `<div class="tip-row"><span>Chiusura</span><b class="num">${fPrice(p.v)}</b></div>
+          <div class="tip-row"><span>Ap. / Max / Min</span><span class="num">${fPrice(p.o)} / ${fPrice(p.h)} / ${fPrice(p.l)}</span></div>
+          <div class="tip-row"><span>Variazione</span><b class="${sign(chg)}">${fPct(chg)}</b></div>`;
+      }
+      return html + (isNum(p.vol) && p.vol > 0 ? `<div class="tip-row"><span>Volume</span><span class="num">${fBig(p.vol)}</span></div>` : "");
+    };
+    let sPts = null, bnPts = null;
+    if (bench && bench.length) {
+      // align benchmark to stock timestamps (last benchmark value at or before each point)
+      const B = bench.filter(p => isNum(p.c));
+      let j = 0, last = null;
+      const aligned = pts.map(p => { while (j < B.length && B[j].t <= p.t + 60) { last = B[j].c; j++; } return last; });
+      const b0 = aligned.find(isNum);
+      sPts = pts.map(p => ({ t: p.t, v: p.v / pts[0].v * 100 }));
+      bnPts = pts.map((p, i) => ({ t: p.t, v: isNum(aligned[i]) ? aligned[i] / b0 * 100 : null }));
+      chart = lineChart(chartEl, [{ pts: sPts, color: css("--series-1") }, { pts: bnPts, color: css("--series-2") }], {
+        height: 280, baseline: 100, range: rng, pctAxis: true, yFmt: v => (v - 100 > 0 ? "+" : "") + (v - 100).toFixed(0) + "%", tip: tipFor, label: `${t} vs Nasdaq-100`,
+      });
+      chartEl.insertAdjacentHTML("afterbegin", `<div class="series-key"><span><i style="background:${css("--series-1")}"></i>${esc(t)} ${fPct(sPts.at(-1).v - 100)}</span><span><i style="background:${css("--series-2")}"></i>Nasdaq-100 ${fPct((bnPts.at(-1).v ?? 100) - 100)}</span></div>`);
+    } else {
+      const col = pts.at(-1).v >= base ? css("--up") : css("--down");
+      chart = lineChart(chartEl, [{ pts, color: col }], {
+        height: 280, baseline: rng === "1D" ? base : null, baselineLabel: rng === "1D" ? `Chiusura prec. ${fPrice(base)}` : "", range: rng, tip: tipFor, label: `${t} price`,
+      });
+    }
+    // volume panel (its own axis-free strip, same x positions)
+    if (pts.some(p => p.vol > 0)) {
+      const W = chartEl.clientWidth, H = 56, { m, iw } = chart;
+      const x = d3.scaleBand().domain(d3.range(pts.length)).range([0, iw]).paddingInner(pts.length > 120 ? 0 : 0.2);
+      const y = d3.scaleLinear().domain([0, d3.max(pts, p => p.vol) || 1]).range([H - 6, 0]);
+      const svg = d3.select(volEl).append("svg").attr("width", W).attr("height", H).attr("aria-label", "Volume");
+      const g = svg.append("g").attr("transform", `translate(${m.l},2)`);
+      const off = x.bandwidth() / 2;
+      g.selectAll("rect").data(pts).join("rect").attr("x", (_, i) => chart.x(i) - off).attr("width", Math.max(1, x.bandwidth()))
+        .attr("y", p => y(p.vol || 0)).attr("height", p => H - 6 - y(p.vol || 0))
+        .attr("fill", (p, i) => (i ? p.v >= pts[i - 1].v : p.v >= base) ? css("--up") : css("--down")).attr("opacity", 0.45);
+      g.append("text").attr("class", "ref-label").attr("x", iw + 6).attr("y", 10).text("Vol");
+    }
+  } catch (e) {
+    if (req === dReq) chartEl.innerHTML = `<div class="empty">Grafico non disponibile (${esc(e.message)})</div>`;
+  }
+}
+
+async function loadDetailInfo() {
+  const t = state.detail;
+  let data = { info: {}, news: [] };
+  try { data = await getJSON(`/api/stock/${encodeURIComponent(t)}`); } catch { /* show what we have */ }
+  if (state.detail !== t) return;
+  dInfo = data.info || {};
+  renderDetailHeader();
+  const s = state.bySym.get(t) || {}, i = dInfo;
+  const idx = state.snap.indices[t];
+  const q = s.ticker ? s : idx || {};
+  const perf = [["1G", q.chgPct], ["1S", q.perf1W], ["1M", q.perf1M], ["3M", q.perf3M], ["6M", q.perf6M], ["YTD", q.perfYTD], ["1A", q.perf1Y]];
+  const stat = (l, v) => `<div><span>${l}</span><span>${v}</span></div>`;
+  const earn = isNum(i.earningsTimestamp) ? fDate(i.earningsTimestamp, { month: "short", day: "numeric", year: "numeric" }) : "—";
+  const rng52 = isNum(s.lo52) && isNum(s.hi52) ? rangeViz(s.lo52, s.hi52, s.price, null, "Range a 52 settimane") : "";
+  const tgt = isNum(i.targetLowPrice) && isNum(i.targetHighPrice) && isNum(s.price)
+    ? rangeViz(Math.min(i.targetLowPrice, s.price), Math.max(i.targetHighPrice, s.price), s.price, i.targetMeanPrice,
+      `Target degli analisti · ${esc(REC[i.recommendationKey] || "—")} · ${i.numberOfAnalystOpinions || 0} analisti`, [i.targetLowPrice, i.targetHighPrice]) : "";
+  drawer.querySelector(".d-rest").innerHTML = `
+    <div class="d-perf">${perf.map(([l, v]) => `<div><div class="l">${l}</div><div class="v ${sign(v)}">${fPct(v, 1)}</div></div>`).join("")}</div>
+    ${s.ticker ? `
+    <div class="d-stats">
+      ${stat("Capitalizzazione", "$" + fBig(s.mcap))}${stat("Peso nell'indice", fNum(s.weight) + "%")}
+      ${stat("Range del giorno", `${fPrice(s.low)} – ${fPrice(s.high)}`)}${stat("Apertura", fPrice(s.open))}
+      ${stat("Volume", fBig(s.volume))}${stat("Volume relativo", fX(s.relVol))}
+      ${stat("P/E (ultimi 12 mesi)", fNum(i.trailingPE, 1))}${stat("P/E atteso", fNum(i.forwardPE, 1))}
+      ${stat("Utile per azione (12 mesi)", fNum(i.trailingEps, 2))}${stat("Utile per azione atteso", fNum(i.forwardEps, 2))}
+      ${stat("P/S", fNum(i.priceToSalesTrailing12Months, 1))}${stat("EV/EBITDA", fNum(i.enterpriseToEbitda, 1))}
+      ${stat("Ricavi (12 mesi)", "$" + fBig(i.totalRevenue))}${stat("Crescita ricavi", isNum(i.revenueGrowth) ? fPct(i.revenueGrowth * 100, 1) : "—")}
+      ${stat("Margine lordo", isNum(i.grossMargins) ? fNum(i.grossMargins * 100, 1) + "%" : "—")}${stat("Margine netto", isNum(i.profitMargins) ? fNum(i.profitMargins * 100, 1) + "%" : "—")}
+      ${stat("ROE", isNum(i.returnOnEquity) ? fNum(i.returnOnEquity * 100, 1) + "%" : "—")}${stat("Flusso di cassa libero", "$" + fBig(i.freeCashflow))}
+      ${stat("Rendimento dividendo", isNum(i.dividendYield) && i.dividendYield > 0 ? fNum(i.dividendYield, 2) + "%" : "—")}${stat("Beta", fNum(i.beta, 2))}
+      ${stat("RSI (14)", fNum(s.rsi, 0))}${stat("Volatilità (20 g, annua)", isNum(s.vol20) ? fNum(s.vol20, 0) + "%" : "—")}
+      ${stat("vs media 20 giorni", `<span class="${sign(s.vsSma20)}">${fPct(s.vsSma20, 1)}</span>`)}${stat("vs media 40 giorni", `<span class="${sign(s.vsSma40)}">${fPct(s.vsSma40, 1)}</span>`)}
+      ${stat("vs media 60 giorni", `<span class="${sign(s.vsSma60)}">${fPct(s.vsSma60, 1)}</span>`)}${stat("Ordine medie 20/40/60", maOrder(s))}
+      ${stat("vs media 50 giorni", `<span class="${sign(s.vsSma50)}">${fPct(s.vsSma50, 1)}</span>`)}${stat("vs media 200 giorni", `<span class="${sign(s.vsSma200)}">${fPct(s.vsSma200, 1)}</span>`)}
+      ${stat("Short % flottante", isNum(i.shortPercentOfFloat) ? fNum(i.shortPercentOfFloat * 100, 1) + "%" : "—")}${stat("Prossima trimestrale", earn)}
+      ${stat("Dipendenti", isNum(i.fullTimeEmployees) ? i.fullTimeEmployees.toLocaleString("it-IT") : "—")}${stat("Sede", esc([i.city, i.state || i.country].filter(Boolean).join(", ") || "—"))}
+    </div>
+    <div class="d-sec">${rng52}${tgt}</div>
+    ${valuationHTML(data.valuation)}${analystsHTML(data.analysts, s)}` : ""}
+    ${i.longBusinessSummary ? `<div class="d-sec"><h3>Profilo</h3><p class="about clamp" id="about">${esc(i.longBusinessSummary)}</p>
+      <button class="link-btn" id="aboutMore">Mostra altro</button>${i.website ? ` <a class="link-btn" href="${esc(i.website)}" target="_blank" rel="noopener">${esc(i.website.replace(/^https?:\/\/(www\.)?/, ""))} ↗</a>` : ""}</div>` : ""}
+    ${data.news?.length ? `<div class="d-sec"><h3>Notizie</h3><div class="news">${data.news.slice(0, 8).map(n => `<a href="${esc(n.url)}" target="_blank" rel="noopener"><div class="nt">${esc(n.title)}</div><div class="nm">${esc(n.publisher || "")} · ${esc(ago(n.time))}</div></a>`).join("")}</div></div>` : ""}`;
+  drawer.querySelector(".d-signal").innerHTML = signalHTML(data.signal);
+  const more = $("#aboutMore");
+  if (more) more.onclick = () => { $("#about").classList.toggle("clamp"); more.textContent = $("#about").classList.contains("clamp") ? "Mostra altro" : "Mostra meno"; };
+}
+// price vs the 20/40/60-day averages, same wording as the report's "Ordine medie"
+function maOrder(s) {
+  const { price: p, sma20: a, sma40: b, sma60: c } = s;
+  if (![p, a, b, c].every(isNum)) return "—";
+  if (p > a && a > b && b > c) return `<span class="up">rialzista (20>40>60)</span>`;
+  if (p < a && a < b && b < c) return `<span class="down">ribassista (20<40<60)</span>`;
+  return "misto";
+}
+// ------------------------------------------------------------ detail: valuation & analysts (daily data, analysts.py)
+// final signal (score.py): technical 40% + analysts 25% + valuation 20% + news 15%
+const SIG_CLS = { "Forte acquisto": "b2", Acquisto: "b1", Neutro: "n", Vendita: "s1", "Forte vendita": "s2" };
+const sigBadge = l => l ? `<span class="sg ${SIG_CLS[l]}">${esc(l)}</span>` : "—";
+function signalHTML(sig) {
+  if (!sig) return "";
+  return `<div class="sigbox"><div class="sig-head">${sigBadge(sig.signal)}<span class="sig-score num ${sign(sig.score)}">${sig.score > 0 ? "+" : ""}${fNum(sig.score, 0)}</span>
+      <span class="muted small">punteggio da −100 a +100 · ≥ +20 acquisto, ≤ −20 vendita</span></div>
+    <div class="sig-comps">${sig.components.map(c => `<div class="sig-c ${c.used ? "" : "off"}">
+      <div class="sig-cn"><b>${esc(c.name)}</b> <span class="muted">${c.used ? `peso ${fNum(c.effWeight * 100, 0)}%` : "non disponibile"}</span></div>
+      <div>${c.used ? scoreBar(c.score) : ""}</div>
+      <ul class="why">${c.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>`).join("")}</div>
+    <div class="muted small">Combinazione automatica di dati pubblici (pesi: tecnica 40%, analisti 25%, valutazione 20%, notizie 15%).
+      Non è una consulenza finanziaria: usalo come punto di partenza per le tue verifiche.</div></div>`;
+}
+const VAL_CLS = { Economica: "cheap", "In linea": "fair", Cara: "rich" };
+const valBadge = l => l ? `<span class="vb ${VAL_CLS[l]}">${esc(l)}</span>` : "—";
+function valuationHTML(v) {
+  if (!v) return "";
+  const d = isNum(v.ratio) ? (v.ratio - 1) * 100 : null;
+  const head = v.label ? `${valBadge(v.label)} <span class="muted">${Math.abs(d) < 3 ? "in media con i confronti"
+    : `in media ${fNum(Math.abs(d), 0)}% ${d > 0 ? "più cara" : "più economica"} dei confronti`}</span>` : `<span class="muted">Dati insufficienti per un giudizio</span>`;
+  const pe = v.vsHistory?.pe;
+  const years = pe ? `<div class="muted small">P/E alle chiusure di bilancio: ${pe.years.slice().reverse().map(y => `${y.fy.slice(0, 4)} ${fNum(y.v, 1)}`).join(" · ")} · oggi ${fNum(pe.value, 1)}</div>` : "";
+  return `<div class="d-sec"><h3>Valutazione</h3><div class="val-head">${head}</div>
+    <ul class="why">${v.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>${years}
+    <div class="muted small">Confronto con la mediana dei titoli dello stesso settore nel Nasdaq-100 e con la storia del titolo
+    (P/E e P/S alle ultime chiusure di bilancio). Giudizio: Economica sotto −15%, Cara sopra +18%.</div></div>`;
+}
+const ACT_IT = { up: "Upgrade", down: "Downgrade", init: "Avvio copertura", main: "Conferma", reit: "Conferma" };
+function analystsHTML(a, s) {
+  if (!a) return `<div class="d-sec"><h3>Analisti</h3><div class="muted">Dati degli analisti in caricamento (si aggiornano una volta al giorno)</div></div>`;
+  const rt = a.recTrend || [], now = rt[0], old = rt[3];
+  const KEYS = [["strongBuy", "Forte acquisto"], ["buy", "Acquisto"], ["hold", "Mantenere"], ["sell", "Vendita"], ["strongSell", "Forte vendita"]];
+  const tot = now ? KEYS.reduce((n, [k]) => n + (now[k] || 0), 0) : 0;
+  const bar = tot ? `<div class="recbar">${KEYS.map(([k, l]) => now[k] ? `<i class="${k}" style="flex:${now[k]}" title="${l}: ${now[k]}"></i>` : "").join("")}</div>
+    <div class="reclegend">${KEYS.map(([k, l]) => `<span><i class="${k}"></i>${l} ${now[k] || 0}</span>`).join("")}</div>
+    ${old ? `<div class="muted small">3 mesi fa: ${KEYS.map(([k, l]) => `${l.toLowerCase()} ${old[k] || 0}`).join(" · ")}</div>` : ""}` : "";
+  const cutoff = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+  const recent = (a.actions || []).filter(x => x.date >= cutoff);
+  const cnt = f => recent.filter(f).length;
+  const last30 = `Ultimi 30 giorni: <b class="up">${cnt(x => x.action === "up")} upgrade</b> · <b class="down">${cnt(x => x.action === "down")} downgrade</b> ·
+    ${cnt(x => x.action === "init")} nuove coperture · target alzati ${cnt(x => x.ptAction === "Raises")}, abbassati ${cnt(x => x.ptAction === "Lowers")}`;
+  const e = a.eps || {}, r = a.rev || {}, tr = (a.epsTrend || {})["+1y"] || {}, rv = (a.revisions || {})["+1y"] || {};
+  const chg = (x, y) => isNum(x) && isNum(y) && y ? (x / y - 1) * 100 : null;
+  const cell = (o, big) => o ? `<td class="num">${big ? "$" + fBig(o.avg) : fNum(o.avg, 2)}</td><td class="num ${sign(o.growth)}">${isNum(o.growth) ? fPct(o.growth * 100, 1) : "—"}</td>` : "<td>—</td><td>—</td>";
+  const est = `<table class="est"><thead><tr><th class="l">Stime medie</th><th colspan="2">Anno in corso</th><th colspan="2">Prossimo anno</th></tr>
+    <tr><th></th><th>valore</th><th>crescita</th><th>valore</th><th>crescita</th></tr></thead>
+    <tbody><tr><td class="l">Utile per azione</td>${cell(e["0y"])}${cell(e["+1y"])}</tr><tr><td class="l">Ricavi</td>${cell(r["0y"], true)}${cell(r["+1y"], true)}</tr></tbody></table>
+    <div class="small">Stima dell'utile del prossimo anno: <b class="${sign(chg(tr.current, tr["30daysAgo"]))}">${fPct(chg(tr.current, tr["30daysAgo"]), 1)}</b> in 30 giorni,
+    <b class="${sign(chg(tr.current, tr["90daysAgo"]))}">${fPct(chg(tr.current, tr["90daysAgo"]), 1)}</b> in 90 giorni
+    ${isNum(rv.upLast30days) ? `<span class="muted">(${rv.upLast30days} analisti l'hanno alzata e ${rv.downLast30days || 0} abbassata nell'ultimo mese)</span>` : ""}</div>`;
+  const acts = (a.actions || []).slice(0, 8);
+  const table = acts.length ? `<table class="est acts"><thead><tr><th class="l">Data</th><th class="l">Società</th><th class="l">Azione</th><th class="l">Giudizio</th><th>Target</th></tr></thead><tbody>
+    ${acts.map(x => `<tr><td class="l">${fDate(Date.parse(x.date) / 1000 + 43200, { day: "numeric", month: "short" })}</td><td class="l">${esc(x.firm)}</td>
+      <td class="l ${x.action === "up" ? "up" : x.action === "down" ? "down" : ""}">${esc(ACT_IT[x.action] || x.action)}</td>
+      <td class="l">${x.from && x.from !== x.to ? esc(x.from) + " → " : ""}${esc(x.to || "")}</td>
+      <td class="num">${isNum(x.ptPrior) && x.ptPrior && x.ptPrior !== x.pt ? `${fPrice(x.ptPrior)} → ` : ""}${isNum(x.pt) && x.pt ? `<b class="${x.ptAction === "Raises" ? "up" : x.ptAction === "Lowers" ? "down" : ""}">${fPrice(x.pt)}</b>` : "—"}</td></tr>`).join("")}</tbody></table>` : `<div class="muted">Nessuna azione degli analisti negli ultimi 6 mesi</div>`;
+  return `<div class="d-sec"><h3>Analisti</h3>${bar}<div class="small" style="margin:8px 0">${last30}</div>${est}
+    <h3 style="margin-top:14px">Ultime azioni delle banche d'affari</h3>${table}</div>`;
+}
+
+function rangeViz(lo, hi, price, target, title, ends) {
+  const p = v => ((v - lo) / (hi - lo || 1) * 100).toFixed(1) + "%";
+  // keep labels inside the track near either end
+  const lbl = v => { const x = (v - lo) / (hi - lo || 1) * 100; return x > 88 ? "left:auto;right:-2px;transform:none" : x < 12 ? "left:-2px;transform:none" : ""; };
+  return `<div class="rangeviz"><h3>${title}</h3><div class="track">
+    ${ends ? `<div class="fill" style="left:${p(ends[0])};right:calc(100% - ${p(ends[1])})"></div>` : ""}
+    <div class="mark" style="left:${p(price)}"><span style="${lbl(price)}">${fPrice(price)}</span></div>
+    ${isNum(target) ? `<div class="mark tgt" style="left:${p(target)}" title="Target medio"><span style="bottom:auto;top:16px;${lbl(target)}">Target ${fPrice(target)}</span></div>` : ""}
+    </div><div class="ends"><span>${fPrice(ends ? ends[0] : lo)}${ends ? " min" : ""}</span><span>${fPrice(ends ? ends[1] : hi)}${ends ? " max" : ""}</span></div>${isNum(target) ? "<div style='height:14px'></div>" : ""}</div>`;
+}
+
+
+// ------------------------------------------------------------ ideas (twice-daily trend report)
+const ideasState = { report: null, id: LS.get("repId", "latest"), grp: "themes", side: "all", theme: "", maSort: { key: "score", dir: -1 }, loadedId: null };
+// "2026-09-28_morning" -> "28 set 2026 · mattina"
+const dayIT = iso => new Date(iso + "T12:00:00").toLocaleDateString("it-IT", { day: "numeric", month: "short", year: "numeric" });
+const repLabel = id => {
+  const [d, s] = id.split("_");
+  return `${dayIT(d)} · ${{ morning: "mattina", close: "sera", afternoon: "pomeriggio", intraday: "seduta" }[s] || s}`;
+};
+const SIDES = [
+  { id: "long", label: "Setup di acquisto", desc: "ingressi a favore del trend con rischio definito" },
+  { id: "watch", label: "Da osservare", desc: "ipervenduti dentro un trend rialzista più lungo: attendi un'inversione" },
+  { id: "manage", label: "Tirati: da gestire", desc: "trend forti molto sopra la media a 20 giorni: alza lo stop, non inseguire" },
+  { id: "avoid", label: "Da evitare / candidati short", desc: "medie in discesa e forza relativa debole" },
+];
+const QCOL = { Leading: "--up", Weakening: "--warn", Lagging: "--down", Improving: "--accent" };
+
+async function renderIdeas() {
+  let list = [];
+  try { list = (await getJSON("/api/reports")).reports; } catch { /* server without reports */ }
+  const sel = $("#repSel");
+  sel.innerHTML = `<option value="latest">Ultimo report</option>` + list.map(id => `<option value="${esc(id)}">${esc(repLabel(id))}</option>`).join("");
+  sel.value = list.includes(ideasState.id) ? ideasState.id : "latest";
+  $("#ideasEmpty").hidden = list.length > 0;
+  $("#ideasBody").hidden = !list.length;
+  if (!list.length) return;
+  if (ideasState.loadedId !== sel.value || !ideasState.report) {
+    try { ideasState.report = await getJSON(`/api/report/${encodeURIComponent(sel.value)}`); ideasState.loadedId = sel.value; }
+    catch (e) { $("#brief").innerHTML = `<div class="empty">Impossibile caricare il report (${esc(e.message)})</div>`; return; }
+  }
+  drawIdeas();
+}
+
+function drawIdeas() {
+  const R = ideasState.report;
+  if (!R) return;
+  const gen = new Date(R.generated);
+  const local = gen.toLocaleString("it-IT", { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  $("#repMeta").textContent = `${{ morning: "Mattina (pre-apertura)", close: "Sera (dopo la chiusura)" }[R.session] || "Durante la seduta"} · generato ${local} · prezzi del ${dayIT(R.dataAsOf)}${R.intraday ? " (seduta in corso)" : " (chiusura)"}`;
+  $("#disclaimer").textContent = R.disclaimer;
+  renderBrief(R);
+  renderRRG(R);
+  renderGroupTable(R);
+  renderChanges(R);
+  renderIdeaCards(R);
+  renderMaTable(R);
+  loadBacktest();
+}
+
+// ------------------------------------------------------------ backtest of the technical score (backtest.py)
+const bt = { data: null, hz: "3M" };
+async function loadBacktest() {
+  if (!bt.data) {
+    try { bt.data = await getJSON("/api/backtest"); } catch { return; }   // no backtest yet: keep the hint
+  }
+  renderBacktest();
+}
+function renderBacktest() {
+  const B = bt.data, rows = B.results[bt.hz];
+  $("#btSeg").innerHTML = Object.keys(B.results).map(h => `<button data-bt="${h}" class="${h === bt.hz ? "on" : ""}">${h === "1M" ? "1 mese" : h === "3M" ? "3 mesi" : "6 mesi"}</button>`).join("");
+  $("#btMeta").textContent = `${dayIT(B.from)} → ${dayIT(B.to)} · ${B.stocks} titoli di oggi · ${fNum(B.observations, 0)} casi (uno a settimana)`;
+  const pc = v => `<span class="${sign(v)}">${fPct(v, 2)}</span>`;
+  const table = `<div class="table-wrap"><table class="scr"><thead><tr><th class="l">Segnale tecnico</th><th>Casi</th><th>Rendimento medio</th><th>QQQ stesso periodo</th>
+      <th>Extra vs QQQ (media)</th><th>Extra vs QQQ (mediana)</th><th>% volte meglio di QQQ</th><th>vs media di tutti i titoli</th></tr></thead>
+    <tbody>${rows.map(x => `<tr class="${x.band === "Tutti i titoli" ? "bt-all" : ""}"><td class="l">${x.band === "Tutti i titoli" ? "<b>Tutti i titoli</b>" : sigBadge(x.band)}</td>
+      <td>${fNum(x.n, 0)}</td><td>${pc(x.ret)}</td><td>${pc(x.qqq)}</td><td><b>${pc(x.excess)}</b></td><td>${pc(x.excessMedian)}</td>
+      <td>${fNum(x.beat, 1)}%</td><td>${x.band === "Tutti i titoli" ? "—" : pc(x.vsAll)}</td></tr>`).join("")}</tbody></table></div>`;
+  const years = `<h4 class="bt-h">Extra-rendimento medio a 3 mesi rispetto a QQQ, anno per anno</h4>
+    <div class="table-wrap"><table class="scr"><thead><tr><th class="l">Anno</th>${B.bands.map(b => `<th>${esc(b)}</th>`).join("")}<th>Tutti</th></tr></thead>
+    <tbody>${B.byYear.map(y => `<tr><td class="l">${y.year}</td>${B.bands.map(b => `<td>${isNum(y[b]) ? pc(y[b]) : "—"}</td>`).join("")}<td>${pc(y.all)}</td></tr>`).join("")}</tbody></table></div>`;
+  const limits = `<h4 class="bt-h">Limiti: leggili prima di fidarti dei numeri</h4><ul class="why bt-lim">${B.limits.map(l => `<li><b>${esc(l.title)}.</b> ${esc(l.text)}</li>`).join("")}</ul>
+    <p class="muted small">Il calcolo del punteggio nel backtest coincide con quello della dashboard (differenza massima su casi di controllo: ${fNum(B.checkMaxDiff, 2)}).
+    Per rifarlo: <code>.venv/bin/python backtest.py</code> (circa 10 secondi).</p>`;
+  $("#btBody").innerHTML = `<p class="small muted">Ogni settimana, per ogni titolo, il punteggio tecnico (medie 20/40/60, RSI, forza vs QQQ) viene messo nella stessa fascia
+    del segnale finale. Poi si misura quanto ha reso il titolo nei ${bt.hz === "1M" ? "21" : bt.hz === "3M" ? "63" : "126"} giorni di borsa successivi, e quanto QQQ negli stessi giorni.</p>${table}${years}${limits}`;
+}
+$("#btSeg").addEventListener("click", e => { const b = e.target.closest("[data-bt]"); if (b) { bt.hz = b.dataset.bt; renderBacktest(); } });
+
+function renderBrief(R) {
+  const g = R.regime, q = g.qqq, b = g.breadth;
+  const col = { long: "--up", selective: "--warn", defensive: "--down" }[g.bias] || "--muted";
+  const cell = (l, v, s, cls = "") => `<div><div class="l">${l}</div><div class="v ${cls}">${v}</div><div class="s">${s}</div></div>`;
+  $("#brief").innerHTML = `<div>
+      <span class="regime"><i style="background:var(${col})"></i>${esc(g.label)}</span>
+      <p class="hl">${esc(R.headline)}</p><p class="rt">${esc(g.text)}</p></div>
+    <div class="bstats">
+      ${cell("QQQ vs media 20", fPct(q.vs20, 1), `pendenza media 20: ${fPct(q.slope20, 2)}/sett.`, sign(q.vs20))}
+      ${cell("QQQ vs media 40", fPct(q.vs40, 1), `RSI ${fNum(q.rsi, 0)}`, sign(q.vs40))}
+      ${cell("QQQ vs media 60", fPct(q.vs60, 1), `pendenza media 60: ${fPct(q.slope60, 2)}/sett.`, sign(q.vs60))}
+      ${cell("Sopra media 20", pctR(b["20"]), "dei titoli del Nasdaq-100")}
+      ${cell("Sopra media 40", pctR(b["40"]), "dei titoli del Nasdaq-100")}
+      ${cell("Sopra media 60", pctR(b["60"]), `${Math.round(g.bullShare)}% medie in ordine rialzista · ${Math.round(g.bearShare)}% ribassista`)}
+    </div>`;
+}
+
+function renderRRG(R) {
+  const el = $("#rrg"), groups = R[ideasState.grp];
+  el.innerHTML = "";
+  $$("[data-grp-seg] button").forEach(b => b.classList.toggle("on", b.dataset.grp === ideasState.grp));
+  const W = el.clientWidth || 500, H = 360, m = { t: 14, r: 16, b: 30, l: 44 }, iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const ex = Math.max(3, d3.max(groups, d => Math.abs(d.rs1m)) * 1.15), ey = Math.max(2, d3.max(groups, d => Math.abs(d.rs1w)) * 1.2);
+  const x = d3.scaleLinear().domain([-ex, ex]).range([0, iw]).nice(), y = d3.scaleLinear().domain([-ey, ey]).range([ih, 0]).nice();
+  const svg = d3.select(el).append("svg").attr("width", W).attr("height", H).attr("role", "img").attr("aria-label", "Mappa di rotazione relativa");
+  const g = svg.append("g").attr("transform", `translate(${m.l},${m.t})`);
+  g.append("g").attr("class", "gridline").call(d3.axisLeft(y).ticks(5).tickSize(-iw).tickFormat(""));
+  g.append("g").attr("class", "axis").call(d3.axisLeft(y).ticks(5).tickSize(0).tickPadding(6).tickFormat(v => (v > 0 ? "+" : "") + v)).select(".domain").remove();
+  g.append("g").attr("class", "axis").attr("transform", `translate(0,${ih})`).call(d3.axisBottom(x).ticks(6).tickSize(0).tickPadding(8).tickFormat(v => (v > 0 ? "+" : "") + v)).select(".domain").remove();
+  g.append("line").attr("x1", x(0)).attr("x2", x(0)).attr("y1", 0).attr("y2", ih).attr("stroke", css("--baseline"));
+  g.append("line").attr("x1", 0).attr("x2", iw).attr("y1", y(0)).attr("y2", y(0)).attr("stroke", css("--baseline"));
+  [["Leading", iw - 6, 12, "end"], ["Weakening", iw - 6, ih - 6, "end"], ["Lagging", 6, ih - 6, "start"], ["Improving", 6, 12, "start"]]
+    .forEach(([t, px, py, a]) => g.append("text").attr("class", "rrg-q").attr("x", px).attr("y", py).attr("text-anchor", a).text(QLAB[t]));
+  const pts = g.selectAll("g.pt").data(groups).join("g").attr("class", "pt").attr("transform", d => `translate(${x(d.rs1m)},${y(d.rs1w)})`).style("cursor", "pointer");
+  pts.append("circle").attr("r", 12).attr("fill", "transparent");
+  pts.append("circle").attr("r", d => 4 + Math.sqrt(d.n) * 1.3).attr("fill", d => css(QCOL[d.quadrant])).attr("stroke", css("--surface")).attr("stroke-width", 2);
+  pts.append("text").attr("class", "rrg-label").attr("x", d => x(d.rs1m) > iw - 120 ? -10 : 10).attr("text-anchor", d => x(d.rs1m) > iw - 120 ? "end" : "start").attr("y", 4).text(d => d.name);
+  pts.on("mousemove", (ev, d) => showTip(groupTip(d), ev)).on("mouseleave", hideTip)
+    .on("click", (ev, d) => { hideTip(); if (d.kind === "theme") { ideasState.theme = d.name; drawIdeas(); $("#ideaGroups").scrollIntoView({ behavior: "smooth" }); } });
+  svg.append("text").attr("class", "ref-label").attr("x", m.l + iw).attr("y", H - 2).attr("text-anchor", "end").text("Rendimento relativo a 1 mese vs QQQ (punti) →");
+}
+function groupTip(d) {
+  return `<div class="tip-h">${d.kind === "theme" ? "Tema" : "Settore"} · ${d.n} titoli</div><b>${esc(d.name)}</b> <span class="q ${d.quadrant}">${QLAB[d.quadrant]}</span>
+    <div class="tip-row" style="margin-top:6px"><span>Punteggio trend</span><b class="${sign(d.score)}">${d.score > 0 ? "+" : ""}${fNum(d.score, 1)}</b></div>
+    <div class="tip-row"><span>vs QQQ 1M / 1S</span><b>${fChg(d.rs1m)} / ${fChg(d.rs1w)}</b></div>
+    <div class="tip-row"><span>Medie in ordine rialzista</span><b>${Math.round(d.bull)}%</b></div>
+    <div class="tip-row"><span>Sopra medie 20 / 40 / 60</span><b>${pctR(d.above20)} / ${pctR(d.above40)} / ${pctR(d.above60)}</b></div>
+    <div class="tip-row"><span>Migliori</span><b>${esc(d.leaders.join(", "))}</b></div>`;
+}
+const scoreBar = v => {
+  const w = Math.min(50, Math.abs(v) / 2);
+  return `<span class="sbar"><span class="trk"><i style="${v >= 0 ? `left:50%` : `right:50%`};width:${w}%;background:var(${v >= 0 ? "--up" : "--down"})"></i></span><span class="num ${sign(v)}">${v > 0 ? "+" : ""}${fNum(v, 0)}</span></span>`;
+};
+
+function renderGroupTable(R) {
+  const groups = R[ideasState.grp];
+  $("#grpTitle").textContent = ideasState.grp === "themes" ? "Temi" : "Settori";
+  $("#grpTable").innerHTML = `<thead><tr><th class="l">${ideasState.grp === "themes" ? "Tema" : "Settore"}</th><th>Punteggio</th><th>Δ</th><th>Medie rialziste</th><th>&gt;media 20</th><th>&gt;media 40</th><th>&gt;media 60</th><th>vs QQQ 1M</th><th class="l">Fase</th><th class="l">Migliori</th></tr></thead>
+    <tbody>${groups.map(g => `<tr data-g="${esc(g.name)}" data-kind="${g.kind}"><td class="l"><b>${esc(g.name)}</b> <span class="muted">${g.n}</span></td><td>${scoreBar(g.score)}</td>
+      <td class="${sign(g.dScore)}">${isNum(g.dScore) ? (g.dScore > 0 ? "+" : "") + fNum(g.dScore, 1) : "—"}</td>
+      <td>${Math.round(g.bull)}%</td><td>${pctR(g.above20)}</td><td>${pctR(g.above40)}</td><td>${pctR(g.above60)}</td>
+      <td class="${sign(g.rs1m)}">${fChg(g.rs1m)}</td><td class="l"><span class="q ${g.quadrant}">${QLAB[g.quadrant]}</span></td><td class="l muted">${esc(g.leaders.join(" · "))}</td></tr>`).join("")}</tbody>`;
+}
+
+function renderChanges(R) {
+  const c = R.changes;
+  $("#changesCard").hidden = !c;
+  if (!c) return;
+  $("#changesMeta").textContent = `rispetto al report ${repLabel(c.since)}`;
+  const block = (title, items, fn) => `<div><h4>${title}</h4>${items.length ? items.map(fn).join("") : `<div class="muted">Nessuno</div>`}</div>`;
+  $("#changes").innerHTML =
+    block("Setup nuovi o cambiati", c.newIdeas, i => `<div class="it" data-t="${esc(i.ticker)}"><b>${esc(i.ticker)}</b><span>${esc(i.setup)}</span></div>`) +
+    block("Non più segnalati", c.dropped, i => `<div class="it" data-t="${esc(i.ticker)}"><b>${esc(i.ticker)}</b><span class="muted">${esc(i.setup)}</span></div>`) +
+    block("Maggiori variazioni di punteggio", c.scoreMovers.slice(0, 8), i => `<div class="it" data-t="${esc(i.ticker)}"><b>${esc(i.ticker)}</b><span><span class="${sign(i.delta)}">${i.delta > 0 ? "+" : ""}${fNum(i.delta, 1)}</span> <span class="muted">ora ${fNum(i.score, 0)}</span></span></div>`) +
+    block("Rotazioni dei gruppi", c.rotations, r => `<div class="it"><b>${esc(r.name)}</b><span><span class="q ${r.from}">${QLAB[r.from]}</span> → <span class="q ${r.to}">${QLAB[r.to]}</span></span></div>`);
+}
+
+function renderIdeaCards(R) {
+  const all = R.ideas.filter(i => !ideasState.theme || i.themes.includes(ideasState.theme));
+  $("#sideChips").innerHTML = [{ id: "all", label: "Tutti" }, ...SIDES].map(s => {
+    const n = s.id === "all" ? all.length : all.filter(i => i.side === s.id).length;
+    return `<button data-side="${s.id}" class="${ideasState.side === s.id ? "on" : ""}">${esc(s.label)}<span>${n}</span></button>`;
+  }).join("");
+  const ts = $("#themeSel");
+  ts.innerHTML = `<option value="">Tutti i temi</option>` + R.themes.map(t => `<option>${esc(t.name)}</option>`).join("");
+  ts.value = ideasState.theme;
+  $("#maKey").innerHTML = `<span><i style="background:var(--ink)"></i>Prezzo</span><span><i style="background:var(--series-1)"></i>Media 20</span><span><i style="background:var(--series-2)"></i>Media 40</span><span><i style="background:var(--series-3)"></i>Media 60</span>`;
+  const host = $("#ideaGroups");
+  host.innerHTML = SIDES.filter(s => ideasState.side === "all" || ideasState.side === s.id).map(s => {
+    const list = all.filter(i => i.side === s.id);
+    if (!list.length) return "";
+    return `<div class="idea-group"><h3>${esc(s.label)} <small>${list.length} · ${esc(s.desc)}</small></h3><div class="ideas">${list.map(ideaCard).join("")}</div></div>`;
+  }).join("") || `<div class="card empty">Nessun setup per questo filtro.</div>`;
+  host.querySelectorAll("[data-chart]").forEach(el => {
+    const i = R.ideas.find(x => x.ticker === el.dataset.chart);
+    drawIdeaChart(el, i);
+  });
+}
+function ideaCard(i) {
+  const lv = i.levels, st = i.stats;
+  const bars = Math.round(i.conviction / 20);
+  const lvCell = (l, v, cls = "") => `<div><div class="l">${l}</div><div class="v ${cls}">${v}</div></div>`;
+  return `<div class="idea">
+    <div class="idea-h"><div style="min-width:0"><span class="tt" data-open="${esc(i.ticker)}">${esc(i.ticker)}</span> <span class="nm">${esc(i.name)}</span><br>
+      <span class="setup ${i.side}">${esc(i.setup)}</span></div>
+      <div class="px"><b>${fPrice(i.price)}</b><br><span class="${sign(st.ret1d)}">${fPct(st.ret1d)}</span>
+      <div class="conv" title="Convinzione ${i.conviction}/100: punteggio trend, fase del gruppo e allineamento con il mercato">convinzione <span class="m">${[1, 2, 3, 4, 5].map(k => `<i class="${k <= bars ? "on" : ""}"></i>`).join("")}</span></div></div></div>
+    <div class="chart" data-chart="${esc(i.ticker)}"></div>
+    <div class="lv">${i.side === "manage"
+      ? lvCell("Stop mobile", fPrice(lv.stop)) + lvCell("vs media 20", fPct(st.vs20, 1), sign(st.vs20)) + lvCell("RSI", fNum(st.rsi, 0)) + lvCell("vs QQQ 1M", fChg(st.rs1m), sign(st.rs1m)) + lvCell("ATR", fNum(st.atrPct, 1) + "%")
+      : lvCell(i.side === "avoid" ? "Short vicino a" : "Entrata", fPrice(lv.entry)) + lvCell("Stop", fPrice(lv.stop), "down") + lvCell("Target", fPrice(lv.target), "up") + lvCell("R : R", fNum(lv.rr, 1)) + lvCell("Rischio", fNum(lv.riskPct, 1) + "%")}</div>
+    <ul class="why">${i.why.map(w => `<li>${esc(w)}</li>`).join("")}</ul>
+    ${i.signal ? `<div class="idea-sig">Segnale finale: ${sigBadge(i.signal.signal)} <span class="muted num">${fNum(i.signal.score, 0)}</span></div>` : ""}
+    <div class="tags"><span>${esc(i.sector)}</span>${i.themes.map(t => `<span>${esc(t)}</span>`).join("")}</div>
+  </div>`;
+}
+function drawIdeaChart(el, i) {
+  const c = i.chart, n = c.c.length;
+  const pts = k => (c[k] || []).map((v, j) => ({ t: c.t[j], v }));
+  const refs = i.side === "manage" ? [{ v: i.levels.stop, label: "stop mobile", color: css("--down") }]
+    : [{ v: i.levels.entry, label: "entrata", color: css("--muted") }, { v: i.levels.stop, label: "stop", color: css("--down") }, { v: i.levels.target, label: "target", color: css("--up") }];
+  lineChart(el, [
+    { pts: pts("c"), color: css("--ink"), width: 1.75 },
+    { pts: pts("s20"), color: css("--series-1"), width: 1.5 },
+    { pts: pts("s40"), color: css("--series-2"), width: 1.5 },
+    { pts: pts("s60"), color: css("--series-3"), width: 1.5 },
+  ], {
+    height: 160, range: "6M", refs, label: `${i.ticker}: prezzo con medie a 20/40/60 giorni`,
+    tip: j => `<div class="tip-h">${fDate(c.t[j], { month: "short", day: "numeric", year: "numeric" })}</div>
+      <div class="tip-row"><span>Chiusura</span><b class="num">${fPrice(c.c[j])}</b></div>
+      ${[["s20", "Media 20", "--series-1"], ["s40", "Media 40", "--series-2"], ["s60", "Media 60", "--series-3"]].map(([k, l, v]) =>
+        `<div class="tip-row"><span><i class="swatch" style="background:var(${v})"></i>${l}</span><span class="num">${fPrice((c[k] || [])[j])}</span></div>`).join("")}`,
+  });
+}
+
+function renderMaTable(R) {
+  const q = ($("#maFind").value || "").trim().toLowerCase();
+  const cols = [
+    ["ticker", "Ticker", "l tk", s => esc(s.ticker)], ["sector", "Settore", "l", s => esc(s.sector)],
+    ["price", "Prezzo", "", s => fPrice(s.price)], ["score", "Punteggio", "", s => scoreBar(s.score)],
+    ["stack", "Ordine medie", "l", s => `<span class="stack ${s.stack}">${s.stack === "bull" ? "20>40>60" : s.stack === "bear" ? "20<40<60" : "misto"}</span>`],
+    ["vs20", "vs media 20", "", s => `<span class="${sign(s.vs20)}">${fPct(s.vs20, 1)}</span>`],
+    ["vs40", "vs media 40", "", s => `<span class="${sign(s.vs40)}">${fPct(s.vs40, 1)}</span>`],
+    ["vs60", "vs media 60", "", s => `<span class="${sign(s.vs60)}">${fPct(s.vs60, 1)}</span>`],
+    ["slope20", "Pendenza 20/sett.", "", s => `<span class="${sign(s.slope20)}">${fPct(s.slope20, 2)}</span>`],
+    ["rsi", "RSI", "", s => fNum(s.rsi, 0)],
+    ["rs1m", "vs QQQ 1M", "", s => `<span class="${sign(s.rs1m)}">${fChg(s.rs1m)}</span>`],
+    ["volRatio", "Vol 20/60", "", s => fX(s.volRatio)],
+    ["setup", "Setup", "l", s => s.setup ? esc(s.setup) : `<span class="muted">—</span>`],
+    ["sigScore", "Segnale", "l", s => s.signal ? `${sigBadge(s.signal)} <span class="muted num">${fNum(s.sigScore, 0)}</span>` : "—"],
+  ];
+  const { key, dir } = ideasState.maSort;
+  const rows = R.stocks.filter(s => !q || s.ticker.toLowerCase().includes(q) || s.name.toLowerCase().includes(q) || s.sector.toLowerCase().includes(q))
+    .sort((a, b) => { const va = a[key], vb = b[key]; if (va == null) return 1; if (vb == null) return -1; return (typeof va === "string" ? va.localeCompare(vb) : va - vb) * dir; });
+  $("#maTable").innerHTML = `<thead><tr>${cols.map(([k, l, c]) => `<th class="${c.split(" ")[0]} ${key === k ? "sorted" + (dir > 0 ? " asc" : "") : ""}" data-mk="${k}">${l}</th>`).join("")}</tr></thead>
+    <tbody>${rows.map(s => `<tr data-t="${esc(s.ticker)}">${cols.map(([, , c, f]) => `<td class="${c}">${f(s)}</td>`).join("")}</tr>`).join("")}</tbody>`;
+}
+
+$("#repSel").addEventListener("change", e => { ideasState.id = e.target.value; LS.set("repId", ideasState.id); renderIdeas(); });
+$("#themeSel").addEventListener("change", e => { ideasState.theme = e.target.value; renderIdeaCards(ideasState.report); });
+$("#sideChips").addEventListener("click", e => { const b = e.target.closest("[data-side]"); if (b) { ideasState.side = b.dataset.side; renderIdeaCards(ideasState.report); } });
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-grp-seg] button");
+  if (b) { ideasState.grp = b.dataset.grp; renderRRG(ideasState.report); renderGroupTable(ideasState.report); }
+});
+$("#grpTable").addEventListener("click", e => {
+  const tr = e.target.closest("tr[data-g]");
+  if (tr && tr.dataset.kind === "theme") { ideasState.theme = tr.dataset.g; ideasState.side = "all"; renderIdeaCards(ideasState.report); $("#ideaGroups").scrollIntoView({ behavior: "smooth" }); }
+});
+$("#view-ideas").addEventListener("click", e => {
+  const t = e.target.closest("[data-open], .changes [data-t], #maTable tr[data-t]");
+  if (t) openDetail(t.dataset.open || t.dataset.t);
+  const th = e.target.closest("th[data-mk]");
+  if (th) { const k = th.dataset.mk; ideasState.maSort = ideasState.maSort.key === k ? { key: k, dir: -ideasState.maSort.dir } : { key: k, dir: ["ticker", "sector", "stack", "setup"].includes(k) ? 1 : -1 }; renderMaTable(ideasState.report); }
+});
+$("#maFind").addEventListener("input", () => renderMaTable(ideasState.report));
+$("#runBtn").addEventListener("click", async () => {
+  const btn = $("#runBtn");
+  btn.disabled = true; btn.textContent = "In esecuzione…";
+  try { await fetch("/api/report/run", { method: "POST" }); } catch { /* polled below */ }
+  for (let k = 0; k < 90; k++) {
+    await new Promise(r => setTimeout(r, 2000));
+    const st = await getJSON("/api/reports").catch(() => null);
+    if (st && !st.job.running) {
+      $("#repJob").textContent = st.job.error ? "Errore: " + st.job.error : "";
+      break;
+    }
+  }
+  btn.disabled = false; btn.textContent = "Genera report ora";
+  ideasState.id = "latest"; ideasState.loadedId = null; LS.set("repId", "latest");
+  renderIdeas();
+});
+
+// ------------------------------------------------------------ search
+const qEl = $("#q"), sugg = $("#sugg");
+let suggSel = 0, suggList = [];
+function renderSugg() {
+  const q = qEl.value.trim().toUpperCase();
+  if (!q || !state.snap) { sugg.classList.remove("open"); return; }
+  const S = stocks();
+  suggList = [
+    ...S.filter(s => s.ticker.startsWith(q)),
+    ...S.filter(s => !s.ticker.startsWith(q) && (s.name.toUpperCase().includes(q) || s.ticker.includes(q))),
+  ].slice(0, 8);
+  suggSel = Math.min(suggSel, Math.max(0, suggList.length - 1));
+  sugg.innerHTML = suggList.map((s, i) => `<button class="${i === suggSel ? "sel" : ""}" data-t="${esc(s.ticker)}"><span class="t">${esc(s.ticker)}</span><span class="n">${esc(s.name)}</span><span class="${sign(s.chgPct)} num">${fPct(s.chgPct)}</span></button>`).join("")
+    || `<div class="empty">Nessun titolo del Nasdaq-100 trovato</div>`;
+  sugg.classList.add("open");
+}
+qEl.addEventListener("input", () => { suggSel = 0; renderSugg(); });
+qEl.addEventListener("keydown", e => {
+  if (e.key === "ArrowDown") { suggSel = Math.min(suggSel + 1, suggList.length - 1); renderSugg(); e.preventDefault(); }
+  if (e.key === "ArrowUp") { suggSel = Math.max(suggSel - 1, 0); renderSugg(); e.preventDefault(); }
+  if (e.key === "Enter" && suggList[suggSel]) { openDetail(suggList[suggSel].ticker); qEl.value = ""; qEl.blur(); sugg.classList.remove("open"); }
+  if (e.key === "Escape") { qEl.value = ""; qEl.blur(); sugg.classList.remove("open"); }
+});
+qEl.addEventListener("blur", () => setTimeout(() => sugg.classList.remove("open"), 150));
+sugg.addEventListener("mousedown", e => { const b = e.target.closest("[data-t]"); if (b) { openDetail(b.dataset.t); qEl.value = ""; } });
+document.addEventListener("keydown", e => {
+  if (e.key === "/" && document.activeElement.tagName !== "INPUT") { e.preventDefault(); qEl.focus(); }
+  if (e.key === "Escape" && state.detail) closeDetail();
+});
+
+// ------------------------------------------------------------ views, theme, resize
+const VIEWS = ["overview", "map", "screener", "sectors", "ideas"];
+function setView(v) {
+  state.view = v; LS.set("view", v);
+  if (location.hash.slice(1) !== v) history.replaceState(null, "", "#" + v);
+  $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.view === v));
+  $$(".view").forEach(el => el.hidden = !state.snap || el.id !== "view-" + v);
+  if (state.snap) renderAll();
+  window.scrollTo({ top: 0 });
+}
+$$(".tab").forEach(t => t.addEventListener("click", () => setView(t.dataset.view)));
+document.addEventListener("click", e => { const b = e.target.closest("[data-goto]"); if (b) setView(b.dataset.goto); });
+
+function applyTheme(th) {
+  if (th) document.documentElement.dataset.theme = th; else delete document.documentElement.dataset.theme;
+}
+applyTheme(LS.get("theme", null));
+$("#themeBtn").addEventListener("click", () => {
+  const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const next = cur === "dark" ? "light" : "dark";
+  applyTheme(next); LS.set("theme", next);
+  if (state.snap) renderAll();
+  if (state.detail) loadDetailChart();
+});
+
+let rz;
+addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { if (state.snap) renderAll(); }, 150); });
+
+// ------------------------------------------------------------ boot
+(async function boot() {
+  for (let attempt = 0; ; attempt++) {
+    try { await load(); break; }
+    catch (e) {
+      $("#loading p").textContent = attempt > 2 ? `Caricamento ancora in corso… (${e.message})` : "Caricamento dati di mercato…";
+      await new Promise(r => setTimeout(r, 3000));
+    }
+  }
+  nextAt = Date.now() + 60_000;
+  const h = decodeURIComponent(location.hash.slice(1));
+  if (VIEWS.includes(h)) state.view = h;
+  setView(state.view);
+  if (h && !VIEWS.includes(h) && quoteFor(h.toUpperCase())) openDetail(h.toUpperCase());
+})();
+})();
