@@ -503,7 +503,6 @@ table.scr, table.matrix { width: 100%; border-collapse: collapse; font-variant-n
 .sbar .trk { position: relative; width: 70px; height: 8px; background: var(--surface-3); border-radius: 2px; }
 .sbar .trk i { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
 .sbar .trk::after { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--baseline); }
-.table-wrap.tall { max-height: 560px; }
 .scr.grp td, .scr.grp th { padding: 6px 8px; }
 .changes { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 .changes h4 { margin: 0 0 6px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
@@ -588,3 +587,14 @@ table.my td.nw a:hover { text-decoration: underline; }
 @media (max-width: 900px) { .drawer.full .d-cols { display: block; } }
 .sector-detail.one { grid-template-columns: minmax(0, 1fr); }
 #secAll { margin-left: auto; }
+
+/* ------------------------------------------------ report: full-width themes, plain changes, page-sticky headers */
+.scr.grp th, .scr.grp td { white-space: normal; }
+.scr.grp td:last-child { min-width: 160px; }
+.changes-list { margin: 0; padding-left: 18px; line-height: 1.6; }
+.changes-list li { margin: 3px 0; }
+.tlink { cursor: pointer; }
+.tlink:hover { color: var(--accent); }
+.table-wrap.page-sticky { overflow: visible; }
+.page-sticky .scr th { top: var(--sticky-top, 0px); z-index: 2; }
+@media (max-width: 900px) { .table-wrap.page-sticky { overflow-x: auto; } }

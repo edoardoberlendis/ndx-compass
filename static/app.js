@@ -174,7 +174,7 @@ function renderAll() {
   if (state.view === "watch") renderMyStocks();
   if (state.view === "screener") renderScreener();
   if (state.view === "sectors") renderSectors();
-  if (state.view === "ideas") renderIdeas();
+  if (state.view === "ideas" || state.view === "trade") renderIdeas();
   if (state.detail) renderDetailHeader();
 }
 
@@ -487,6 +487,7 @@ const PRESETS = [
   { id: "upgrades", label: "Upgrade recenti", f: s => s.up30 > s.down30, desc: "più upgrade che downgrade negli ultimi 30 giorni" },
   { id: "estUp", label: "Stime in rialzo", f: s => s.epsRev30 > 3, desc: "stima utile del prossimo anno alzata di oltre il 3% in 30 giorni" },
   { id: "sigBuy", label: "Segnale positivo", f: s => s.sigScore >= 20, desc: "segnale finale Positivo o Molto positivo" },
+  { id: "sigNeutral", label: "Segnale neutro", f: s => sigName(s.signal) === "Neutro", desc: "segnale finale Neutro (punteggio tra −20 e +20)" },
   { id: "sigSell", label: "Segnale negativo", f: s => s.sigScore <= -20, desc: "segnale finale Negativo o Molto negativo" },
   { id: "estDown", label: "Stime in calo", f: s => s.epsRev30 < -3, desc: "stima utile del prossimo anno abbassata di oltre il 3% in 30 giorni" },
 ];
@@ -497,7 +498,7 @@ const PRESET_GROUPS = [
   { label: "Trend", ids: ["above3", "below3", "golden", "broken", "highs", "lows", "overbought", "oversold"] },
   { label: "Valutazione", ids: ["cheap", "rich", "value"] },
   { label: "Analisti", ids: ["upside", "upgrades", "estUp", "estDown"] },
-  { label: "Segnale", ids: ["sigBuy", "sigSell"] },
+  { label: "Segnale", ids: ["sigBuy", "sigNeutral", "sigSell"] },
 ];
 function daysTo(ts) {
   if (!isNum(ts)) return null;
@@ -1117,14 +1118,35 @@ async function renderIdeas() {
   const sel = $("#repSel");
   sel.innerHTML = `<option value="latest">Ultimo report</option>` + list.map(id => `<option value="${esc(id)}">${esc(repLabel(id))}</option>`).join("");
   sel.value = list.includes(ideasState.id) ? ideasState.id : "latest";
-  $("#ideasEmpty").hidden = list.length > 0;
-  $("#ideasBody").hidden = !list.length;
+  $("#ideasEmpty").hidden = $("#tradeEmpty").hidden = list.length > 0;
+  $("#ideasBody").hidden = $("#tradeBody").hidden = !list.length;
   if (!list.length) return;
   if (ideasState.loadedId !== sel.value || !ideasState.report) {
     try { ideasState.report = await getJSON(`/api/report/${encodeURIComponent(sel.value)}`); ideasState.loadedId = sel.value; }
     catch (e) { $("#brief").innerHTML = `<div class="empty">Impossibile caricare il report (${esc(e.message)})</div>`; return; }
   }
-  drawIdeas();
+  const R = ideasState.report;
+  if (R.prevId && ideasState.prev?.id !== R.prevId) {   // previous report, for the plain-language "Cosa è cambiato"
+    try { ideasState.prev = { id: R.prevId, R: await getJSON(`/api/report/${encodeURIComponent(R.prevId)}`) }; }
+    catch { ideasState.prev = { id: R.prevId, R: null }; }
+  }
+  if (state.view === "trade") drawTrade(); else drawIdeas();
+}
+// "Idee (sperimentali)": setup changes + trade idea cards of the report chosen in Report
+function drawTrade() {
+  const R = ideasState.report;
+  if (!R) return;
+  $("#tradeMeta").textContent = `Report: ${repLabel(R.id)} · prezzi del ${dayIT(R.dataAsOf)}`;
+  const c = R.changes;
+  $("#setupCard").hidden = !c;
+  if (c) {
+    $("#setupMeta").textContent = `rispetto al report ${repLabel(c.since)}`;
+    const block = (title, items, fn) => `<div><h4>${title}</h4>${items.length ? items.map(fn).join("") : `<div class="muted">Nessuno</div>`}</div>`;
+    $("#setupChanges").innerHTML =
+      block("Setup nuovi o cambiati", c.newIdeas, i => `<div class="it" data-t="${esc(i.ticker)}"><b>${esc(i.ticker)}</b><span>${esc(i.setup)}</span></div>`) +
+      block("Non più segnalati", c.dropped, i => `<div class="it" data-t="${esc(i.ticker)}"><b>${esc(i.ticker)}</b><span class="muted">${esc(i.setup)}</span></div>`);
+  }
+  renderIdeaCards(R);
 }
 
 function drawIdeas() {
@@ -1138,7 +1160,6 @@ function drawIdeas() {
   renderRRG(R);
   renderGroupTable(R);
   renderChanges(R);
-  renderIdeaCards(R);
   renderMaTable(R);
   loadBacktest();
 }
@@ -1236,17 +1257,57 @@ function renderGroupTable(R) {
       <td class="${sign(g.rs1m)}">${fChg(g.rs1m)}</td><td class="l"><span class="q ${g.quadrant}">${QLAB[g.quadrant]}</span></td><td class="l muted">${esc(g.leaders.join(" · "))}</td></tr>`).join("")}</tbody>`;
 }
 
+// "Da stamattina", "Da ieri sera", or "Dal report di …"
+function sincePhrase(prevId, curId) {
+  const [pd, ps] = prevId.split("_"), [cd] = curId.split("_");
+  const days = Math.round((Date.parse(cd) - Date.parse(pd)) / 864e5);
+  const today = { morning: "Da stamattina", afternoon: "Da oggi pomeriggio", close: "Da stasera" }[ps];
+  const yday = { morning: "Da ieri mattina", afternoon: "Da ieri pomeriggio", close: "Da ieri sera" }[ps];
+  return days === 0 && today ? today : days === 1 && yday ? yday : `Dal report di ${repLabel(prevId)}`;
+}
+// Cosa è cambiato: plain sentences comparing this report with the previous one (display only, same data as the tables)
 function renderChanges(R) {
   const c = R.changes;
   $("#changesCard").hidden = !c;
   if (!c) return;
   $("#changesMeta").textContent = `rispetto al report ${repLabel(c.since)}`;
-  const block = (title, items, fn) => `<div><h4>${title}</h4>${items.length ? items.map(fn).join("") : `<div class="muted">Nessuno</div>`}</div>`;
-  $("#changes").innerHTML =
-    block("Setup nuovi o cambiati", c.newIdeas, i => `<div class="it" data-t="${esc(i.ticker)}"><b>${esc(i.ticker)}</b><span>${esc(i.setup)}</span></div>`) +
-    block("Non più segnalati", c.dropped, i => `<div class="it" data-t="${esc(i.ticker)}"><b>${esc(i.ticker)}</b><span class="muted">${esc(i.setup)}</span></div>`) +
-    block("Maggiori variazioni di punteggio", c.scoreMovers.slice(0, 8), i => `<div class="it" data-t="${esc(i.ticker)}"><b>${esc(i.ticker)}</b><span><span class="${sign(i.delta)}">${i.delta > 0 ? "+" : ""}${fNum(i.delta, 1)}</span> <span class="muted">ora ${fNum(i.score, 0)}</span></span></div>`) +
-    block("Rotazioni dei gruppi", c.rotations, r => `<div class="it"><b>${esc(r.name)}</b><span><span class="q ${r.from}">${QLAB[r.from]}</span> → <span class="q ${r.to}">${QLAB[r.to]}</span></span></div>`);
+  const since = sincePhrase(c.since, R.id);
+  const tk = list => { const shown = list.slice(0, 8).map(t => `<b class="tlink" data-t="${esc(t)}">${esc(t)}</b>`).join(", ");
+    return list.length > 8 ? `${shown} e altri ${list.length - 8}` : shown; };
+  const n = (k, one, many) => k === 1 ? `1 ${one}` : `${k} ${many}`;
+  const out = [];
+  const P = ideasState.prev?.id === c.since && ideasState.prev.R ? new Map(ideasState.prev.R.stocks.map(s => [s.ticker, s])) : null;
+  // older reports used the 20/30/60 averages: comparing positions or order with them would be wrong
+  const sameMAs = P && [...P.values()].some(p => isNum(p.vs40));
+  if (P && !sameMAs) out.push(`<span class="muted">Il report precedente usava medie diverse (20/30/60): il confronto su medie e punteggio di trend non è disponibile.</span>`);
+  if (sameMAs) {
+    const all3 = (s, f) => [s.vs20, s.vs40, s.vs60].every(v => isNum(v) && f(v));
+    const has3 = s => [s.vs20, s.vs40, s.vs60].every(isNum);
+    const was = (s, f) => { const p = P.get(s.ticker); return p && has3(p) && f(p); };
+    const up3 = R.stocks.filter(s => all3(s, v => v > 0) && was(s, p => !all3(p, v => v > 0))).map(s => s.ticker);
+    const dn3 = R.stocks.filter(s => all3(s, v => v < 0) && was(s, p => !all3(p, v => v < 0))).map(s => s.ticker);
+    const bull = R.stocks.filter(s => s.stack === "bull" && was(s, p => p.stack !== "bull")).map(s => s.ticker);
+    const bear = R.stocks.filter(s => s.stack === "bear" && was(s, p => p.stack !== "bear")).map(s => s.ticker);
+    if (up3.length) out.push(`${since} ${n(up3.length, "titolo è passato", "titoli sono passati")} sopra le medie 20, 40 e 60: ${tk(up3)}.`);
+    if (dn3.length) out.push(`${since} ${n(dn3.length, "titolo è sceso", "titoli sono scesi")} sotto le medie 20, 40 e 60: ${tk(dn3)}.`);
+    if (bull.length) out.push(`${n(bull.length, "titolo ha", "titoli hanno")} ora le medie in ordine rialzista (20 sopra 40 sopra 60): ${tk(bull)}.`);
+    if (bear.length) out.push(`${n(bear.length, "titolo ha", "titoli hanno")} ora le medie in ordine ribassista (20 sotto 40 sotto 60): ${tk(bear)}.`);
+  }
+  if (P) {
+    const b0 = ideasState.prev.R.regime?.breadth?.["20"], b1 = R.regime?.breadth?.["20"];
+    if (isNum(b0) && isNum(b1) && Math.abs(b1 - b0) >= 10)
+      out.push(`La quota di titoli sopra la media a 20 giorni è ${b1 > b0 ? "salita" : "scesa"} dal ${pctR(b0)} al ${pctR(b1)}.`);
+  }
+  const movers = P && !sameMAs ? [] : c.scoreMovers;   // the trend score depends on the averages: not comparable across versions
+  const ups = movers.filter(m => m.delta >= 10), dns = movers.filter(m => m.delta <= -10);
+  if (ups.length) out.push(`Punteggio di trend salito di più: ${ups.slice(0, 4).map(m => `<b class="tlink" data-t="${esc(m.ticker)}">${esc(m.ticker)}</b> (${m.delta > 0 ? "+" : ""}${fNum(m.delta, 0)}, ora ${fNum(m.score, 0)})`).join(", ")}.`);
+  if (dns.length) out.push(`Punteggio di trend sceso di più: ${dns.slice(0, 4).map(m => `<b class="tlink" data-t="${esc(m.ticker)}">${esc(m.ticker)}</b> (${fNum(m.delta, 0)}, ora ${fNum(m.score, 0)})`).join(", ")}.`);
+  const isTheme = new Set(R.themes.map(t => t.name));
+  c.rotations.forEach(r => out.push(`${isTheme.has(r.name) ? "Il tema" : "Il settore"} <b>${esc(r.name)}</b> è passato da <span class="q ${r.from}">${QLAB[r.from]}</span> a <span class="q ${r.to}">${QLAB[r.to]}</span>.`));
+  const real = out.filter(x => !x.startsWith('<span class="muted">'));
+  if (!real.length) out.push(`<span class="muted">Nessun cambiamento rilevante rispetto al report ${esc(repLabel(c.since))}.</span>`);
+  $("#changes").innerHTML = out.length ? out.map(x => `<li>${x}</li>`).join("")
+    : `<li class="muted">Nessun cambiamento rilevante rispetto al report ${esc(repLabel(c.since))}.</li>`;
 }
 
 function renderIdeaCards(R) {
@@ -1265,19 +1326,15 @@ function renderIdeaCards(R) {
     if (!list.length) return "";
     return `<div class="idea-group"><h3>${esc(s.label)} <small>${list.length} · ${esc(s.desc)}</small></h3><div class="ideas">${list.map(ideaCard).join("")}</div></div>`;
   }).join("") || `<div class="card empty">Nessun setup per questo filtro.</div>`;
-  if (!$("#ideasFold").open) return;   // charts need a visible box: drawn when the section is opened
   host.querySelectorAll("[data-chart]").forEach(el => {
     const i = R.ideas.find(x => x.ticker === el.dataset.chart);
     drawIdeaChart(el, i);
   });
 }
-// clicking a theme (rotation map or table) opens the trade ideas filtered on it
+// clicking a theme (rotation map or table) opens the Idee tab filtered on it
 function showIdeas() {
-  const f = $("#ideasFold");
-  if (f.open) renderIdeaCards(ideasState.report); else f.open = true;   // opening triggers the render below
-  f.scrollIntoView({ behavior: "smooth" });
+  setView("trade");
 }
-$("#ideasFold").addEventListener("toggle", () => { if ($("#ideasFold").open && ideasState.report) renderIdeaCards(ideasState.report); });
 function ideaCard(i) {
   const lv = i.levels, st = i.stats;
   const bars = Math.round(i.conviction / 20);
@@ -1349,8 +1406,12 @@ $("#grpTable").addEventListener("click", e => {
   const tr = e.target.closest("tr[data-g]");
   if (tr && tr.dataset.kind === "theme") { ideasState.theme = tr.dataset.g; ideasState.side = "all"; showIdeas(); }
 });
+$("#view-trade").addEventListener("click", e => {
+  const t = e.target.closest("[data-open], .changes [data-t]");
+  if (t) openDetail(t.dataset.open || t.dataset.t);
+});
 $("#view-ideas").addEventListener("click", e => {
-  const t = e.target.closest("[data-open], .changes [data-t], #maTable tr[data-t]");
+  const t = e.target.closest("[data-open], .changes-list [data-t], #maTable tr[data-t]");
   if (t) openDetail(t.dataset.open || t.dataset.t);
   const th = e.target.closest("th[data-mk]");
   if (th) { const k = th.dataset.mk; ideasState.maSort = ideasState.maSort.key === k ? { key: k, dir: -ideasState.maSort.dir } : { key: k, dir: ["ticker", "sector", "stack", "setup"].includes(k) ? 1 : -1 }; renderMaTable(ideasState.report); }
@@ -1404,7 +1465,7 @@ document.addEventListener("keydown", e => {
 });
 
 // ------------------------------------------------------------ views, theme, resize
-const VIEWS = ["overview", "watch", "screener", "sectors", "ideas"];
+const VIEWS = ["overview", "watch", "screener", "sectors", "ideas", "trade"];
 function setView(v) {
   state.view = v; LS.set("view", v);
   if (location.hash.slice(1) !== v) history.replaceState(null, "", "#" + v);
@@ -1428,8 +1489,14 @@ $("#themeBtn").addEventListener("click", () => {
   if (state.detail) loadDetailChart();
 });
 
+// page-level sticky table headers sit just below the header + tabs (both sticky only on wide screens)
+function setStickyTop() {
+  const tabs = $(".tabs"), st = getComputedStyle(tabs);
+  document.documentElement.style.setProperty("--sticky-top", st.position === "sticky" ? parseFloat(st.top) + tabs.offsetHeight + "px" : "0px");
+}
+setStickyTop();
 let rz;
-addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { if (state.snap) renderAll(); if (state.detail) loadDetailChart(); }, 150); });
+addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { setStickyTop(); if (state.snap) renderAll(); if (state.detail) loadDetailChart(); }, 150); });
 
 // ------------------------------------------------------------ boot
 (async function boot() {

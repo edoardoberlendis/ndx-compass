@@ -31,6 +31,7 @@
     <button class="tab" data-view="screener">Screener</button>
     <button class="tab" data-view="sectors">Settori</button>
     <button class="tab" data-view="ideas">Report</button>
+    <button class="tab" data-view="trade">Idee (sperimentali)</button>
   </div>
   <div class="updated"><span class="status" id="status"></span><span id="updated"></span></div>
 </nav>
@@ -114,6 +115,24 @@
     </div>
   </section>
 
+  <!-- TRADE IDEAS (experimental; same report as the Report tab) -->
+  <section id="view-trade" class="view" hidden>
+    <p class="warn-box">Queste idee (entrata, stop e target) si basano solo sulla parte tecnica: medie 20/40/60, RSI e forza rispetto a QQQ.
+      Il backtest nella scheda Report non ha dimostrato che questa parte dia un vantaggio. Usale come spunti da verificare,
+      non come indicazioni operative. Non è una consulenza finanziaria.</p>
+    <div class="toolbar"><span class="muted" id="tradeMeta"></span><button class="link-btn" data-goto="ideas">Cambia report nella scheda Report →</button></div>
+    <div id="tradeEmpty" class="card empty" hidden>Nessun report ancora: generane uno dalla scheda <b>Report</b>.</div>
+    <div id="tradeBody">
+      <div class="card" id="setupCard"><div class="card-h"><h2>Setup nuovi e non più segnalati</h2><span class="card-meta" id="setupMeta"></span></div><div id="setupChanges" class="changes"></div></div>
+      <div class="toolbar">
+        <div class="chips" id="sideChips"></div>
+        <select id="themeSel" aria-label="Tema"></select>
+        <div class="series-key" id="maKey"></div>
+      </div>
+      <div id="ideaGroups"></div>
+    </div>
+  </section>
+
   <!-- REPORT (twice-daily trend report; view id "ideas" kept for saved links) -->
   <section id="view-ideas" class="view" hidden>
     <div class="toolbar">
@@ -126,40 +145,26 @@
     <div id="ideasBody">
       <div class="card brief" id="brief"></div>
 
-      <div class="grid-2">
-        <div class="card">
-          <div class="card-h"><h2>Mappa di rotazione</h2><div class="seg small" data-grp-seg><button data-grp="themes" class="on">Temi</button><button data-grp="sectors">Settori</button></div></div>
-          <div id="rrg" class="chart"></div>
-          <p class="hint">x: rendimento vs QQQ a 1 mese · y: vs QQQ a 1 settimana. I gruppi tendono a ruotare in senso orario: In miglioramento → Leader → In indebolimento → In ritardo.</p>
-        </div>
-        <div class="card">
-          <div class="card-h"><h2 id="grpTitle">Temi</h2><span class="card-meta">struttura medie 20/40/60 · Δ vs report precedente</span></div>
-          <div class="table-wrap"><table class="scr grp" id="grpTable"></table></div>
-        </div>
+      <div class="card">
+        <div class="card-h"><h2>Mappa di rotazione</h2><div class="seg small" data-grp-seg><button data-grp="themes" class="on">Temi</button><button data-grp="sectors">Settori</button></div></div>
+        <div id="rrg" class="chart"></div>
+        <p class="hint">x: rendimento vs QQQ a 1 mese · y: vs QQQ a 1 settimana. I gruppi tendono a ruotare in senso orario: In miglioramento → Leader → In indebolimento → In ritardo.</p>
+      </div>
+      <div class="card">
+        <div class="card-h"><h2 id="grpTitle">Temi</h2><span class="card-meta">struttura medie 20/40/60 · Δ vs report precedente · clicca un tema per vederne le idee</span></div>
+        <table class="scr grp" id="grpTable"></table>
       </div>
 
-      <div class="card" id="changesCard"><div class="card-h"><h2>Cosa è cambiato</h2><span class="card-meta" id="changesMeta"></span></div><div id="changes" class="changes"></div></div>
+      <div class="card" id="changesCard"><div class="card-h"><h2>Cosa è cambiato</h2><span class="card-meta" id="changesMeta"></span></div><ul id="changes" class="changes-list"></ul></div>
 
       <div class="card">
         <div class="card-h"><h2>Tutti i titoli · analisi delle medie mobili</h2><input id="maFind" class="find" type="search" placeholder="Filtra…" aria-label="Filtra titoli"></div>
-        <div class="table-wrap tall"><table class="scr" id="maTable"></table></div>
+        <div class="table-wrap page-sticky"><table class="scr" id="maTable"></table></div>
       </div>
       <div class="card" id="btCard">
         <div class="card-h"><h2>Backtest della parte tecnica</h2><div class="seg small" id="btSeg"></div><span class="card-meta" id="btMeta"></span></div>
         <div id="btBody"><div class="empty">Nessun backtest ancora. Dal Terminale: <code>.venv/bin/python backtest.py</code></div></div>
       </div>
-      <details class="card fold ideas-fold" id="ideasFold">
-        <summary><h2>Idee di trading</h2><span class="card-meta">entrata, stop e target · chiuse di default</span></summary>
-        <p class="warn-box">Entrata, stop e target si basano solo sulla parte tecnica (medie 20/40/60, RSI, forza rispetto a QQQ),
-          che il backtest qui sopra non ha dimostrato dare un vantaggio. Usale come spunti da verificare, non come indicazioni operative.
-          Non è una consulenza finanziaria.</p>
-        <div class="toolbar">
-          <div class="chips" id="sideChips"></div>
-          <select id="themeSel" aria-label="Tema"></select>
-          <div class="series-key" id="maKey"></div>
-        </div>
-        <div id="ideaGroups"></div>
-      </details>
       <p class="disclaimer" id="disclaimer"></p>
     </div>
   </section>

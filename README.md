@@ -40,8 +40,10 @@ Oppure dal Terminale:
 - **Screener**: i 100 titoli con colonne Panoramica / Performance / Valutazione / Tecnica, filtri (anche "Sopra/Sotto 20, 40 e 60", "Valutazione economica/cara", "Upgrade recenti", "Stime in rialzo/calo"), export CSV. La vista Tecnica mostra la distanza dalle medie 20/40/60/50/200.
 - **Settori**: rendimenti dei settori pesati per capitalizzazione e peso di ogni settore nell'indice. Clic su una riga:
   compaiono i titoli di quel settore; di nuovo sulla stessa riga (o "Tutti i settori") si torna a tutti.
-- **Report**: il report tecnico generato da `signals.py` (vedi sotto): sintesi, mappa di rotazione, temi, cosa è cambiato,
-  tabella delle medie e backtest. Le idee di trading (entrata/stop/target) sono in fondo, chiuse di default.
+- **Report**: il report tecnico generato da `signals.py` (vedi sotto): sintesi, mappa di rotazione, temi, cosa è cambiato
+  (in frasi semplici rispetto al report precedente), tabella delle medie e backtest.
+- **Idee (sperimentali)**: le idee di trading (entrata/stop/target) e i setup nuovi o non più segnalati del report scelto
+  in Report. Si basano solo sulla parte tecnica, che il backtest non ha dimostrato dare un vantaggio.
 - **Scheda titolo**: grafico 1G–MAX, confronto con NDX, fondamentali, target degli analisti, notizie, più:
   - **Valutazione** (Economica / In linea / Cara): P/E atteso, P/S ed EV/EBITDA contro la mediana dei titoli dello
     stesso settore nel Nasdaq-100 (saltato se il settore ha meno di 3 titoli) e P/E / P/S di oggi contro la mediana
