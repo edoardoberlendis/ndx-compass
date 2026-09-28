@@ -558,3 +558,8 @@ details.fold > summary h3 { margin: 0; }
 .ma-toggles { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; width: 100%; }
 .ma-toggles .check i { width: 10px; height: 3px; border-radius: 2px; display: inline-block; }
 .ma-toggles.off .check { opacity: .45; }
+
+/* ------------------------------------------------ my stocks */
+table.my td.nw { max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+table.my td.nw a { color: var(--ink); text-decoration: none; }
+table.my td.nw a:hover { text-decoration: underline; }

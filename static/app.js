@@ -20,7 +20,9 @@ const state = {
   preset: "all",
   sector: "",
   sort: { key: "mcap", dir: -1 },
-  watch: new Set(LS.get("watch", ["NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA"])),
+  watch: new Set(),              // loaded from watchlist.json at boot (loadWatch)
+  watchNews: {},                 // ticker -> latest headline naming the stock
+  mySort: { key: "chgPct", dir: -1 },
   secSel: null,
   detail: null,
   prevPrices: new Map(),
@@ -169,6 +171,7 @@ function renderAll() {
   renderStatus();
   syncTfSegs();
   if (state.view === "overview") renderOverview();
+  if (state.view === "watch") renderMyStocks();
   if (state.view === "map") renderMapView();
   if (state.view === "screener") renderScreener();
   if (state.view === "sectors") renderSectors();
@@ -301,7 +304,6 @@ function renderOverview() {
   renderLists();
   renderSectorBars($("#sectorBars"), sectors(), state.tf);
   renderSignals();
-  renderWatch();
   renderEarnings();
   renderSignalLists();
   loadNews();
@@ -585,11 +587,6 @@ $("#signals").addEventListener("click", e => {
   if (b) { state.preset = b.dataset.preset; setView("screener"); }
 });
 
-function renderWatch() {
-  const list = [...state.watch].map(t => state.bySym.get(t)).filter(Boolean);
-  miniTable($("#watch"), list, s => `<td class="t">${esc(s.ticker)}</td><td>${spark(s.spark, 70, 18, s.prevClose)}</td><td class="r num">${fPrice(s.price)}</td><td class="r">${pill(s.chgPct)}</td>
-    <td class="r"><button class="star on" data-star="${esc(s.ticker)}" title="Rimuovi dai preferiti">★</button></td>`, "Aggiungi titoli con ★ dallo screener o dalla scheda del titolo");
-}
 document.addEventListener("click", e => {
   const b = e.target.closest("[data-star]");
   if (!b) return;
@@ -598,8 +595,8 @@ document.addEventListener("click", e => {
 });
 function toggleWatch(t) {
   state.watch.has(t) ? state.watch.delete(t) : state.watch.add(t);
-  LS.set("watch", [...state.watch]);
-  if (state.view === "overview") renderWatch();
+  saveWatch();
+  if (state.view === "watch") renderMyStocks();
   if (state.view === "screener") renderScreener();
   if (state.detail === t) renderDetailHeader();
 }
@@ -668,6 +665,60 @@ function ago(t) {
   return Math.round(m / 1440) + " g fa";
 }
 
+// ------------------------------------------------------------ my stocks (watchlist.json in the project folder)
+let watchLoadedAt = 0;
+async function loadWatch(imported = false) {
+  try {
+    const d = await getJSON("/api/watchlist");
+    if (!d.exists && !imported) {   // first run: import the favourites the browser used to keep
+      state.watch = new Set(LS.get("watch", ["NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA"]));
+      await saveWatch();
+      return loadWatch(true);
+    }
+    if (d.exists) state.watch = new Set(d.tickers);
+    state.watchNews = d.news || {};
+    watchLoadedAt = Date.now();
+  } catch (e) { console.warn("watchlist unavailable", e); }
+}
+async function saveWatch() {
+  try {
+    await fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tickers: [...state.watch] }) });
+  } catch (e) { console.warn("watchlist not saved", e); }
+}
+// 1 = price > 20 > 40 > 60, -1 = the opposite, 0 = mixed (same rule as maOrder)
+function maStack(s) {
+  const { price: p, sma20: a, sma40: b, sma60: c } = s;
+  if (![p, a, b, c].every(isNum)) return null;
+  return p > a && a > b && b > c ? 1 : p < a && a < b && b < c ? -1 : 0;
+}
+const MY_COLS = ["star", "ticker", "name", "price", "chgPct", "perf1M", "perfYTD", "vsSma20", "vsSma40", "vsSma60", "vsSma200", "maOrder", "valLabel", "upside", "signal", "earnings", "news"];
+function renderMyStocks() {
+  if (Date.now() - watchLoadedAt > 5 * 60_000) loadWatch().then(() => state.view === "watch" && renderMyStocks());   // fresh headlines
+  const col = C[state.mySort.key] || C.chgPct;
+  const rows = [...state.watch].map(t => state.bySym.get(t)).filter(Boolean).sort((a, b) => {
+    const va = col.sort(a), vb = col.sort(b);
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    return (typeof va === "string" ? va.localeCompare(vb) : va - vb) * state.mySort.dir;
+  });
+  $("#myCount").textContent = `${rows.length} titoli`;
+  $("#myTbl").innerHTML = `<thead><tr>${MY_COLS.map(k => `<th class="${C[k].cls?.split(" ")[0] || ""} ${state.mySort.key === k ? "sorted" + (state.mySort.dir > 0 ? " asc" : "") : ""}" data-k="${k}">${esc(C[k].l)}</th>`).join("")}</tr></thead>
+    <tbody>${rows.map(s => `<tr data-t="${esc(s.ticker)}">${MY_COLS.map(k => `<td class="${C[k].cls || ""}">${C[k].html(s)}</td>`).join("")}</tr>`).join("")
+      || `<tr><td colspan="${MY_COLS.length}" class="empty">Nessun titolo: aggiungili con ★ dallo Screener o dalla scheda del titolo</td></tr>`}</tbody>`;
+}
+$("#myTbl").addEventListener("click", e => {
+  if (e.target.closest("a")) return;   // news link opens the article
+  const th = e.target.closest("th[data-k]");
+  if (th) {
+    const k = th.dataset.k; if (C[k].nosort) return;
+    state.mySort = state.mySort.key === k ? { key: k, dir: -state.mySort.dir } : { key: k, dir: ["ticker", "name", "earnings"].includes(k) ? 1 : -1 };
+    return renderMyStocks();
+  }
+  const tr = e.target.closest("tr[data-t]");
+  if (tr && !e.target.closest(".star")) openDetail(tr.dataset.t);
+});
+
 // ------------------------------------------------------------ map view
 function renderMapView() {
   $$("#sizeSeg button").forEach(b => b.classList.toggle("on", b.dataset.size === state.size));
@@ -722,6 +773,12 @@ const C = {
   fromLo52: { l: "Da min", sort: s => s.fromLo52, html: s => `<span class="${sign(s.fromLo52)}">${fPct(s.fromLo52, 1)}</span>` },
   gapPct: { l: "Gap", sort: s => s.gapPct, html: s => `<span class="${sign(s.gapPct)}">${fPct(s.gapPct)}</span>` },
   vol20:  { l: "Volatilità", sort: s => s.vol20, html: s => isNum(s.vol20) ? fNum(s.vol20, 0) + "%" : "—" },
+  maOrder: { l: "Ordine medie", cls: "l", sort: s => maStack(s), html: s => maOrder(s) },
+  earnings: { l: "Trimestrale", cls: "l", sort: s => daysTo(s.earningsTs), html: s => { const d = daysTo(s.earningsTs);
+    return d == null ? "—" : `${fDate(s.earningsTs, { day: "numeric", month: "short" })} <span class="muted">${d < 0.5 ? "oggi" : "tra " + Math.round(d) + " g"}</span>`; } },
+  news:   { l: "Ultima notizia", cls: "l nw", sort: s => { const n = state.watchNews[s.ticker]; return n ? Date.parse(n.time) || n.time * 1000 : null; },
+    html: s => { const n = state.watchNews[s.ticker];
+      return n ? `<a href="${esc(n.url)}" target="_blank" rel="noopener" title="${esc(n.title)}">${esc(n.title)}</a> <span class="muted">${esc(ago(n.time))}</span>` : `<span class="muted">—</span>`; } },
   short:  { l: "Short % flottante", sort: s => s.short, html: s => isNum(s.short) ? fNum(s.short * 100, 1) + "%" : "—" },
 };
 for (const [tf, m] of Object.entries(METRICS)) if (PERF_TFS.includes(tf) && tf !== "1D")
@@ -1408,7 +1465,7 @@ document.addEventListener("keydown", e => {
 });
 
 // ------------------------------------------------------------ views, theme, resize
-const VIEWS = ["overview", "map", "screener", "sectors", "ideas"];
+const VIEWS = ["overview", "watch", "map", "screener", "sectors", "ideas"];
 function setView(v) {
   state.view = v; LS.set("view", v);
   if (location.hash.slice(1) !== v) history.replaceState(null, "", "#" + v);
@@ -1445,6 +1502,7 @@ addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { if 
     }
   }
   nextAt = Date.now() + 60_000;
+  await loadWatch();
   const h = decodeURIComponent(location.hash.slice(1));
   if (VIEWS.includes(h)) state.view = h;
   setView(state.view);

@@ -27,6 +27,7 @@
 <nav class="tabs">
   <div class="tablist" role="tablist">
     <button class="tab active" data-view="overview">Panoramica</button>
+    <button class="tab" data-view="watch">I miei titoli</button>
     <button class="tab" data-view="map">Mappa</button>
     <button class="tab" data-view="screener">Screener</button>
     <button class="tab" data-view="sectors">Settori</button>
@@ -88,15 +89,22 @@
       </div>
     </div>
 
-    <div class="grid-3">
+    <div class="grid-2">
       <div class="card"><div class="card-h"><h2>Performance dei settori</h2><div class="seg tf-seg small" data-tf-seg></div></div><div id="sectorBars" class="chart"></div></div>
       <div class="card"><div class="card-h"><h2>Segnali</h2><span class="card-meta">clicca per filtrare</span></div><div id="signals" class="signals"></div></div>
-      <div class="card"><div class="card-h"><h2>Preferiti</h2><span class="card-meta">clicca ★ su un titolo per aggiungerlo qui</span></div><div id="watch" class="mini-table"></div></div>
     </div>
 
     <div class="grid-2">
       <div class="card"><div class="card-h"><h2>Calendario trimestrali</h2><span class="card-meta">prossimi 30 giorni</span></div><div id="earnings" class="mini-table"></div></div>
       <div class="card"><div class="card-h"><h2>Notizie</h2></div><div id="news" class="news"></div></div>
+    </div>
+  </section>
+
+  <!-- MY STOCKS (watchlist.json) -->
+  <section id="view-watch" class="view" hidden>
+    <div class="card">
+      <div class="card-h"><h2>I miei titoli</h2><span class="card-meta">clicca ★ su un titolo (Screener o scheda) per aggiungerlo · clicca un'intestazione per ordinare · salvati in watchlist.json</span><span class="count" id="myCount"></span></div>
+      <div class="table-wrap"><table class="scr my" id="myTbl"></table></div>
     </div>
   </section>
 

@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 import yfinance as yf
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory
 
 warnings.filterwarnings("ignore")
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
@@ -35,6 +35,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s", datef
 ROOT = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(ROOT, "cache")
 STATIC_DIR = os.path.join(ROOT, "static")
+WATCHLIST = os.path.join(ROOT, "watchlist.json")   # "I miei titoli", saved by the page
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 ET = ZoneInfo("America/New_York")
@@ -840,6 +841,39 @@ def api_stock(ticker):
         "valuation": store.valuations.get(ticker),
         "signal": store.signals.get(ticker),
     }, default=clean, allow_nan=False), mimetype="application/json")
+
+
+def latest_news(ticker, name):
+    """Newest headline already downloaded for the signal that names the stock (no extra Yahoo requests)."""
+    items = (store.news_all or {}).get(ticker) or []
+    names = name_words(ticker, name)
+    hits = [n for n in items if news_time(n) and mentions(f"{n.get('title')} {n.get('summary') or ''}", ticker, names)]
+    return max(hits, key=news_time, default=None)
+
+
+@app.route("/api/watchlist", methods=["GET", "POST"])
+def api_watchlist():
+    if request.method == "POST":
+        raw = (request.get_json(silent=True) or {}).get("tickers") or []
+        tickers = list(dict.fromkeys(t.upper() for t in raw if isinstance(t, str) and re.fullmatch(r"[A-Za-z0-9.^=-]{1,12}", t)))
+        with open(WATCHLIST + ".tmp", "w") as f:
+            json.dump({"tickers": tickers}, f, indent=1)
+        os.replace(WATCHLIST + ".tmp", WATCHLIST)
+        return jsonify(exists=True, tickers=tickers)
+    if not os.path.exists(WATCHLIST):
+        return jsonify(exists=False, tickers=[], news={})
+    with open(WATCHLIST) as f:
+        tickers = json.load(f).get("tickers", [])
+    with store.lock:
+        snap = store.snapshot
+    names = {r["ticker"]: r.get("name") for r in snap["stocks"]} if snap else {}
+    news_by = {}
+    for t in tickers:
+        n = latest_news(t, names.get(t))
+        if n:
+            news_by[t] = {k: n.get(k) for k in ("title", "url", "publisher", "time")}
+    return app.response_class(json.dumps({"exists": True, "tickers": tickers, "news": news_by}, default=clean),
+                              mimetype="application/json")
 
 
 @app.route("/api/movers-why")
