@@ -575,3 +575,9 @@ table.my td.nw a:hover { text-decoration: underline; }
 .ideas-fold > summary h2 { margin: 0; }
 .ideas-fold[open] > summary { margin-bottom: 10px; }
 .warn-box { margin: 0 0 12px; padding: 10px 12px; border-radius: 6px; border-left: 3px solid var(--warn); background: var(--surface-2); color: var(--ink-2); line-height: 1.5; }
+
+/* ------------------------------------------------ detail: earnings date, MA row, valuation table */
+.d-earn { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); color: var(--ink-2); }
+.d-ma { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--ink-2); margin: -4px 0 10px; font-variant-numeric: tabular-nums; }
+.val-tbl { margin-bottom: 10px; }
+.series-key i.dash, .ma-toggles .check i.dash { background: none !important; border-top: 2px dashed currentColor; height: 0; }

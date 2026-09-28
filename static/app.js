@@ -366,7 +366,8 @@ function lineChart(el, series, o = {}) {
       const area = d3.area().defined(p => isNum(p.v)).x((p, i) => x(i)).y0(ih).y1(p => y(p.v)).curve(d3.curveMonotoneX);
       g.append("path").datum(s.pts).attr("d", area).attr("fill", `url(#${gid})`);
     }
-    g.append("path").datum(s.pts).attr("d", line).attr("fill", "none").attr("stroke", s.color).attr("stroke-width", s.width || 2).attr("stroke-linejoin", "round");
+    g.append("path").datum(s.pts).attr("d", line).attr("fill", "none").attr("stroke", s.color).attr("stroke-width", s.width || 2).attr("stroke-linejoin", "round")
+      .attr("stroke-dasharray", s.dash || null);
     const last = s.pts.length - 1;
     if (s.dot !== false && last >= 0 && isNum(s.pts[last].v)) {
       g.append("circle").attr("cx", x(last)).attr("cy", y(s.pts[last].v)).attr("r", 3.5).attr("fill", s.color).attr("stroke", css("--surface")).attr("stroke-width", 2);
@@ -806,7 +807,7 @@ const dMA = new Set(LS.get("dMA", [20, 40, 60, 200]));
 let dDaily = null;   // { t, pts } two years of daily closes for the open stock
 
 function openDetail(t) {
-  state.detail = t; dInfo = null; dDaily = null;
+  state.detail = t; dInfo = null; dDaily = null; dRange = "1D";
   drawer.innerHTML = `<div class="d-top"></div><div class="d-sum"></div><div class="d-ctrl"></div><div id="dChart" class="chart"></div><div id="dVol" class="chart"></div><div class="d-rest"><div class="loading" style="padding:40px"><div class="spinner"></div></div></div>`;
   drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); scrim.hidden = false;
   renderDetailHeader();
@@ -827,12 +828,27 @@ function renderDetailHeader() {
   if (!top) return;
   const name = s?.name || s?.label || dInfo?.longName || t;
   top.innerHTML = `<div class="d-head"><div><div class="tt">${esc(t)}</div><div class="nm">${esc(dInfo?.longName || name)}</div>
-      ${s?.sector ? `<div class="sec">${esc(s.sector)} › ${esc(s.industry)} · ${fNum(s.weight)}% dell'indice</div>` : ""}</div>
+      ${s?.sector ? `<div class="sec">${esc(s.sector)} › ${esc(s.industry)} · capitalizzazione $${fBig(s.mcap)} · ${fNum(s.weight)}% dell'indice</div>` : ""}</div>
       <div class="actions">${state.bySym.has(t) ? `<button class="icon-btn star ${state.watch.has(t) ? "on" : ""}" data-star="${esc(t)}" title="Preferiti">${state.watch.has(t) ? "★" : "☆"}</button>` : ""}
       <button class="icon-btn close-btn" id="dClose" aria-label="Chiudi">×</button></div></div>
     ${s ? `<div class="d-price"><span class="p num">${fPrice(s.price)}</span><span class="c ${sign(s.chg)}">${fChg(s.chg)} (${fPct(s.chgPct)})</span>
-      <span class="when">${state.snap.status === "open" ? "in tempo reale · " : "ultimo · "}${esc(new Date(state.snap.lastQuote || state.snap.asOf).toLocaleTimeString("it-IT", { timeZone: tz, hour: "numeric", minute: "2-digit" }))} ora NY</span></div>` : ""}`;
+      <span class="when">${state.snap.status === "open" ? "in tempo reale · " : "ultimo · "}${esc(new Date(state.snap.lastQuote || state.snap.asOf).toLocaleTimeString("it-IT", { timeZone: tz, hour: "numeric", minute: "2-digit" }))} ora NY</span>
+      ${earnBadge(s)}</div>${maRow(s)}` : ""}`;
   $("#dClose").onclick = closeDetail;
+}
+// "Trimestrale 23 ott · tra 25 giorni" (only for a future date)
+function earnBadge(s) {
+  const d = daysTo(s.earningsTs);
+  if (d == null) return "";
+  const n = Math.round(d);
+  return `<span class="d-earn">Trimestrale ${fDate(s.earningsTs, { day: "numeric", month: "short" })} · ${n <= 0 ? "oggi" : n === 1 ? "domani" : `tra ${n} giorni`}</span>`;
+}
+// price above/below the 20/40/60/200-day averages, same values as the Trend section
+function maRow(s) {
+  if (!s.ticker) return "";
+  const cell = n => { const v = s["vsSma" + n];
+    return `<span>Media ${n} <b class="${sign(v)}">${isNum(v) ? (v >= 0 ? "▲ " : "▼ ") + fPct(v, 1) : "—"}</b></span>`; };
+  return `<div class="d-ma">${[20, 40, 60, 200].map(cell).join("")}</div>`;
 }
 function renderDetailCtrl() {
   const el = drawer.querySelector(".d-ctrl");
@@ -840,7 +856,7 @@ function renderDetailCtrl() {
   const maNote = dCompare ? "medie nascoste durante il confronto" : maOk ? "" : "medie visibili su 1M, 6M, YTD e 1A";
   el.innerHTML = `<div class="seg">${["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "MAX"].map(r => `<button data-r="${r}" class="${r === dRange ? "on" : ""}">${RLAB[r] || r}</button>`).join("")}</div>
     ${state.detail !== "^NDX" ? `<label class="check"><input type="checkbox" id="dCmp" ${dCompare ? "checked" : ""}> Confronta con il Nasdaq-100</label>` : ""}
-    <div class="ma-toggles${maOk ? "" : " off"}"><span class="muted">Medie mobili</span>${MAS.map(m => `<label class="check"><input type="checkbox" data-ma="${m.n}" ${dMA.has(m.n) ? "checked" : ""} ${maOk ? "" : "disabled"}><i style="background:var(${m.color})"></i>${m.n}</label>`).join("")}
+    <div class="ma-toggles${maOk ? "" : " off"}"><span class="muted">Medie mobili</span>${MAS.map(m => `<label class="check"><input type="checkbox" data-ma="${m.n}" ${dMA.has(m.n) ? "checked" : ""} ${maOk ? "" : "disabled"}><i class="${m.n === 200 ? "dash" : ""}" style="background:var(${m.color});color:var(${m.color})"></i>${m.n}</label>`).join("")}
       ${maNote ? `<span class="muted small">${maNote}</span>` : ""}</div>`;
   el.onclick = e => { const b = e.target.closest("[data-r]"); if (b) { dRange = b.dataset.r; renderDetailCtrl(); loadDetailChart(); } };
   el.onchange = e => {
@@ -862,7 +878,7 @@ async function maSeries(t, pts) {
     let sum = 0;
     const sma = D.map((p, i) => { sum += p.c; if (i >= m.n) sum -= D[i - m.n].c; return i >= m.n - 1 ? sum / m.n : null; });
     let j = -1;
-    return { n: m.n, color: css(m.color), width: 1.4, dot: false,
+    return { n: m.n, color: css(m.color), width: m.n === 200 ? 2.2 : 1.4, dash: m.n === 200 ? "6 4" : null, dot: false,
       pts: pts.map(p => { while (j + 1 < D.length && D[j + 1].t <= p.t) j++; return { t: p.t, v: j >= 0 ? sma[j] : null }; }) };
   });
 }
@@ -917,12 +933,13 @@ async function loadDetailChart() {
         try { mas = await maSeries(t, pts); } catch { mas = []; }   // chart still works without the averages
         if (req !== dReq || state.detail !== t) return;
       }
-      chart = lineChart(chartEl, [{ pts, color: col }, ...mas], {
-        height: 280, baseline: rng === "1D" ? base : null, baselineLabel: rng === "1D" ? `Chiusura prec. ${fPrice(base)}` : "", range: rng, tip: tipFor, label: `${t} price`, areaFirst: true,
+      // with averages on top the price is drawn in a neutral colour (black / white in dark theme), without the area
+      chart = lineChart(chartEl, [{ pts, color: mas.length ? css("--ink") : col, width: mas.length ? 1.8 : 2 }, ...mas], {
+        height: 280, baseline: rng === "1D" ? base : null, baselineLabel: rng === "1D" ? `Chiusura prec. ${fPrice(base)}` : "", range: rng, tip: tipFor, label: `${t} price`,
       });
       if (mas.length) chartEl.insertAdjacentHTML("afterbegin", `<div class="series-key">${mas.map(m => {
         const v = m.pts.at(-1).v, d = isNum(v) ? (pts.at(-1).v / v - 1) * 100 : null;
-        return `<span><i style="background:${m.color}"></i>Media ${m.n} ${fPrice(v)} <b class="${sign(d)}">${isNum(d) ? `prezzo ${fPct(d, 1)}` : ""}</b></span>`; }).join("")}</div>`);
+        return `<span><i class="${m.dash ? "dash" : ""}" style="background:${m.color};color:${m.color}"></i>Media ${m.n} ${fPrice(v)} <b class="${sign(d)}">${isNum(d) ? `prezzo ${fPct(d, 1)}` : ""}</b></span>`; }).join("")}</div>`);
     }
     // volume panel (its own axis-free strip, same x positions)
     if (pts.some(p => p.vol > 0)) {
@@ -956,7 +973,6 @@ async function loadDetailInfo() {
   const stat = (l, v) => `<div><span>${l}</span><span>${v}</span></div>`;
   const vs = k => `<span class="${sign(s[k])}">${fPct(s[k], 1)}</span>`;
   const pctOf = v => isNum(v) ? fNum(v * 100, 1) + "%" : "—";
-  const earn = isNum(i.earningsTimestamp) ? fDate(i.earningsTimestamp, { month: "short", day: "numeric", year: "numeric" }) : "—";
   const rng52 = isNum(s.lo52) && isNum(s.hi52) ? rangeViz(s.lo52, s.hi52, s.price, null, "Range a 52 settimane") : "";
   const tgt = isNum(i.targetLowPrice) && isNum(i.targetHighPrice) && isNum(s.price)
     ? rangeViz(Math.min(i.targetLowPrice, s.price), Math.max(i.targetHighPrice, s.price), s.price, i.targetMeanPrice,
@@ -968,26 +984,27 @@ async function loadDetailInfo() {
       ${stat("vs media 60 giorni", vs("vsSma60"))}${stat("Ordine medie 20/40/60", maOrder(s))}
       ${stat("vs media 50 giorni", vs("vsSma50"))}${stat("vs media 200 giorni", vs("vsSma200"))}
       ${stat("RSI (14)", fNum(s.rsi, 0))}${stat("Volatilità (20 g, annua)", isNum(s.vol20) ? fNum(s.vol20, 0) + "%" : "—")}
+      ${stat("Beta", fNum(i.beta, 2))}${stat("Short % flottante", pctOf(i.shortPercentOfFloat))}
     </div>${rng52}` : ""}</div>`;
   const newsSec = data.news?.length ? `<div class="d-sec"><h3>Notizie</h3><div class="news">${data.news.slice(0, 8).map(n => `<a href="${esc(n.url)}" target="_blank" rel="noopener"><div class="nt">${esc(n.title)}</div><div class="nm">${esc(n.publisher || "")} · ${esc(ago(n.time))}</div></a>`).join("")}</div></div>` : "";
-  const company = s.ticker ? `<details class="d-sec fold"><summary><h3>Dati della società</h3><span class="muted small">profilo, bilancio, dati del giorno</span></summary>
+  const company = s.ticker ? `<details class="d-sec fold"><summary><h3>Dati della società</h3><span class="muted small">profilo, sede, dati del giorno</span></summary>
     ${i.longBusinessSummary ? `<p class="about clamp" id="about">${esc(i.longBusinessSummary)}</p>
       <button class="link-btn" id="aboutMore">Mostra altro</button>${i.website ? ` <a class="link-btn" href="${esc(i.website)}" target="_blank" rel="noopener">${esc(i.website.replace(/^https?:\/\/(www\.)?/, ""))} ↗</a>` : ""}` : ""}
     <div class="d-stats" style="margin-top:10px">
       ${stat("Dipendenti", isNum(i.fullTimeEmployees) ? i.fullTimeEmployees.toLocaleString("it-IT") : "—")}${stat("Sede", esc([i.city, i.state || i.country].filter(Boolean).join(", ") || "—"))}
-      ${stat("Capitalizzazione", "$" + fBig(s.mcap))}${stat("Peso nell'indice", fNum(s.weight) + "%")}
-      ${stat("P/E (ultimi 12 mesi)", fNum(i.trailingPE, 1))}${stat("P/E atteso", fNum(i.forwardPE, 1))}
-      ${stat("Utile per azione (12 mesi)", fNum(i.trailingEps, 2))}${stat("Utile per azione atteso", fNum(i.forwardEps, 2))}
-      ${stat("P/S", fNum(i.priceToSalesTrailing12Months, 1))}${stat("EV/EBITDA", fNum(i.enterpriseToEbitda, 1))}
-      ${stat("Ricavi (12 mesi)", "$" + fBig(i.totalRevenue))}${stat("Crescita ricavi", isNum(i.revenueGrowth) ? fPct(i.revenueGrowth * 100, 1) : "—")}
-      ${stat("Margine lordo", pctOf(i.grossMargins))}${stat("Margine netto", pctOf(i.profitMargins))}
-      ${stat("ROE", pctOf(i.returnOnEquity))}${stat("Flusso di cassa libero", "$" + fBig(i.freeCashflow))}
-      ${stat("Rendimento dividendo", isNum(i.dividendYield) && i.dividendYield > 0 ? fNum(i.dividendYield, 2) + "%" : "—")}${stat("Beta", fNum(i.beta, 2))}
-      ${stat("Short % flottante", pctOf(i.shortPercentOfFloat))}${stat("Prossima trimestrale", earn)}
       ${stat("Apertura", fPrice(s.open))}${stat("Range del giorno", `${fPrice(s.low)} – ${fPrice(s.high)}`)}
       ${stat("Volume", fBig(s.volume))}${stat("Volume relativo", fX(s.relVol))}
     </div></details>` : "";
-  drawer.querySelector(".d-rest").innerHTML = trend + (s.ticker ? valuationHTML(data.valuation) + analystsHTML(data.analysts, s, tgt) : "") + newsSec + company;
+  const fundamentals = `<div class="d-stats val-tbl">
+      ${stat("P/E (ultimi 12 mesi)", fNum(i.trailingPE, 1))}${stat("P/E atteso", fNum(i.forwardPE, 1))}
+      ${stat("PEG", fNum(data.valuation?.peg ?? s.peg, 2))}${stat("P/S", fNum(i.priceToSalesTrailing12Months, 1))}
+      ${stat("EV/EBITDA", fNum(i.enterpriseToEbitda, 1))}${stat("Crescita ricavi", isNum(i.revenueGrowth) ? fPct(i.revenueGrowth * 100, 1) : "—")}
+      ${stat("Margine lordo", pctOf(i.grossMargins))}${stat("Margine netto", pctOf(i.profitMargins))}
+      ${stat("Flusso di cassa libero", "$" + fBig(i.freeCashflow))}${stat("ROE", pctOf(i.returnOnEquity))}
+      ${stat("Utile per azione (12 mesi)", fNum(i.trailingEps, 2))}${stat("Utile per azione atteso", fNum(i.forwardEps, 2))}
+      ${stat("Ricavi (12 mesi)", "$" + fBig(i.totalRevenue))}${stat("Rendimento dividendo", isNum(i.dividendYield) && i.dividendYield > 0 ? fNum(i.dividendYield, 2) + "%" : "—")}
+    </div>`;
+  drawer.querySelector(".d-rest").innerHTML = trend + (s.ticker ? valuationHTML(data.valuation, fundamentals) + analystsHTML(data.analysts, s, tgt) : "") + newsSec + company;
   drawer.querySelector(".d-sum").innerHTML = signalHTML(data.signal);
   const more = $("#aboutMore");
   if (more) more.onclick = () => { $("#about").classList.toggle("clamp"); more.textContent = $("#about").classList.contains("clamp") ? "Mostra altro" : "Mostra meno"; };
@@ -1026,14 +1043,14 @@ function signalHTML(sig) {
 }
 const VAL_CLS = { Economica: "cheap", "In linea": "fair", Cara: "rich" };
 const valBadge = l => l ? `<span class="vb ${VAL_CLS[l]}">${esc(l)}</span>` : "—";
-function valuationHTML(v) {
-  if (!v) return "";
+function valuationHTML(v, table = "") {
+  if (!v) return `<div class="d-sec"><h3>Valutazione</h3>${table}</div>`;
   const d = isNum(v.ratio) ? (v.ratio - 1) * 100 : null;
   const head = v.label ? `${valBadge(v.label)} <span class="muted">${Math.abs(d) < 3 ? "in media con i confronti"
     : `in media ${fNum(Math.abs(d), 0)}% ${d > 0 ? "più cara" : "più economica"} dei confronti`}</span>` : `<span class="muted">Dati insufficienti per un giudizio</span>`;
   const pe = v.vsHistory?.pe;
   const years = pe ? `<div class="muted small">P/E alle chiusure di bilancio: ${pe.years.slice().reverse().map(y => `${y.fy.slice(0, 4)} ${fNum(y.v, 1)}`).join(" · ")} · oggi ${fNum(pe.value, 1)}</div>` : "";
-  return `<div class="d-sec"><h3>Valutazione</h3><div class="val-head">${head}</div>
+  return `<div class="d-sec"><h3>Valutazione</h3>${table}<div class="val-head">${head}</div>
     <ul class="why">${v.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>${years}
     <div class="muted small">Confronto con la mediana dei titoli dello stesso settore nel Nasdaq-100 e con la storia del titolo
     (P/E e P/S alle ultime chiusure di bilancio). Giudizio: Economica sotto −15%, Cara sopra +18%.</div></div>`;
