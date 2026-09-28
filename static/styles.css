@@ -563,3 +563,4 @@ details.fold > summary h3 { margin: 0; }
 table.my td.nw { max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 table.my td.nw a { color: var(--ink); text-decoration: none; }
 table.my td.nw a:hover { text-decoration: underline; }
+.mini-table .mine { color: var(--warn); }

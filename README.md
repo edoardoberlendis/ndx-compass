@@ -19,16 +19,18 @@ Oppure dal Terminale:
 
 ## Cosa contiene
 
-- **Panoramica**: indicatori (ampiezza di mercato, % di titoli sopra le medie 20/40/60 e 50/200 giorni, massimi/minimi 52 settimane, VIX),
-  mappa del mercato, grafico intraday del Nasdaq-100, migliori/peggiori del giorno, volumi insoliti,
-  titoli che muovono l'indice, settori, segnali, watchlist, calendario trimestrali, notizie.
-- **Perché si muovono** (in Panoramica): per gli 8 migliori e gli 8 peggiori del giorno cerca tra le ultime
+- **Oggi**: 4 indicatori (Nasdaq-100, titoli in rialzo/ribasso, % di titoli sopra le medie 20/40/60 e 200, VIX),
+  mappa del mercato, grafico intraday del Nasdaq-100, chi si è mosso e perché, settori, trimestrali dei prossimi 7 giorni
+  (i miei titoli in cima).
+- **I miei titoli**: i preferiti (★) con prezzo, variazioni, posizione rispetto alle medie, valutazione, analisti, segnale,
+  prossima trimestrale e ultima notizia. Salvati in `watchlist.json` nella cartella del progetto.
+- **Chi si è mosso e perché** (in Oggi): per gli 8 migliori e gli 8 peggiori del giorno cerca tra le ultime
   40 notizie Yahoo quelle che nominano la società, uscite tra la chiusura precedente e la mattina dopo, e ne
   ricava il probabile motivo con regole a parole chiave (conti, guidance, analisti, acquisizioni, cause legali,
   prodotti/contratti, settore, macro). Preferisce gli articoli che spiegano il movimento ("Shares Jump, What You
   Need To Know") e ne estrae la frase con la causa. Se non trova nulla dice se il titolo si è mosso insieme al settore.
   È un aiuto, non una certezza: il link porta all'articolo per verificare.
-- **Segnale finale** (in Panoramica, nello Screener, in cima alla scheda del titolo e nel report): Molto positivo /
+- **Segnale finale** (nello Screener, in I miei titoli, in cima alla scheda del titolo e nel report): Molto positivo /
   Positivo / Neutro / Negativo / Molto negativo, da un punteggio −100…+100 che combina
   tecnica 40% (medie 20/40/60, RSI, forza vs QQQ), analisti 25% (target, giudizio medio, upgrade/downgrade, revisioni
   delle stime), valutazione 20% (settore + storia + PEG) e notizie 15% (tono dei titoli degli ultimi 3 giorni che

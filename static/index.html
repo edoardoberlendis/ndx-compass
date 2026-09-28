@@ -26,7 +26,7 @@
 
 <nav class="tabs">
   <div class="tablist" role="tablist">
-    <button class="tab active" data-view="overview">Panoramica</button>
+    <button class="tab active" data-view="overview">Oggi</button>
     <button class="tab" data-view="watch">I miei titoli</button>
     <button class="tab" data-view="map">Mappa</button>
     <button class="tab" data-view="screener">Screener</button>
@@ -39,7 +39,7 @@
 <main>
   <div id="loading" class="loading"><div class="spinner"></div><p>Caricamento dati di mercato…</p><small>Il primo caricamento scarica circa 110 serie da Yahoo Finance e richiede una ventina di secondi.</small></div>
 
-  <!-- OVERVIEW -->
+  <!-- TODAY (view id "overview" kept for saved links) -->
   <section id="view-overview" class="view" hidden>
     <div class="kpis" id="kpis"></div>
 
@@ -59,44 +59,20 @@
           <div class="card-h"><h2>Nasdaq-100 · oggi</h2><span class="card-meta" id="ndxHead"></span></div>
           <div id="ndxChart" class="chart"></div>
         </div>
-        <div class="card">
-          <div class="card-h"><h2>Ampiezza di mercato · oggi</h2><span class="card-meta">titoli in rialzo meno titoli in ribasso</span></div>
-          <div id="breadthChart" class="chart"></div>
-        </div>
       </div>
     </div>
 
-    <div class="grid-4">
-      <div class="card"><div class="card-h"><h2>Migliori del giorno</h2></div><div id="gainers" class="mini-table"></div></div>
-      <div class="card"><div class="card-h"><h2>Peggiori del giorno</h2></div><div id="losers" class="mini-table"></div></div>
-      <div class="card"><div class="card-h"><h2>Volumi insoliti</h2><span class="card-meta">vs media a 3 mesi, rapportati all'ora</span></div><div id="active" class="mini-table"></div></div>
-      <div class="card"><div class="card-h"><h2>Chi muove l'indice</h2><span class="card-meta">punti indice stimati (pesati per capitalizzazione)</span></div><div id="movers" class="chart"></div></div>
-    </div>
-
     <div class="card">
-      <div class="card-h"><h2>Perché si muovono</h2><span class="card-meta" id="whyMeta">motivi ricavati dalle notizie con regole automatiche · da verificare leggendo l'articolo</span></div>
+      <div class="card-h"><h2>Chi si è mosso e perché</h2><span class="card-meta">motivi ricavati dalle notizie con regole automatiche · da verificare leggendo l'articolo</span></div>
       <div class="mv-cols">
         <div><h4>Migliori del giorno</h4><div id="whyTop" class="mv-list"><div class="empty">Caricamento notizie…</div></div></div>
         <div><h4>Peggiori del giorno</h4><div id="whyFlop" class="mv-list"><div class="empty">Caricamento notizie…</div></div></div>
       </div>
     </div>
 
-    <div class="card">
-      <div class="card-h"><h2>Segnale finale</h2><span class="card-meta">tecnica 40% · analisti 25% · valutazione 20% · notizie 15% · clicca un titolo per le motivazioni · non è una consulenza finanziaria</span></div>
-      <div class="mv-cols">
-        <div><h4>Segnali più positivi</h4><div id="sigTop" class="mini-table"></div></div>
-        <div><h4>Segnali più negativi</h4><div id="sigFlop" class="mini-table"></div></div>
-      </div>
-    </div>
-
     <div class="grid-2">
       <div class="card"><div class="card-h"><h2>Performance dei settori</h2><div class="seg tf-seg small" data-tf-seg></div></div><div id="sectorBars" class="chart"></div></div>
-      <div class="card"><div class="card-h"><h2>Segnali</h2><span class="card-meta">clicca per filtrare</span></div><div id="signals" class="signals"></div></div>
-    </div>
-
-    <div class="grid-2">
-      <div class="card"><div class="card-h"><h2>Calendario trimestrali</h2><span class="card-meta">prossimi 30 giorni</span></div><div id="earnings" class="mini-table"></div></div>
-      <div class="card"><div class="card-h"><h2>Notizie</h2></div><div id="news" class="news"></div></div>
+      <div class="card"><div class="card-h"><h2>Trimestrali</h2><span class="card-meta">prossimi 7 giorni · ★ i miei titoli in cima</span></div><div id="earnings" class="mini-table"></div></div>
     </div>
   </section>
 

@@ -299,14 +299,8 @@ function renderOverview() {
   renderTreemap($("#ovMap"));
   $$("[data-legend]").forEach(el => el.innerHTML = legendHTML(state.tf));
   renderIndexChart();
-  renderBreadth();
-  renderMovers();
-  renderLists();
   renderSectorBars($("#sectorBars"), sectors(), state.tf);
-  renderSignals();
   renderEarnings();
-  renderSignalLists();
-  loadNews();
   loadWhy();
 }
 
@@ -314,25 +308,17 @@ function renderKpis() {
   const S = stocks(), ndx = state.snap.indices["^NDX"], vix = state.snap.indices["^VIX"];
   const adv = S.filter(s => s.chgPct > 0).length, dec = S.filter(s => s.chgPct < 0).length, unch = S.length - adv - dec;
   const med = d3.median(S, s => s.chgPct);
-  const above = k => S.filter(s => s[k] > 0).length / S.length * 100;
-  const a50 = above("vsSma50");
-  const a200 = S.filter(s => s.vsSma200 > 0).length / S.length * 100;
-  const hi = S.filter(s => s.fromHi52 > -2).length, lo = S.filter(s => s.fromLo52 < 2).length;
-  const top = [...S].sort((a, b) => Math.abs(b.contrib) - Math.abs(a.contrib))[0];
+  const above = k => Math.round(S.filter(s => s[k] > 0).length / S.length * 100);
   const kpi = (l, v, s, extra = "") => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s}</div>${extra}</div>`;
   $("#kpis").innerHTML = [
     ndx ? kpi("Nasdaq-100", fNum(ndx.price, 2), `<span class="${sign(ndx.chg)}">${fChg(ndx.chg)} (${fPct(ndx.chgPct)})</span> · da inizio anno <span class="${sign(ndx.perfYTD)}">${fPct(ndx.perfYTD, 1)}</span>`) : "",
     kpi("In rialzo / In ribasso", `<span class="up">${adv}</span> <span class="muted">/</span> <span class="down">${dec}</span>`,
       `${unch} invariati · mediana ${fPct(med)}`,
       `<div class="breadth-bar"><i style="width:${adv}%;background:var(--up)"></i><i style="width:${unch}%;background:var(--baseline)"></i><i style="width:${dec}%;background:var(--down)"></i></div>`),
-    kpi("Sopra le medie 20 / 40 / 60", `${Math.round(above("vsSma20"))} / ${Math.round(above("vsSma40"))} / ${Math.round(above("vsSma60"))}%`,
-      `media 50: ${Math.round(a50)}% · media 200: ${Math.round(a200)}%`),
-    kpi("Estremi a 52 settimane", `<span class="up">${hi}</span> <span class="muted">/</span> <span class="down">${lo}</span>`, "entro il 2% dal massimo / minimo"),
-    top ? kpi("Chi pesa di più sull'indice", esc(top.ticker), `<span class="${sign(top.contrib)}">${top.contrib > 0 ? "+" : ""}${fNum(top.contrib, 1)} punti</span> · ${fPct(top.chgPct)}`) : "",
+    kpi("Sopra le medie 20 / 40 / 60 · 200", `${above("vsSma20")} / ${above("vsSma40")} / ${above("vsSma60")} <span class="muted">·</span> ${above("vsSma200")}%`,
+      "% dei titoli con il prezzo sopra la media"),
     vix ? kpi("Volatilità (VIX)", fNum(vix.price, 2), `<span class="${sign(-vix.chgPct)}">${fPct(vix.chgPct)}</span> oggi`) : "",
-    kpi("Capitalizzazione totale", "$" + fBig(state.snap.totalMcap), `${S.length} titoli`),
   ].join("");
-  $$("#kpis .kpi").forEach((el, i) => { if (i === 4 && top) { el.style.cursor = "pointer"; el.onclick = () => openDetail(top.ticker); } });
 }
 
 // generic line chart (index-based x so overnight/weekend gaps collapse)
@@ -441,39 +427,6 @@ function renderIndexChart() {
   });
 }
 
-function renderBreadth() {
-  const el = $("#breadthChart"), B = state.snap.breadth || [];
-  el.innerHTML = "";
-  if (!B.length) { el.innerHTML = `<div class="empty">Nessun dato intraday per ora</div>`; return; }
-  const W = el.clientWidth || 360, H = 150, m = { t: 8, r: 40, b: 22, l: 6 }, iw = W - m.l - m.r, ih = H - m.t - m.b;
-  const net = B.map(b => b.adv - b.dec);
-  const ext = Math.max(10, d3.max(net, Math.abs));
-  const x = d3.scaleBand().domain(d3.range(B.length)).range([0, iw]).paddingInner(B.length > 60 ? 0.15 : 0.25);
-  const y = d3.scaleLinear().domain([-ext, ext]).range([ih, 0]).nice(4);
-  const svg = d3.select(el).append("svg").attr("width", W).attr("height", H).attr("role", "img").attr("aria-label", "Saldo tra titoli in rialzo e in ribasso durante la giornata");
-  const g = svg.append("g").attr("transform", `translate(${m.l},${m.t})`);
-  g.append("g").attr("class", "gridline").call(d3.axisLeft(y).ticks(4).tickSize(-iw).tickFormat(""));
-  g.append("g").attr("class", "axis").attr("transform", `translate(${iw},0)`).call(d3.axisRight(y).ticks(4).tickSize(0).tickPadding(6).tickFormat(d => d > 0 ? "+" + d : d)).select(".domain").remove();
-  const ticks = pickTicks(B, "1D", 6);
-  g.append("g").attr("class", "axis").attr("transform", `translate(0,${ih})`)
-    .call(d3.axisBottom(x).tickValues(ticks).tickSize(0).tickPadding(8).tickFormat(i => tickLabel(B[i].t, "1D"))).select(".domain").remove();
-  const up = css("--up"), dn = css("--down");
-  g.selectAll("rect.b").data(net).join("rect").attr("class", "b")
-    .attr("x", (_, i) => x(i)).attr("width", x.bandwidth())
-    .attr("y", d => d >= 0 ? y(d) : y(0)).attr("height", d => Math.max(1, Math.abs(y(d) - y(0))))
-    .attr("fill", d => d >= 0 ? up : dn).attr("rx", Math.min(1.5, x.bandwidth() / 2));
-  g.append("line").attr("x1", 0).attr("x2", iw).attr("y1", y(0)).attr("y2", y(0)).attr("stroke", css("--baseline"));
-  g.append("rect").attr("width", iw).attr("height", ih).attr("fill", "transparent")
-    .on("mousemove", ev => {
-      const [mx] = d3.pointer(ev); const i = Math.max(0, Math.min(B.length - 1, Math.floor(mx / x.step())));
-      const b = B[i];
-      showTip(`<div class="tip-h">${fTime(b.t)} ora NY</div>
-        <div class="tip-row"><span>In rialzo</span><b class="up">${b.adv}</b></div>
-        <div class="tip-row"><span>In ribasso</span><b class="down">${b.dec}</b></div>
-        <div class="tip-row"><span>Titolo mediano</span><b class="${sign(b.median)}">${fPct(b.median)}</b></div>`, ev);
-    }).on("mouseleave", hideTip);
-}
-
 // horizontal diverging bars (used for movers, sectors, sector members)
 function hbars(el, rows, o) {
   el.innerHTML = "";
@@ -497,34 +450,12 @@ function hbars(el, rows, o) {
     .on("click", (ev, r) => { hideTip(); o.click && o.click(r); });
 }
 
-function renderMovers() {
-  const S = stocks().filter(s => isNum(s.contrib));
-  const sorted = [...S].sort((a, b) => b.contrib - a.contrib);
-  const rows = [...sorted.slice(0, 6), ...sorted.slice(-6)].filter((r, i, a) => a.indexOf(r) === i)
-    .map(s => ({ name: s.ticker, v: s.contrib, label: (s.contrib > 0 ? "+" : "") + fNum(s.contrib, 1), s }));
-  hbars($("#movers"), rows, {
-    rowH: 21, click: r => openDetail(r.s.ticker),
-    tip: r => `<div class="tip-h">${esc(r.s.name)}</div><div class="tip-row"><span>Punti</span><b class="${sign(r.v)}">${r.label}</b></div>
-      <div class="tip-row"><span>Variazione</span><b class="${sign(r.s.chgPct)}">${fPct(r.s.chgPct)}</b></div><div class="tip-row"><span>Peso</span><b>${fNum(r.s.weight)}%</b></div>`,
-  });
-}
-
 function miniTable(el, list, cols, empty = "Nessun elemento") {
   if (!list.length) { el.innerHTML = `<div class="empty">${empty}</div>`; return; }
   el.innerHTML = `<table>${list.map(s => `<tr data-t="${esc(s.ticker)}">${cols(s)}</tr>`).join("")}</table>`;
   el.onclick = e => { const tr = e.target.closest("tr[data-t]"); if (tr && !e.target.closest(".star")) openDetail(tr.dataset.t); };
 }
 const pill = v => `<span class="pill ${sign(v)}">${fPct(v)}</span>`;
-
-function renderLists() {
-  const S = stocks();
-  const byChg = [...S].filter(s => isNum(s.chgPct)).sort((a, b) => b.chgPct - a.chgPct);
-  const row = s => `<td class="t">${esc(s.ticker)}</td><td class="n">${esc(s.name)}</td><td>${spark(s.spark, 60, 18, s.prevClose)}</td><td class="r num">${fPrice(s.price)}</td><td class="r">${pill(s.chgPct)}</td>`;
-  miniTable($("#gainers"), byChg.slice(0, 8), row);
-  miniTable($("#losers"), byChg.slice(-8).reverse(), row);
-  const act = [...S].filter(s => isNum(s.relVol)).sort((a, b) => b.relVol - a.relVol).slice(0, 8);
-  miniTable($("#active"), act, s => `<td class="t">${esc(s.ticker)}</td><td class="n">${esc(s.name)}</td><td class="r num"><b>${fX(s.relVol)}</b></td><td class="r num muted">${fBig(s.volume)}</td><td class="r">${pill(s.chgPct)}</td>`);
-}
 
 function renderSectorBars(el, secs, tf) {
   const rows = secs.filter(s => isNum(s[tf])).sort((a, b) => b[tf] - a[tf])
@@ -572,21 +503,6 @@ function daysTo(ts) {
   return d >= -0.5 ? d : null;
 }
 
-function renderSignals() {
-  const ids = ["above3", "below3", "highs", "lows", "volume", "gapup", "gapdown", "overbought", "oversold", "earnings"];
-  const S = stocks();
-  $("#signals").innerHTML = ids.map(id => {
-    const p = PRESETS.find(x => x.id === id);
-    const hits = S.filter(p.f).sort((a, b) => (b.mcap || 0) - (a.mcap || 0));
-    return `<button class="signal" data-preset="${id}"><span class="sl">${esc(p.label)}</span><span class="sc">${hits.length}</span>
-      <span class="st">${hits.length ? hits.slice(0, 8).map(h => esc(h.ticker)).join(" · ") : esc(p.desc || "nessuno al momento")}</span></button>`;
-  }).join("");
-}
-$("#signals").addEventListener("click", e => {
-  const b = e.target.closest("[data-preset]");
-  if (b) { state.preset = b.dataset.preset; setView("screener"); }
-});
-
 document.addEventListener("click", e => {
   const b = e.target.closest("[data-star]");
   if (!b) return;
@@ -597,38 +513,24 @@ function toggleWatch(t) {
   state.watch.has(t) ? state.watch.delete(t) : state.watch.add(t);
   saveWatch();
   if (state.view === "watch") renderMyStocks();
+  if (state.view === "overview") renderEarnings();
   if (state.view === "screener") renderScreener();
   if (state.detail === t) renderDetailHeader();
 }
 
-function renderSignalLists() {
-  const S = stocks().filter(s => isNum(s.sigScore)).sort((a, b) => b.sigScore - a.sigScore);
-  const row = s => `<td class="t">${esc(s.ticker)}</td><td class="n">${esc(s.name)}</td><td class="r">${sigBadge(s.signal)}</td><td class="r">${scoreBar(s.sigScore)}</td>`;
-  miniTable($("#sigTop"), S.filter(s => s.sigScore > 0).slice(0, 8), row, "Nessun segnale positivo");
-  miniTable($("#sigFlop"), S.filter(s => s.sigScore < 0).slice(-8).reverse(), row, "Nessun segnale negativo");
-}
-
+// earnings of the next 7 days; my stocks first
 function renderEarnings() {
-  const list = stocks().filter(s => { const d = daysTo(s.earningsTs); return d != null && d <= 30; })
-    .sort((a, b) => a.earningsTs - b.earningsTs).slice(0, 10);
+  const mine = s => state.watch.has(s.ticker) ? 1 : 0;
+  const list = stocks().filter(s => { const d = daysTo(s.earningsTs); return d != null && d <= 7; })
+    .sort((a, b) => mine(b) - mine(a) || a.earningsTs - b.earningsTs);
   miniTable($("#earnings"), list, s => {
     const d = Math.round(daysTo(s.earningsTs));
-    return `<td class="t">${esc(s.ticker)}</td><td class="n">${esc(s.name)}</td>
+    return `<td class="t">${mine(s) ? '<span class="mine" title="Tra i miei titoli">★</span> ' : ""}${esc(s.ticker)}</td><td class="n">${esc(s.name)}</td>
       <td class="r num">${fDate(s.earningsTs, { weekday: "short", month: "short", day: "numeric" })}</td>
       <td class="r muted num">${d <= 0 ? "oggi" : "tra " + d + " g"}</td><td class="r num muted">${fBig(s.mcap)}</td>`;
-  }, "Nessuna trimestrale nei prossimi 30 giorni");
+  }, "Nessuna trimestrale nei prossimi 7 giorni");
 }
 
-let newsLoadedAt = 0;
-async function loadNews() {
-  if (Date.now() - newsLoadedAt < 5 * 60_000) return;
-  newsLoadedAt = Date.now();
-  try {
-    const items = await (await fetch("/api/news")).json();
-    $("#news").innerHTML = items.slice(0, 9).map(n => `<a href="${esc(n.url)}" target="_blank" rel="noopener">
-      <div class="nt">${esc(n.title)}</div><div class="nm"><span class="tag">${esc(n.ticker)}</span>${esc(n.publisher || "")} · ${esc(ago(n.time))}</div></a>`).join("") || `<div class="empty">Nessuna notizia</div>`;
-  } catch { $("#news").innerHTML = `<div class="empty">Notizie non disponibili</div>`; }
-}
 // ------------------------------------------------------------ why they move (rule-based, from /api/movers-why)
 let whyLoadedAt = 0;
 async function loadWhy() {
