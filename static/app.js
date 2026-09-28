@@ -496,6 +496,15 @@ const PRESETS = [
   { id: "sigSell", label: "Segnale negativo", f: s => s.sigScore <= -20, desc: "segnale finale Negativo o Molto negativo" },
   { id: "estDown", label: "Stime in calo", f: s => s.epsRev30 < -3, desc: "stima utile del prossimo anno abbassata di oltre il 3% in 30 giorni" },
 ];
+// screener quick filters grouped by topic (same filters, only laid out in rows)
+const PRESET_GROUPS = [
+  { label: "", ids: ["all", "watch"] },
+  { label: "Oggi", ids: ["gainers", "losers", "gapup", "gapdown", "volume", "earnings"] },
+  { label: "Trend", ids: ["above3", "below3", "golden", "broken", "highs", "lows", "overbought", "oversold"] },
+  { label: "Valutazione", ids: ["cheap", "rich", "value"] },
+  { label: "Analisti", ids: ["upside", "upgrades", "estUp", "estDown"] },
+  { label: "Segnale", ids: ["sigBuy", "sigSell"] },
+];
 function daysTo(ts) {
   if (!isNum(ts)) return null;
   const d = (ts * 1000 - Date.now()) / 864e5;
@@ -714,7 +723,8 @@ function renderScreener() {
   const secs = [...new Set(S.map(s => s.sector))].sort();
   if (sel.options.length !== secs.length + 1) sel.innerHTML = `<option value="">Tutti i settori</option>` + secs.map(s => `<option>${esc(s)}</option>`).join("");
   sel.value = state.sector;
-  $("#presets").innerHTML = PRESETS.map(p => `<button data-p="${p.id}" class="${p.id === state.preset ? "on" : ""}" title="${esc(p.desc || "")}">${esc(p.label)}<span>${S.filter(p.f).length}</span></button>`).join("");
+  const chip = p => `<button data-p="${p.id}" class="${p.id === state.preset ? "on" : ""}" title="${esc(p.desc || "")}">${esc(p.label)}<span>${S.filter(p.f).length}</span></button>`;
+  $("#presets").innerHTML = PRESET_GROUPS.map(g => `<div class="chip-row"><span class="chip-g">${esc(g.label)}</span>${g.ids.map(id => chip(PRESETS.find(p => p.id === id))).join("")}</div>`).join("");
   const rows = screenerRows();
   const cols = COLSETS[state.cols];
   $("#scrCount").textContent = `${rows.length} di ${S.length}`;
