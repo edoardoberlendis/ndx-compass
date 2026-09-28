@@ -581,3 +581,8 @@ table.my td.nw a:hover { text-decoration: underline; }
 .d-ma { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--ink-2); margin: -4px 0 10px; font-variant-numeric: tabular-nums; }
 .val-tbl { margin-bottom: 10px; }
 .series-key i.dash, .ma-toggles .check i.dash { background: none !important; border-top: 2px dashed currentColor; height: 0; }
+
+/* ------------------------------------------------ detail: full screen mode */
+.drawer.full { width: 100vw; border-left: 0; padding: 18px 28px 40px; }
+.drawer.full .d-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 36px; align-items: start; }
+@media (max-width: 900px) { .drawer.full .d-cols { display: block; } }

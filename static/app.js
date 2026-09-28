@@ -805,11 +805,12 @@ const MAS = [{ n: 20, color: "--series-1" }, { n: 40, color: "--series-2" }, { n
 const MA_RANGES = ["1M", "6M", "YTD", "1Y"];
 const dMA = new Set(LS.get("dMA", [20, 40, 60, 200]));
 let dDaily = null;   // { t, pts } two years of daily closes for the open stock
+let dFull = LS.get("dFull", false);   // detail as side panel (false) or full screen (true), remembered
 
 function openDetail(t) {
   state.detail = t; dInfo = null; dDaily = null; dRange = "1D";
   drawer.innerHTML = `<div class="d-top"></div><div class="d-sum"></div><div class="d-ctrl"></div><div id="dChart" class="chart"></div><div id="dVol" class="chart"></div><div class="d-rest"><div class="loading" style="padding:40px"><div class="spinner"></div></div></div>`;
-  drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); scrim.hidden = false;
+  drawer.classList.add("open"); drawer.classList.toggle("full", dFull); drawer.setAttribute("aria-hidden", "false"); scrim.hidden = false;
   renderDetailHeader();
   renderDetailCtrl();
   loadDetailChart();
@@ -830,11 +831,20 @@ function renderDetailHeader() {
   top.innerHTML = `<div class="d-head"><div><div class="tt">${esc(t)}</div><div class="nm">${esc(dInfo?.longName || name)}</div>
       ${s?.sector ? `<div class="sec">${esc(s.sector)} › ${esc(s.industry)} · capitalizzazione $${fBig(s.mcap)} · ${fNum(s.weight)}% dell'indice</div>` : ""}</div>
       <div class="actions">${state.bySym.has(t) ? `<button class="icon-btn star ${state.watch.has(t) ? "on" : ""}" data-star="${esc(t)}" title="Preferiti">${state.watch.has(t) ? "★" : "☆"}</button>` : ""}
+      <button class="icon-btn" id="dFull" title="${dFull ? "Torna al pannello laterale" : "Apri a schermo intero"}" aria-label="${dFull ? "Pannello laterale" : "Schermo intero"}">${dFull ? "⤡" : "⤢"}</button>
       <button class="icon-btn close-btn" id="dClose" aria-label="Chiudi">×</button></div></div>
     ${s ? `<div class="d-price"><span class="p num">${fPrice(s.price)}</span><span class="c ${sign(s.chg)}">${fChg(s.chg)} (${fPct(s.chgPct)})</span>
       <span class="when">${state.snap.status === "open" ? "in tempo reale · " : "ultimo · "}${esc(new Date(state.snap.lastQuote || state.snap.asOf).toLocaleTimeString("it-IT", { timeZone: tz, hour: "numeric", minute: "2-digit" }))} ora NY</span>
       ${earnBadge(s)}</div>${maRow(s)}` : ""}`;
   $("#dClose").onclick = closeDetail;
+  $("#dFull").onclick = toggleFull;
+}
+// switch side panel <-> full screen; charts are redrawn at the new width
+function toggleFull() {
+  dFull = !dFull; LS.set("dFull", dFull);
+  drawer.classList.toggle("full", dFull);
+  renderDetailHeader();
+  loadDetailChart();
 }
 // "Trimestrale 23 ott · tra 25 giorni" (only for a future date)
 function earnBadge(s) {
@@ -1004,7 +1014,9 @@ async function loadDetailInfo() {
       ${stat("Utile per azione (12 mesi)", fNum(i.trailingEps, 2))}${stat("Utile per azione atteso", fNum(i.forwardEps, 2))}
       ${stat("Ricavi (12 mesi)", "$" + fBig(i.totalRevenue))}${stat("Rendimento dividendo", isNum(i.dividendYield) && i.dividendYield > 0 ? fNum(i.dividendYield, 2) + "%" : "—")}
     </div>`;
-  drawer.querySelector(".d-rest").innerHTML = trend + (s.ticker ? valuationHTML(data.valuation, fundamentals) + analystsHTML(data.analysts, s, tgt) : "") + newsSec + company;
+  drawer.querySelector(".d-rest").innerHTML = `<div class="d-cols">
+      <div class="d-col">${trend}${s.ticker ? valuationHTML(data.valuation, fundamentals) : ""}</div>
+      <div class="d-col">${s.ticker ? analystsHTML(data.analysts, s, tgt) : ""}${newsSec}</div></div>${company}`;
   drawer.querySelector(".d-sum").innerHTML = signalHTML(data.signal);
   const more = $("#aboutMore");
   if (more) more.onclick = () => { $("#about").classList.toggle("clamp"); more.textContent = $("#about").classList.contains("clamp") ? "Mostra altro" : "Mostra meno"; };
@@ -1434,7 +1446,7 @@ $("#themeBtn").addEventListener("click", () => {
 });
 
 let rz;
-addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { if (state.snap) renderAll(); }, 150); });
+addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { if (state.snap) renderAll(); if (state.detail) loadDetailChart(); }, 150); });
 
 // ------------------------------------------------------------ boot
 (async function boot() {
