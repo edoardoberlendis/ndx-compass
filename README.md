@@ -42,8 +42,9 @@ Oppure dal Terminale:
   compaiono i titoli di quel settore; di nuovo sulla stessa riga (o "Tutti i settori") si torna a tutti.
 - **Report**: il report tecnico generato da `signals.py` (vedi sotto): sintesi, mappa di rotazione, temi, cosa è cambiato
   (in frasi semplici rispetto al report precedente), tabella delle medie e backtest.
-- **Idee (sperimentali)**: le idee di trading (entrata/stop/target) e i setup nuovi o non più segnalati del report scelto
-  in Report. Si basano solo sulla parte tecnica, che il backtest non ha dimostrato dare un vantaggio.
+- **Idee**: le idee di trading (entrata/stop/target) del report scelto in Report, con in cima l'avviso che si basano
+  solo sulla parte tecnica, che il backtest non ha dimostrato dare un vantaggio. Se alcuni dei miei titoli (★) hanno
+  cambiato setup rispetto al report precedente, una riga lo dice (le etichette inglesi dei report vecchi vengono tradotte).
 - **Scheda titolo**: grafico 1G–MAX, confronto con NDX, fondamentali, target degli analisti, notizie, più:
   - **Valutazione** (Economica / In linea / Cara): P/E atteso, P/S ed EV/EBITDA contro la mediana dei titoli dello
     stesso settore nel Nasdaq-100 (saltato se il settore ha meno di 3 titoli) e P/E / P/S di oggi contro la mediana

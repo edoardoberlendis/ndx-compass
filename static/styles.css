@@ -635,3 +635,6 @@ table.my td.nw a:hover { text-decoration: underline; }
 .nk.news { background: var(--surface-3); color: var(--ink-2); }
 .nk.opinion { background: color-mix(in srgb, var(--series-4) 18%, transparent); color: var(--series-4); }
 .news-opts { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 0 8px; }
+
+/* ------------------------------------------------ Idee: my stocks' setup changes (one line) */
+.my-setup { border-left: 3px solid var(--accent); line-height: 1.5; }

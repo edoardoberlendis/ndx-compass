@@ -189,6 +189,10 @@ def classify(m):
 
 SETUP_EXTENDED, SETUP_BULL_X, SETUP_BEAR_X = "Tirato", "Incrocio rialzista", "Incrocio ribassista"
 SETUP_PULLBACK = "Ritracciamento in trend rialzista"
+# reports saved before the Italian translation carry English setup names: translate them before comparing
+SETUP_OLD_EN = {"Extended": SETUP_EXTENDED, "Bullish crossover": SETUP_BULL_X, "Bearish crossover": SETUP_BEAR_X,
+                "Pullback in uptrend": SETUP_PULLBACK, "Momentum leader": "Leader di momentum",
+                "Oversold in uptrend": "Ipervenduto in trend rialzista", "Downtrend": "Trend ribassista"}
 QUADRANT_IT = {"Leading": "leader", "Weakening": "in indebolimento", "Lagging": "in ritardo", "Improving": "in miglioramento"}
 
 
@@ -391,7 +395,7 @@ def build_report():
 
 
 def diff_reports(prev, rows, ideas, sectors, themes):
-    prev_ideas = {i["ticker"]: i["setup"] for i in prev.get("ideas", [])}
+    prev_ideas = {i["ticker"]: SETUP_OLD_EN.get(i["setup"], i["setup"]) for i in prev.get("ideas", [])}
     now_ideas = {i["ticker"]: i["setup"] for i in ideas}
     prev_scores = {s["ticker"]: s["score"] for s in prev.get("stocks", [])}
     prev_groups = {g["name"]: g for g in prev.get("sectors", []) + prev.get("themes", [])}

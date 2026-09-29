@@ -1326,20 +1326,35 @@ async function renderIdeas() {
   }
   if (state.view === "trade") drawTrade(); else drawIdeas();
 }
-// "Idee (sperimentali)": setup changes + trade idea cards of the report chosen in Report
+// setup names of reports saved before the Italian translation (same table as signals.SETUP_OLD_EN)
+const SETUP_EN = { Extended: "Tirato", "Bullish crossover": "Incrocio rialzista", "Bearish crossover": "Incrocio ribassista",
+  "Pullback in uptrend": "Ritracciamento in trend rialzista", "Momentum leader": "Leader di momentum",
+  "Oversold in uptrend": "Ipervenduto in trend rialzista", Downtrend: "Trend ribassista" };
+const setupIT = x => SETUP_EN[x] || x;
+// one short line, only when some of my stocks (watchlist.json) changed setup since the previous report
+function renderMySetupChanges(R) {
+  const el = $("#mySetup"), P = ideasState.prev?.id === R.prevId ? ideasState.prev.R : null;
+  el.hidden = true;
+  if (!P) return;
+  const before = new Map(P.ideas.map(i => [i.ticker, setupIT(i.setup)]));
+  const now = new Map(R.ideas.map(i => [i.ticker, setupIT(i.setup)]));
+  const items = [...state.watch].map(t => {
+    const a = before.get(t), b = now.get(t);
+    if (a === b) return null;
+    const what = b ? (a ? `ora ${b}, prima ${a}` : `ora ${b}`) : `non più ${a}`;
+    return `<b class="tlink" data-open="${esc(t)}">${esc(t)}</b> (${esc(what)})`;
+  }).filter(Boolean);
+  if (!items.length) return;
+  el.innerHTML = `${items.length === 1 ? "1 dei tuoi titoli ha" : `${items.length} dei tuoi titoli hanno`} cambiato setup
+    rispetto al report ${esc(repLabel(R.prevId))}: ${items.join(", ")}.`;
+  el.hidden = false;
+}
+// Idee: my stocks' setup changes + trade idea cards of the report chosen in Report
 function drawTrade() {
   const R = ideasState.report;
   if (!R) return;
   $("#tradeMeta").textContent = `Report: ${repLabel(R.id)} · prezzi del ${dayIT(R.dataAsOf)}`;
-  const c = R.changes;
-  $("#setupCard").hidden = !c;
-  if (c) {
-    $("#setupMeta").textContent = `rispetto al report ${repLabel(c.since)}`;
-    const block = (title, items, fn) => `<div><h4>${title}</h4>${items.length ? items.map(fn).join("") : `<div class="muted">Nessuno</div>`}</div>`;
-    $("#setupChanges").innerHTML =
-      block("Setup nuovi o cambiati", c.newIdeas, i => `<div class="it" data-t="${esc(i.ticker)}"><b>${esc(i.ticker)}</b><span>${esc(i.setup)}</span></div>`) +
-      block("Non più segnalati", c.dropped, i => `<div class="it" data-t="${esc(i.ticker)}"><b>${esc(i.ticker)}</b><span class="muted">${esc(i.setup)}</span></div>`);
-  }
+  renderMySetupChanges(R);
   renderIdeaCards(R);
 }
 
@@ -1563,7 +1578,7 @@ function ideaCard(i) {
   const lvCell = (l, v, cls = "") => `<div><div class="l">${l}</div><div class="v ${cls}">${v}</div></div>`;
   return `<div class="idea">
     <div class="idea-h"><div style="min-width:0"><span class="tt" data-open="${esc(i.ticker)}">${esc(i.ticker)}</span> <span class="nm">${esc(i.name)}</span><br>
-      <span class="setup ${i.side}">${esc(i.setup)}</span></div>
+      <span class="setup ${i.side}">${esc(setupIT(i.setup))}</span></div>
       <div class="px"><b>${fPrice(i.price)}</b><br><span class="${sign(st.ret1d)}">${fPct(st.ret1d)}</span>
       <div class="conv" title="Convinzione ${i.conviction}/100: punteggio trend, fase del gruppo e allineamento con il mercato">convinzione <span class="m">${[1, 2, 3, 4, 5].map(k => `<i class="${k <= bars ? "on" : ""}"></i>`).join("")}</span></div></div></div>
     <div class="chart" data-chart="${esc(i.ticker)}"></div>

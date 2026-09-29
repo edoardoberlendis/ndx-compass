@@ -31,7 +31,7 @@
     <button class="tab" data-view="screener">Screener</button>
     <button class="tab" data-view="sectors">Settori</button>
     <button class="tab" data-view="ideas">Report</button>
-    <button class="tab" data-view="trade">Idee (sperimentali)</button>
+    <button class="tab" data-view="trade">Idee</button>
   </div>
   <div class="updated"><span class="status" id="status"></span><span id="updated"></span></div>
 </nav>
@@ -129,7 +129,7 @@
     <div class="toolbar"><span class="muted" id="tradeMeta"></span><button class="link-btn" data-goto="ideas">Cambia report nella scheda Report →</button></div>
     <div id="tradeEmpty" class="card empty" hidden>Nessun report ancora: generane uno dalla scheda <b>Report</b>.</div>
     <div id="tradeBody">
-      <div class="card" id="setupCard"><div class="card-h"><h2>Setup nuovi e non più segnalati</h2><span class="card-meta" id="setupMeta"></span></div><div id="setupChanges" class="changes"></div></div>
+      <div class="card my-setup" id="mySetup" hidden></div>
       <div class="toolbar">
         <div class="chips" id="sideChips"></div>
         <select id="themeSel" aria-label="Tema"></select>
