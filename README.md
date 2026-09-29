@@ -87,7 +87,20 @@ Tastiera: `/` cerca, `Esc` chiude la scheda.
 - **Fondamentali, dati analisti e stime**: una volta al giorno, salvati in `cache/infos.json` e `cache/analysts.json`.
 
 Così si fanno poche richieste a Yahoo Finance ed è più difficile essere bloccati. I dati possono essere in ritardo.
-L'elenco dei titoli viene da Wikipedia. Pesi e contributi all'indice sono stimati dalla capitalizzazione.
+L'elenco dei titoli viene da Wikipedia.
+
+**Pesi nell'indice.** Il Nasdaq-100 mette dei tetti ai titoli più grandi, quindi la semplice quota di capitalizzazione
+sovrastima i giganti (a fine settembre 2026: NVDA 13,5% stimato contro 8,2% vero, i primi 10 insieme 62,8% contro 47,0%).
+Una fonte gratuita e senza login con tutti i pesi non esiste: Invesco (QQQ) e Slickcharts bloccano le richieste,
+il sito degli indici Nasdaq dà i pesi solo con login, stockanalysis.com solo i primi 25. Per questo la dashboard usa una
+soluzione mista:
+- per i **10 titoli più grandi** usa i pesi veri del fondo QQQ, letti una volta al giorno da Nasdaq.com
+  (`api.nasdaq.com/api/company/QQQ/holdings`: è un indirizzo interno del sito, non un servizio ufficiale; se non risponde
+  o i numeri non sono plausibili si usa la copia dei giorni precedenti, poi la stima);
+- per **gli altri** divide il resto dell'indice in proporzione alla capitalizzazione, senza che nessuno superi il decimo
+  peso vero (se lo supera, l'eccesso va agli altri). Questi pesi sono segnati con **≈**.
+I pesi del fondo QQQ sono quasi uguali a quelli dell'indice, ma non identici (il fondo tiene anche un po' di liquidità).
+Il peso dei settori è la somma dei pesi dei loro titoli.
 
 ## Report automatico (scheda Report)
 

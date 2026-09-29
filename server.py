@@ -281,6 +281,63 @@ def download(tickers, **kw):
     return {}
 
 
+# ---------------------------------------------------------------- index weights: top 10 from the QQQ fund
+# The Nasdaq-100 caps its largest members, so pure market-cap weights overstate the giants (NVDA ~13.5% instead of ~8%).
+# No free source without login gives all the weights; Nasdaq.com shows the real weights of QQQ's top 10 holdings.
+# That endpoint belongs to the nasdaq.com site (not an official API): if it fails or looks wrong, weights stay estimated.
+QQQ_TOP_URL = "https://api.nasdaq.com/api/company/QQQ/holdings?assetclass=etf"
+QQQ_TOP_CACHE = "qqq_top_weights.json"
+
+
+def fetch_qqq_top():
+    """{ticker: weight %} of QQQ's 10 largest holdings, or None if unavailable or implausible."""
+    try:
+        r = requests.get(QQQ_TOP_URL, timeout=10, headers={**UA, "Accept": "application/json"})
+        r.raise_for_status()
+        rows = r.json()["data"]["holdings"]["rows"]
+        w = {x["symbol"].strip().upper(): float(str(x["weighting"]).rstrip("%")) for x in rows}
+    except Exception as e:
+        log.warning("QQQ top weights unavailable (%s): weights estimated from market cap", e)
+        return None
+    if not (5 <= len(w) <= 15 and 20 <= sum(w.values()) <= 80 and all(0 < v < 20 for v in w.values())):
+        log.warning("QQQ top weights look wrong (%s): weights estimated from market cap", w)
+        return None
+    return w
+
+
+def split_weights(caps, total_w, cap=None):
+    """Share total_w among stocks in proportion to market cap; a stock outside the top 10 cannot weigh more than the
+    10th largest real weight (cap), so its excess goes to the others, repeated until nobody is above the cap."""
+    out, free, left = {}, dict(caps), total_w
+    while free:
+        s = sum(free.values())
+        if not s:
+            break
+        share = {t: c / s * left for t, c in free.items()}
+        over = [t for t, w in share.items() if cap is not None and w > cap]
+        if not over:
+            out.update(share)
+            break
+        for t in over:
+            out[t] = cap
+            left -= cap
+            del free[t]
+    return out
+
+
+def qqq_top_weights():
+    """Today's top-10 weights (downloaded at most once a day); yesterday's copy (up to 7 days) if today's fails."""
+    w = read_daily_cache(QQQ_TOP_CACHE)
+    if w:
+        return w
+    w = fetch_qqq_top()
+    if w:
+        write_daily_cache(QQQ_TOP_CACHE, w)
+        return w
+    old = read_cache(QQQ_TOP_CACHE, 7 * 86400)
+    return old.get("data") if isinstance(old, dict) else None
+
+
 # ---------------------------------------------------------------- daily history cache (faster start)
 # The 2-year daily history is saved in cache/daily.pkl. At start (and at each daily refresh) only the last days are
 # downloaded again. Yahoo adjusts past prices for dividends and splits, so a stock whose older overlapping closes
@@ -342,6 +399,7 @@ class Store:
         self.constituents = []
         self.infos = {}
         self.daily = {}         # ticker -> DataFrame (2y daily)
+        self.top_weights = None  # ticker -> real weight % of QQQ's top 10 holdings (Nasdaq.com), refreshed daily
         self.intraday = {}      # ticker -> DataFrame (today, 5m)
         self.snapshot = None
         self.last_quote = 0.0
@@ -495,8 +553,12 @@ class Store:
             rows.append(row)
 
         total = sum(r["mcap"] or 0 for r in rows)
+        # weights: real QQQ weights for its top 10 holdings, the rest of the index split by market cap
+        top = {t: w for t, w in (self.top_weights or {}).items() if any(r["ticker"] == t for r in rows)}
+        est = split_weights({r["ticker"]: r["mcap"] or 0 for r in rows if r["ticker"] not in top},
+                            100 - sum(top.values()), min(top.values()) if top else None)
         for r in rows:
-            r["weight"] = (r["mcap"] or 0) / total * 100 if total else None
+            r["weight"], r["weightSrc"] = (top[r["ticker"]], "qqq") if r["ticker"] in top else (est.get(r["ticker"]), "est")
 
         # analyst expectations + valuation (vs sector peers and vs the stock's own history)
         import analysts  # local import: analysts imports this module
@@ -545,6 +607,7 @@ class Store:
                 "indices": idx,
                 "breadth": breadth,
                 "totalMcap": total,
+                "weightsTop": len(top),                          # how many weights are real QQQ weights (0 = all estimated)
             }
 
 
@@ -665,6 +728,7 @@ def worker():
         store.infos = load_infos(tickers)
         import analysts  # local import: analysts imports this module
         store.analysts = analysts.cached_data()                  # yesterday's copy is fine until the refresh lands
+        store.top_weights = qqq_top_weights()
         store.refresh_daily()
         store.refresh_intraday()
         store.build()
@@ -684,6 +748,8 @@ def worker():
                 store.refresh_daily()
             if not infos_fresh():
                 store.infos = load_infos(tickers)
+            if read_daily_cache(QQQ_TOP_CACHE) is None:           # new day: real top-10 weights again
+                store.top_weights = qqq_top_weights() or store.top_weights
             if not analysts.is_fresh():
                 store.refresh_analysts(tickers)
             store.refresh_news_all(tickers)

@@ -64,6 +64,8 @@ const fBig = v => {
 // whole percent; "—" when missing (e.g. old reports built with the 30-day average)
 const pctR = v => isNum(v) ? Math.round(v) + "%" : "—";
 const fX = v => isNum(v) ? fNum(v, 2) + "×" : "—";
+// index weight: real for QQQ's top 10 holdings, "≈" when estimated from market cap
+const fW = (s, d = 2) => isNum(s.weight) ? (s.weightSrc === "qqq" ? "" : "≈") + fNum(s.weight, d) + "%" : "—";
 const fMetric = (tf, v) => !isNum(v) ? "—" : METRICS[tf].fmt ? METRICS[tf].fmt(v) : fPct(v);
 const tz = "America/New_York";
 const fTime = t => new Date(t * 1000).toLocaleTimeString("it-IT", { timeZone: tz, hour: "numeric", minute: "2-digit" });
@@ -195,7 +197,7 @@ function capWeighted(list, key) {
 function sectors() {
   const g = d3.group(stocks(), s => s.sector);
   return [...g].map(([name, list]) => {
-    const o = { name, list, n: list.length, mcap: d3.sum(list, s => s.mcap || 0) };
+    const o = { name, list, n: list.length, mcap: d3.sum(list, s => s.mcap || 0), weight: d3.sum(list, s => s.weight || 0) };
     for (const tf of Object.keys(METRICS)) o[tf] = tf === "RV" ? d3.median(list, s => s.relVol) : capWeighted(list, METRICS[tf].key);
     return o;
   }).sort((a, b) => b.mcap - a.mcap);
@@ -328,7 +330,7 @@ function tileTip(s) {
   const v = val(s, tf);
   return `<div class="tip-h">${esc(s.sector)} › ${esc(s.industry)}</div>
     <div class="tip-main"><b>${esc(s.ticker)}</b><span class="num">${fPrice(s.price)} <span class="${sign(s.chgPct)}">${fPct(s.chgPct)}</span></span></div>
-    <div class="tip-name">${esc(s.name)} · ${fBig(s.mcap)} · ${fNum(s.weight, 2)}% peso</div>
+    <div class="tip-name">${esc(s.name)} · ${fBig(s.mcap)} · peso ${fW(s)}</div>
     ${spark(s.spark, 330, 52, s.prevClose)}
     ${tf !== "1D" ? `<div class="tip-row" style="margin-top:6px"><span>${esc(METRICS[tf].label)}</span><b class="${tf === "RV" ? "" : sign(v)}">${fMetric(tf, v)}</b></div>` : ""}
     ${peers.length > 1 ? `<table class="tip-peers">${peers.map(p => `<tr class="${p.ticker === s.ticker ? "me" : ""}">
@@ -766,7 +768,7 @@ const C = {
   sector: { l: "Settore", cls: "l", sort: s => s.sector, html: s => esc(s.sector) },
   industry: { l: "Industria", cls: "l", sort: s => s.industry, html: s => esc(s.industry) },
   mcap:   { l: "Capitalizz.", sort: s => s.mcap, html: s => fBig(s.mcap) },
-  weight: { l: "Peso", sort: s => s.weight, html: s => fNum(s.weight) + "%" },
+  weight: { l: "Peso", sort: s => s.weight, html: s => fW(s) },
   price:  { l: "Prezzo", sort: s => s.price, html: s => fPrice(s.price) },
   chgPct: { l: "Var.", sort: s => s.chgPct, html: s => `<span class="${sign(s.chgPct)}">${fPct(s.chgPct)}</span>` },
   volume: { l: "Volume", sort: s => s.volume, html: s => fBig(s.volume) },
@@ -815,7 +817,7 @@ const COL_INFO = {
   sector: "Settore economico della società (classificazione di Yahoo Finance).",
   industry: "Il ramo più specifico dentro il settore.",
   mcap: "Capitalizzazione: quanto vale in borsa la società (prezzo × numero di azioni).",
-  weight: "Peso stimato del titolo nel Nasdaq-100, calcolato dalla capitalizzazione.",
+  weight: "Peso nel Nasdaq-100. Per i 10 titoli più grandi è il peso vero del fondo QQQ (da Nasdaq.com, una volta al giorno); per gli altri, segnati con ≈, è stimato: la parte restante dell'indice divisa in proporzione alla capitalizzazione. L'indice mette dei tetti ai titoli più grandi, per questo i pesi non sono la semplice quota di capitalizzazione.",
   price: "Ultimo prezzo, in dollari.",
   chgPct: "Variazione di oggi rispetto alla chiusura precedente.",
   volume: "Numero di azioni scambiate oggi.",
@@ -936,11 +938,11 @@ function renderSectors() {
   if (state.secSel && !secs.some(s => s.name === state.secSel)) state.secSel = null;
   const tfs = PERF_TFS;
   const colors = Object.fromEntries(tfs.map(tf => [tf, colorFor(tf)]));
-  const total = d3.sum(secs, s => s.mcap);
-  const maxW = d3.max(secs, s => s.mcap / total);
+  const total = d3.sum(secs, s => s.weight) || 100;   // ≈ 100
+  const maxW = d3.max(secs, s => s.weight / total);
   $("#matrix").innerHTML = `<thead><tr><th class="l">Settore</th><th>Titoli</th><th class="l">Peso</th>${tfs.map(tf => `<th>${METRICS[tf].label}</th>`).join("")}<th>Rialzo / Ribasso</th></tr></thead>
     <tbody>${secs.map(s => {
-      const w = s.mcap / total * 100;
+      const w = s.weight / total * 100;
       const adv = s.list.filter(x => x.chgPct > 0).length;
       return `<tr data-sec="${esc(s.name)}" class="${s.name === state.secSel ? "sel" : ""}"><td class="l"><b>${esc(s.name)}</b></td><td>${s.n}</td>
         <td class="l"><span class="wbar" style="width:${(w / (maxW * 100) * 90).toFixed(0)}px"></span>${fNum(w, 1)}%</td>
@@ -950,7 +952,7 @@ function renderSectors() {
   const sec = secs.find(s => s.name === state.secSel);
   $("#secAll").hidden = $("#secStocks").hidden = !sec;
   $("#secDetail").classList.toggle("one", !sec);
-  const wr = secs.map(s => ({ name: s.name, v: s.mcap / total * 100, label: fNum(s.mcap / total * 100, 1) + "%", color: css(s.name === state.secSel ? "--series-2" : "--series-1"), s }));
+  const wr = secs.map(s => ({ name: s.name, v: s.weight / total * 100, label: fNum(s.weight / total * 100, 1) + "%", color: css(s.name === state.secSel ? "--series-2" : "--series-1"), s }));
   hbars($("#weights"), wr, { nameW: 170, rowH: 26, click: r => { state.secSel = state.secSel === r.name ? null : r.name; renderSectors(); },
     tip: r => `<div class="tip-h">${esc(r.name)}</div><div class="tip-row"><span>Capitalizzazione</span><b>$${fBig(r.s.mcap)}</b></div><div class="tip-row"><span>I più grandi</span><b>${esc([...r.s.list].sort((a, b) => b.mcap - a.mcap).slice(0, 3).map(x => x.ticker).join(", "))}</b></div>` });
   if (!sec) return;
@@ -959,7 +961,7 @@ function renderSectors() {
   const rows = sec.list.filter(s => isNum(val(s, tf))).sort((a, b) => val(b, tf) - val(a, tf))
     .map(s => ({ name: s.ticker, v: val(s, tf), label: fMetric(tf, val(s, tf)), s }));
   hbars($("#secBars"), rows, { rowH: 22, click: r => openDetail(r.s.ticker),
-    tip: r => `<div class="tip-h">${esc(r.s.industry)}</div><b>${esc(r.s.name)}</b><div class="tip-row"><span>${METRICS[tf].label}</span><b class="${sign(r.v)}">${r.label}</b></div><div class="tip-row"><span>Peso</span><b>${fNum(r.s.weight)}%</b></div>` });
+    tip: r => `<div class="tip-h">${esc(r.s.industry)}</div><b>${esc(r.s.name)}</b><div class="tip-row"><span>${METRICS[tf].label}</span><b class="${sign(r.v)}">${r.label}</b></div><div class="tip-row"><span>Peso</span><b>${fW(r.s)}</b></div>` });
 }
 // a row shows that sector's stocks; the same row again (or "Tutti i settori") goes back to all sectors
 $("#matrix").addEventListener("click", e => {
@@ -1003,7 +1005,7 @@ function renderDetailHeader() {
   if (!top) return;
   const name = s?.name || s?.label || dInfo?.longName || t;
   top.innerHTML = `<div class="d-head"><div><div class="tt">${esc(t)}</div><div class="nm">${esc(dInfo?.longName || name)}</div>
-      ${s?.sector ? `<div class="sec">${esc(s.sector)} › ${esc(s.industry)} · capitalizzazione $${fBig(s.mcap)} · ${fNum(s.weight)}% dell'indice</div>` : ""}</div>
+      ${s?.sector ? `<div class="sec">${esc(s.sector)} › ${esc(s.industry)} · capitalizzazione $${fBig(s.mcap)} · ${fW(s)} dell'indice</div>` : ""}</div>
       <div class="actions">${state.bySym.has(t) ? `<button class="icon-btn star ${state.watch.has(t) ? "on" : ""}" data-star="${esc(t)}" title="Preferiti">${state.watch.has(t) ? "★" : "☆"}</button>` : ""}
       <button class="icon-btn" id="dFull" title="${dFull ? "Torna al pannello laterale" : "Apri a schermo intero"}" aria-label="${dFull ? "Pannello laterale" : "Schermo intero"}">${dFull ? "⤡" : "⤢"}</button>
       <button class="icon-btn close-btn" id="dClose" aria-label="Chiudi">×</button></div></div>
