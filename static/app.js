@@ -1135,6 +1135,7 @@ async function loadDetailInfo() {
   const stat = (l, v) => `<div><span>${l}</span><span>${v}</span></div>`;
   const vs = k => `<span class="${sign(s[k])}">${fPct(s[k], 1)}</span>`;
   const pctOf = v => isNum(v) ? fNum(v * 100, 1) + "%" : "—";
+  const tech = data.tech || {};
   const rng52 = isNum(s.lo52) && isNum(s.hi52) ? rangeViz(s.lo52, s.hi52, s.price, null, "Range a 52 settimane") : "";
   const tgt = isNum(i.targetLowPrice) && isNum(i.targetHighPrice) && isNum(s.price)
     ? rangeViz(Math.min(i.targetLowPrice, s.price), Math.max(i.targetHighPrice, s.price), s.price, i.targetMeanPrice,
@@ -1147,6 +1148,8 @@ async function loadDetailInfo() {
       ${stat("vs media 50 giorni", vs("vsSma50"))}${stat("vs media 200 giorni", vs("vsSma200"))}
       ${stat("RSI (14)", fNum(s.rsi, 0))}${stat("Volatilità (20 g, annua)", isNum(s.vol20) ? fNum(s.vol20, 0) + "%" : "—")}
       ${stat("Beta", fNum(i.beta, 2))}${stat("Short % flottante", pctOf(i.shortPercentOfFloat))}
+      ${stat(`Pendenza media 20 ${info(slopeInfo(20, tech.slope20))}`, slopeCell(tech.slope20))}${stat(`Pendenza media 60 ${info(slopeInfo(60, tech.slope60))}`, slopeCell(tech.slope60))}
+      ${stat(`Volumi 20/60 giorni ${info(volRatioInfo(tech.volRatio))}`, fX(tech.volRatio))}
     </div>${rng52}` : ""}</div>`;
   dNews = data.news || [];
   const newsSec = dNews.length ? `<div class="d-sec" id="dNews"></div>` : "";
@@ -1181,6 +1184,20 @@ function renderDetailNews() {
   const list = visibleNews(dNews).slice(0, 8);
   el.innerHTML = `<h3>Notizie</h3>${newsOpts()}<div class="news">${list.map(n => `<a href="${esc(n.url)}" target="_blank" rel="noopener"><div class="nt">${esc(n.title)}</div>
     <div class="nm">${newsTag(n)} ${esc(n.publisher || "")} · ${esc(ago(n.time))}</div></a>`).join("") || `<div class="empty">Solo articoli d'opinione: deseleziona "Nascondi opinioni" per vederli</div>`}</div>`;
+}
+// trend figures for the detail (from the technical score's metrics)
+const slopeCell = v => isNum(v) ? `<span class="${sign(v)}">${fPct(v, 2)}/sett.</span>` : "—";
+function slopeInfo(n, v) {
+  let t = `Di quanto è cambiata in una settimana la media mobile a ${n} giorni. Dice in che direzione va il trend
+    ${n === 20 ? "di breve" : "di medio"} periodo: positiva = la media sale, negativa = scende.`;
+  if (isNum(v)) t += `<br><br>Ora: <b>${fPct(v, 2)} a settimana</b>, ${v > 0.05 ? "la media sale" : v < -0.05 ? "la media scende" : "la media è quasi piatta"}.`;
+  return t;
+}
+function volRatioInfo(v) {
+  let t = `Volume medio degli ultimi 20 giorni diviso il volume medio degli ultimi 60. Sopra 1× = negli ultimi giorni si scambia
+    più del solito (più interesse, spesso per notizie o trimestrali); sotto 1× = meno.`;
+  if (isNum(v)) t += `<br><br>Ora: <b>${fX(v)}</b>, ${v >= 1.2 ? "volumi in aumento" : v <= 0.8 ? "volumi in calo" : "volumi nella norma"}.`;
+  return t;
 }
 // price vs the 20/40/60-day averages, same wording as the report's "Ordine medie"
 function maOrder(s) {
@@ -1581,24 +1598,41 @@ function renderMaTable(R) {
   const q = ($("#maFind").value || "").trim().toLowerCase();
   const cols = [
     ["ticker", "Ticker", "l tk", s => esc(s.ticker)], ["sector", "Settore", "l", s => esc(s.sector)],
-    ["price", "Prezzo", "", s => fPrice(s.price)], ["score", "Punteggio", "", s => scoreBar(s.score)],
+    ["score", "Punteggio", "", s => scoreBar(s.score)],
     ["stack", "Ordine medie", "l", s => `<span class="stack ${s.stack}">${s.stack === "bull" ? "20>40>60" : s.stack === "bear" ? "20<40<60" : "misto"}</span>`],
     ["vs20", "vs media 20", "", s => `<span class="${sign(s.vs20)}">${fPct(s.vs20, 1)}</span>`],
-    ["vs40", "vs media 40", "", s => `<span class="${sign(s.vs40)}">${fPct(s.vs40, 1)}</span>`],
     ["vs60", "vs media 60", "", s => `<span class="${sign(s.vs60)}">${fPct(s.vs60, 1)}</span>`],
-    ["slope20", "Pendenza 20/sett.", "", s => `<span class="${sign(s.slope20)}">${fPct(s.slope20, 2)}</span>`],
     ["rsi", "RSI", "", s => fNum(s.rsi, 0)],
     ["rs1m", "vs QQQ 1M", "", s => `<span class="${sign(s.rs1m)}">${fChg(s.rs1m)}</span>`],
-    ["volRatio", "Vol 20/60", "", s => fX(s.volRatio)],
-    ["setup", "Setup", "l", s => s.setup ? esc(s.setup) : `<span class="muted">—</span>`],
     ["sigScore", "Segnale", "l", s => s.signal ? `${sigBadge(s.signal)} <span class="muted num">${fNum(s.sigScore, 0)}</span>` : "—"],
   ];
+  if (!cols.some(c => c[0] === ideasState.maSort.key)) ideasState.maSort = { key: "score", dir: -1 };   // sorted by a removed column
   const { key, dir } = ideasState.maSort;
   const rows = R.stocks.filter(s => !q || s.ticker.toLowerCase().includes(q) || s.name.toLowerCase().includes(q) || s.sector.toLowerCase().includes(q))
     .sort((a, b) => { const va = a[key], vb = b[key]; if (va == null) return 1; if (vb == null) return -1; return (typeof va === "string" ? va.localeCompare(vb) : va - vb) * dir; });
-  $("#maTable").innerHTML = `<thead><tr>${cols.map(([k, l, c]) => `<th class="${c.split(" ")[0]} ${key === k ? "sorted" + (dir > 0 ? " asc" : "") : ""}" data-mk="${k}">${l}</th>`).join("")}</tr></thead>
-    <tbody>${rows.map(s => `<tr data-t="${esc(s.ticker)}">${cols.map(([, , c, f]) => `<td class="${c}">${f(s)}</td>`).join("")}</tr>`).join("")}</tbody>`;
+  const head = `<thead><tr>${cols.map(([k, l, c]) => `<th class="${c.split(" ")[0]} ${key === k ? "sorted" + (dir > 0 ? " asc" : "") : ""}" data-mk="${k}">${l}</th>`).join("")}</tr></thead>`;
+  $("#maTable").innerHTML = `${head}<tbody>${rows.map(s => `<tr data-t="${esc(s.ticker)}">${cols.map(([, , c, f]) => `<td class="${c}">${f(s)}</td>`).join("")}</tr>`).join("")}</tbody>`;
+  $("#maHead").innerHTML = head;
+  syncMaHead();
 }
+// The table scrolls sideways inside its card, so its own header cannot stick to the page: a copy of the header
+// is shown fixed under the tabs while the table is on screen, with the same column widths and horizontal offset.
+function syncMaHead() {
+  const wrap = $("#maWrap"), box = $("#maHeadBox"), table = $("#maTable"), clone = $("#maHead");
+  if (!wrap || state.view !== "ideas" || !table.tHead) { box.hidden = true; return; }
+  const top = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sticky-top")) || 0;
+  const r = wrap.getBoundingClientRect(), hh = table.tHead.offsetHeight;
+  const show = r.top < top && r.bottom > top + hh * 2;
+  box.hidden = !show;
+  if (!show) return;
+  box.style.cssText = `top:${top}px;left:${r.left}px;width:${wrap.clientWidth}px`;
+  clone.style.width = table.offsetWidth + "px";
+  const src = table.tHead.rows[0].cells, dst = clone.tHead.rows[0].cells;
+  for (let k = 0; k < src.length; k++) dst[k].style.width = dst[k].style.minWidth = src[k].getBoundingClientRect().width + "px";
+  clone.style.transform = `translateX(${-wrap.scrollLeft}px)`;
+  dst[0].style.transform = `translateX(${wrap.scrollLeft}px)`;   // Ticker stays frozen in the copy too
+}
+addEventListener("scroll", syncMaHead, { passive: true });
 
 $("#repSel").addEventListener("change", e => { ideasState.id = e.target.value; LS.set("repId", ideasState.id); renderIdeas(); });
 $("#themeSel").addEventListener("change", e => { ideasState.theme = e.target.value; renderIdeaCards(ideasState.report); });
@@ -1622,6 +1656,11 @@ $("#view-ideas").addEventListener("click", e => {
   if (th) { const k = th.dataset.mk; ideasState.maSort = ideasState.maSort.key === k ? { key: k, dir: -ideasState.maSort.dir } : { key: k, dir: ["ticker", "sector", "stack", "setup"].includes(k) ? 1 : -1 }; renderMaTable(ideasState.report); }
 });
 $("#maFind").addEventListener("input", () => renderMaTable(ideasState.report));
+$("#maWrap").addEventListener("scroll", syncMaHead, { passive: true });
+$("#maHeadBox").addEventListener("click", e => {   // sorting from the floating header copy
+  const th = e.target.closest("th[data-mk]");
+  if (th) $(`#maTable th[data-mk="${th.dataset.mk}"]`).click();
+});
 $("#runBtn").addEventListener("click", async () => {
   const btn = $("#runBtn");
   btn.disabled = true; btn.textContent = "In esecuzione…";
@@ -1678,6 +1717,7 @@ function setView(v) {
   $$(".view").forEach(el => el.hidden = !state.snap || el.id !== "view-" + v);
   if (state.snap) renderAll();
   window.scrollTo({ top: 0 });
+  syncMaHead();
 }
 $$(".tab").forEach(t => t.addEventListener("click", () => setView(t.dataset.view)));
 document.addEventListener("click", e => { const b = e.target.closest("[data-goto]"); if (b) setView(b.dataset.goto); });
@@ -1701,7 +1741,7 @@ function setStickyTop() {
 }
 setStickyTop();
 let rz;
-addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { setStickyTop(); if (state.snap) renderAll(); if (state.detail) loadDetailChart(); }, 150); });
+addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { setStickyTop(); syncMaHead(); if (state.snap) renderAll(); if (state.detail) loadDetailChart(); }, 150); });
 
 // ------------------------------------------------------------ boot
 (async function boot() {

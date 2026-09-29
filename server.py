@@ -840,6 +840,8 @@ def api_stock(ticker):
         "analysts": store.analysts.get(ticker),                 # raw daily data (actions, estimates, revisions)
         "valuation": store.valuations.get(ticker),
         "signal": store.signals.get(ticker),
+        # a few trend figures of the technical score, for the detail's Trend section
+        "tech": {k: (store.tech.get(ticker) or {}).get(k) for k in ("slope20", "slope40", "slope60", "volRatio")},
     }, default=clean, allow_nan=False), mimetype="application/json")
 
 
