@@ -22,6 +22,14 @@ Oppure dal Terminale:
 - **Oggi**: 4 indicatori (Nasdaq-100, titoli in rialzo/ribasso, % di titoli sopra le medie 20/40/60 e 200, volatilità VIX e VXN con la fascia: calmo/normale/nervosismo/paura),
   mappa del mercato (clic sul nome di un settore per ingrandirlo), grafico intraday del Nasdaq-100, chi si è mosso e perché, trimestrali dei prossimi 7 giorni
   (i miei titoli in cima).
+- **Eventi macro USA** (in Oggi, sopra le trimestrali): riunioni della Fed (FOMC, con conferenza stampa), inflazione CPI e
+  PCE, rapporto sull'occupazione nei prossimi 7 giorni, con l'orario di New York e l'ora locale (calcolata, anche quando
+  l'ora legale USA ed europea non coincidono). Per ognuno: ⓘ con la spiegazione, "come reagisce di solito il mercato"
+  (scenari "se… → di solito…", mai previsioni), settori e temi più sensibili, quota del mio portafoglio e numero di
+  preferiti coinvolti. Valore precedente (e uscito) di CPI e occupazione dall'API pubblica della BLS; il valore atteso
+  non c'è (nessuna fonte gratuita affidabile), il PCE mostra solo la data (i valori richiederebbero una chiave BEA).
+  Date ufficiali scritte in `macro_calendar.py` (Fed, BLS, BEA, 2026); ogni giorno la pagina della Fed e il calendario
+  BEA vengono riletti per aggiungere le date nuove, con un avviso se il controllo non riesce o se l'elenco sta per finire.
 - **I miei titoli**: i preferiti (★) con prezzo, variazioni, posizione rispetto alle medie, valutazione, analisti, segnale,
   prossima trimestrale e ultima notizia. Salvati in `watchlist.json` nella cartella del progetto.
 - **Portafoglio**: le mie posizioni reali, dall'export Excel di Fineco ("Portafoglio sintesi") messo nella cartella
@@ -164,6 +172,7 @@ Pesi e soglie non vengono adattati ai risultati.
 | `score.py` | Segnale finale (analisti + valutazione + notizie) e Trend a parte |
 | `backtest.py` | Backtest del Trend, la parte tecnica (a mano) |
 | `portfolio.py` | Portafoglio: lettura dell'export Fineco, ticker Yahoo, valori in euro |
+| `macro_calendar.py` | Eventi macro USA: date ufficiali, controllo automatico, valori BLS (da aggiornare ogni anno per CPI e occupazione) |
 | `market_calendar.py` | Festività e chiusure anticipate della borsa USA (da aggiornare ogni anno) |
 | `themes.json` | Temi personalizzati (elenchi di ticker) |
 | `static/` | La pagina web (HTML, CSS, JavaScript) |

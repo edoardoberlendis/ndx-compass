@@ -666,3 +666,16 @@ table.pf tr.lev td { background: color-mix(in srgb, var(--warn) 9%, transparent)
 table.pf tr.lev td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 .lev-badge { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 4px; background: var(--warn); color: #fff; vertical-align: 1px; }
 .pf-lev { margin: 0 0 8px; padding: 8px 10px; border-radius: 6px; border-left: 3px solid var(--warn); background: var(--surface-2); line-height: 1.5; }
+
+/* ------------------------------------------------ Oggi: US macro events */
+.mc-it { padding: 8px 0; border-top: 1px solid var(--grid); display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; line-height: 1.45; }
+.mc-it:first-child { border-top: 0; padding-top: 0; }
+.mc-when { color: var(--ink-2); font-weight: 550; }
+.mc-react, .mc-imp { color: var(--ink-2); }
+.mc-rel { color: var(--accent); font-weight: 550; }
+.mc-warn { color: var(--warn); font-size: 12px; margin-top: 6px; }
+@media (min-width: 1281px) {
+  .macro-card { flex: 0 1 auto; min-height: 0; max-height: 55%; display: flex; flex-direction: column; }
+  .macro-card #macro { overflow-y: auto; min-height: 0; }
+  .earn-card { min-height: 140px; }
+}

@@ -347,6 +347,7 @@ function renderOverview() {
   renderIndexChart();
   renderEarnings();
   loadWhy();
+  loadMacro();
 }
 
 // indicative volatility bands (same for VIX and VXN)
@@ -660,6 +661,100 @@ document.addEventListener("change", e => {
   if (state.view === "watch") renderMyStocks();
   if (state.detail) renderDetailNews();
 });
+
+// ------------------------------------------------------------ US macro events (macro_calendar.py, /api/macro)
+// Fixed texts, reviewed by the user. Times are never written here: the card shows New York time and local time.
+const SURPRISE_NOTE = `<br><br><span class="muted">Il mercato reagisce soprattutto alla <b>sorpresa</b>, cioè alla differenza tra il dato
+  uscito e quello che gli operatori si aspettavano, più che al dato in sé. La dashboard non ha le attese (non esiste una fonte
+  gratuita affidabile), quindi mostra il valore precedente: confrontalo con le attese riportate dai siti di notizie.</span>`;
+const MACRO = {
+  fomc: {
+    title: "Riunione della Fed (FOMC) e conferenza stampa",
+    info: `<b>Cos'è.</b> La Fed è la banca centrale degli Stati Uniti e decide il tasso d'interesse di riferimento. Si riunisce 8 volte
+      l'anno per due giorni: il secondo giorno pubblica la decisione e mezz'ora dopo il presidente tiene una conferenza stampa
+      (l'orario è indicato nella card, anche nella tua ora locale). A marzo, giugno, settembre e dicembre pubblica anche le previsioni
+      dei suoi membri sui tassi futuri.<br><br><b>Perché conta.</b> I tassi cambiano il costo del denaro per aziende e famiglie e quanto
+      valgono oggi gli utili futuri: con tassi più alti, gli utili lontani nel tempo valgono meno.`,
+    react: `se la Fed taglia i tassi più del previsto, o fa capire che li taglierà presto → di solito le azioni salgono, soprattutto
+      quelle in crescita e tecnologiche; se li lascia più alti del previsto, o dice che resteranno alti a lungo → di solito scendono,
+      di più quelle in crescita; se la decisione è quella attesa → spesso conta di più il tono della conferenza stampa, e i movimenti
+      possono cambiare direzione mentre il presidente parla.`,
+  },
+  cpi: {
+    title: "Inflazione CPI",
+    info: `<b>Cos'è.</b> L'indice dei prezzi al consumo misura quanto sono aumentati in un mese i prezzi di ciò che comprano le famiglie
+      americane: cibo, casa, benzina, servizi. Si guardano la variazione sul mese e sull'anno, e soprattutto l'inflazione
+      <b>«core»</b>, che esclude cibo ed energia perché oscillano molto. Esce prima dell'apertura della borsa.<br><br><b>Perché conta.</b>
+      La Fed decide i tassi guardando l'inflazione: un'inflazione alta rende meno probabili i tagli dei tassi.`,
+    react: `se esce più alta delle attese → di solito salgono i rendimenti dei titoli di Stato e le azioni scendono, di più quelle in
+      crescita e tecnologiche; se più bassa → di solito le azioni salgono; se in linea → la reazione di solito è piccola.`,
+  },
+  pce: {
+    title: "Inflazione PCE",
+    info: `<b>Cos'è.</b> Il PCE (spese per consumi personali) è un'altra misura dell'inflazione, pubblicata dalla BEA insieme a redditi
+      e spese delle famiglie. L'obiettivo ufficiale della Fed è un'inflazione del <b>2% all'anno misurata sul PCE complessivo</b>; il
+      PCE <b>«core»</b> (senza cibo ed energia) è quello che la Fed guarda di più per capire la tendenza. Esce prima dell'apertura,
+      di solito dopo il CPI: per questo sorprende meno, perché gran parte delle informazioni è già nota.`,
+    react: `se esce più alto delle attese → di solito rende meno probabili i tagli dei tassi e pesa sulle azioni in crescita; se più
+      basso → di solito le aiuta; in genere la reazione è più piccola che per il CPI.`,
+  },
+  jobs: {
+    title: "Rapporto sull'occupazione",
+    info: `<b>Cos'è.</b> Il rapporto sull'occupazione (Employment Situation) esce di solito il primo venerdì del mese, prima dell'apertura.
+      Dice quanti posti di lavoro sono stati creati nel mese (esclusa l'agricoltura, «non-farm payrolls»), il tasso di disoccupazione
+      e quanto crescono i salari.<br><br><b>Perché conta.</b> Mostra la salute dell'economia; salari che crescono molto possono tenere
+      alta l'inflazione.`,
+    react: `qui la reazione dipende dal momento. Se esce molto più forte delle attese → di solito aiuta le aziende legate all'economia,
+      ma se fa temere inflazione e tassi alti può pesare sulle azioni in crescita; se esce molto più debole → può far sperare in tagli
+      dei tassi (azioni su) oppure far temere una recessione (azioni giù). Un dato molto lontano dalle attese, in un senso o
+      nell'altro, di solito porta movimenti ampi.`,
+  },
+};
+const monthIT = ym => ym ? new Date(ym + "-15T12:00:00").toLocaleDateString("it-IT", { month: "long", year: "numeric" }) : "";
+const fS1 = v => isNum(v) ? (v > 0 ? "+" : "") + fNum(v, 1) + "%" : "—";
+function macroValues(e, rate) {
+  const v = e.values;
+  if (e.kind === "fomc") return rate ? `Tasso attuale della Fed: ${esc(rate.replace("-", "–"))}%` : "";
+  if (e.kind === "pce") return `<span class="muted">Valori non disponibili: servirebbe una chiave gratuita della BEA.</span>`;
+  if (!v) return `<span class="muted">Valori BLS non disponibili al momento.</span>`;
+  const head = `<b>${v.released ? "Uscito" : "Precedente"}</b> (${esc(monthIT(v.period))}):`;
+  return e.kind === "cpi"
+    ? `${head} ${fS1(v.mom)} sul mese, ${fS1(v.yoy)} sull'anno · core ${fS1(v.coreMom)} sul mese, ${fS1(v.coreYoy)} sull'anno`
+    : `${head} ${isNum(v.payrolls) ? (v.payrolls > 0 ? "+" : "") + fNum(v.payrolls, 0) + " mila posti di lavoro" : "—"}, disoccupazione ${isNum(v.unemp) ? fNum(v.unemp, 1) + "%" : "—"}, salari ${fS1(v.wagesMom)} sul mese`;
+}
+function macroItem(e, rate) {
+  const M = MACRO[e.kind], when = new Date(e.ts * 1000);
+  const day = when.toLocaleDateString("it-IT", { timeZone: tz, weekday: "short", day: "numeric", month: "short" });
+  const ny = when.toLocaleTimeString("it-IT", { timeZone: tz, hour: "2-digit", minute: "2-digit" });
+  const time = e.kind === "fomc" ? `decisione alle ${ny} di New York (${fLocal(when)} ora locale), conferenza stampa mezz'ora dopo`
+    : `alle ${ny} di New York (${fLocal(when)} ora locale)`;
+  const title = M.title + (e.kind === "fomc" ? (e.sep ? " · con le previsioni economiche" : "") : ` (${monthIT(e.ref)})`);
+  const R = e.relevance;
+  let rel = "";
+  if (R) {
+    const parts = [];
+    if (isNum(R.pfShare)) parts.push(`riguarda circa il <b>${Math.round(R.pfShare)}%</b> del tuo portafoglio`);
+    if (R.watchTotal) parts.push(`${R.watchItems.length} dei tuoi ${R.watchTotal} preferiti`);
+    const list = `${R.pfItems.length ? `<b>Portafoglio:</b> ${esc(R.pfItems.join(", "))}<br>` : ""}${R.watchItems.length ? `<b>Preferiti:</b> ${esc(R.watchItems.join(", "))}` : ""}`;
+    if (parts.length) rel = `<div class="mc-rel">${parts.join(" · ")} ${list ? info(`Titoli nei settori o nei temi più sensibili a questo evento.<br><br>${list}`) : ""}</div>`;
+  }
+  return `<div class="mc-it">
+    <div class="mc-h"><b>${esc(title)}</b> ${info(M.info + SURPRISE_NOTE)}</div>
+    <div class="mc-when">${esc(day)} · ${time}</div>
+    <div class="mc-val">${macroValues(e, rate)}</div>
+    <div class="mc-react"><b>Come reagisce di solito il mercato:</b> ${M.react}</div>
+    <div class="mc-imp"><b>Impatto maggiore su:</b> ${esc(e.impact.sectors.join(", "))} · <span class="muted">temi:</span> ${esc(e.impact.themes.join(", "))}</div>
+    ${rel}</div>`;
+}
+let macroAt = 0;
+async function loadMacro() {
+  if (Date.now() - macroAt < 5 * 60_000) return;
+  macroAt = Date.now();
+  let d;
+  try { d = await getJSON("/api/macro"); } catch { macroAt = 0; $("#macro").innerHTML = `<div class="empty">Eventi non disponibili</div>`; return; }
+  $("#macro").innerHTML = (d.events.length ? d.events.map(e => macroItem(e, d.rate)).join("") : `<div class="empty">Nessun evento nei prossimi 7 giorni</div>`)
+    + d.warnings.map(w => `<div class="mc-warn">⚠ ${esc(w)}</div>`).join("");
+}
 
 // ------------------------------------------------------------ why they move (rule-based, from /api/movers-why)
 let whyLoadedAt = 0, whyData = null;

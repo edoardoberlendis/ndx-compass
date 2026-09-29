@@ -27,6 +27,7 @@ import requests
 import yfinance as yf
 from flask import Flask, jsonify, request, send_from_directory
 
+import macro_calendar
 import market_calendar
 import portfolio
 
@@ -735,6 +736,7 @@ def worker():
         store.build()
         store.ready.set()
         portfolio.refresh()                                      # my positions (portafoglio/), if an export is there
+        macro_calendar.refresh()                                 # US macro events: official dates + BLS values
         if not analysts.is_fresh():
             store.refresh_analysts(tickers)
         store.refresh_news_all(tickers)
@@ -758,6 +760,7 @@ def worker():
             store.refresh_intraday()
             store.build()
             portfolio.refresh()
+            macro_calendar.refresh()                             # does real work at most once a day (more on release days)
         except Exception:
             log.exception("refresh failed")
 
@@ -1050,6 +1053,31 @@ def api_portfolio():
     with store.lock:
         snap, infos = store.snapshot, dict(store.infos)
     return app.response_class(json.dumps(portfolio.snapshot(snap, infos), default=clean), mimetype="application/json")
+
+
+@app.route("/api/macro")
+def api_macro():
+    """US macro events of the next 7 days, with how much of my portfolio and favourites each one touches."""
+    with store.lock:
+        snap, infos = store.snapshot, dict(store.infos)
+    pf = portfolio.snapshot(snap, infos)
+    rows = {r["ticker"]: r for r in snap["stocks"]} if snap else {}
+    themes = portfolio._themes_by_ticker()
+    try:
+        with open(WATCHLIST) as f:
+            watch = json.load(f).get("tickers", [])
+    except Exception:
+        watch = []
+
+    def relevance(impact):
+        S, T = set(impact["sectors"]), set(impact["themes"])
+        hit = lambda sector, ths: sector in S or (sector == portfolio.LOOK_THROUGH_NDX and "Tecnologia" in S) or bool(T & set(ths))
+        pos = [x for x in pf.get("positions", []) if hit(x["sector"], x["themes"])]
+        total = (pf.get("totals") or {}).get("value") or 0
+        w = [t for t in watch if hit((rows.get(t) or {}).get("sector"), themes.get(t, []))]
+        return {"pfShare": sum(x["value"] for x in pos) / total * 100 if total else None,
+                "pfItems": [x["ticker"] or x["symbol"] for x in pos], "watchItems": w, "watchTotal": len(watch)}
+    return app.response_class(json.dumps(macro_calendar.upcoming(7, relevance), default=clean), mimetype="application/json")
 
 
 @app.route("/api/movers-why")
