@@ -3,6 +3,7 @@
 #   ./schedule.sh install     runs signals.py Mon–Fri at 08:30 (pre-market) and 22:30 (after the US close), local time
 #   ./schedule.sh remove
 #   ./schedule.sh run         trigger the job now (same environment as the schedule)
+# On weekends and US market holidays (market_calendar.py) signals.py exits without writing a report.
 set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
 LABEL="com.nasdaq100.signals"

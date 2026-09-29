@@ -646,3 +646,7 @@ table.my td.nw a:hover { text-decoration: underline; }
 .sg.na { background: var(--surface-3); color: var(--muted); }
 .trend-row { margin: 10px 0 6px; padding-top: 8px; border-top: 1px solid var(--grid); }
 .trend-row .why { margin-top: 4px; }
+
+/* ------------------------------------------------ US market holidays */
+.status.holiday::before { background: var(--muted); }
+.cal-warn { color: var(--warn); font-weight: 650; cursor: help; }

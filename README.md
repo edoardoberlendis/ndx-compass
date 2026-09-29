@@ -76,7 +76,10 @@ Tastiera: `/` cerca, `Esc` chiude la scheda.
 
 ## Aggiornamento dei dati
 
-- **Prezzi**: ogni 60 secondi (a mercato aperto, pre e post-market; ogni 5 minuti a mercato chiuso).
+- **Prezzi**: ogni 60 secondi (a mercato aperto, pre e post-market; ogni 5 minuti a mercato chiuso e nei giorni festivi).
+- **Festività della borsa USA**: elenco NYSE 2026–2028 in `market_calendar.py` (fonte: nyse.com/markets/hours-calendars),
+  con le chiusure anticipate alle 13:00 ora di New York. Nei giorni festivi lo stato diventa "Mercato USA chiuso ·
+  festività (nome) · riapre …". Tre mesi prima della fine dell'elenco compare un avviso ⚠ accanto allo stato.
 - **Storico giornaliero**: una volta al giorno, più una volta dopo la chiusura USA.
 - **Fondamentali, dati analisti e stime**: una volta al giorno, salvati in `cache/infos.json` e `cache/analysts.json`.
 
@@ -87,6 +90,7 @@ L'elenco dei titoli viene da Wikipedia. Pesi e contributi all'indice sono stimat
 
 `signals.py` gira dal lunedì al venerdì alle **08:30** (piano prima dell'apertura, sulla chiusura precedente)
 e alle **22:30** (dopo la chiusura USA), ora locale, tramite launchd (il programmatore di macOS).
+Nei giorni festivi della borsa USA l'esecuzione programmata non genera report (da Terminale o con il pulsante sì).
 Ogni esecuzione salva `reports/<data>_<sessione>.json`, mostra una notifica e compare nella scheda **Report**.
 
 ```sh
@@ -128,6 +132,7 @@ Pesi e soglie non vengono adattati ai risultati.
 | `analysts.py` | Dati degli analisti e valutazione (scaricati una volta al giorno) |
 | `score.py` | Segnale finale (analisti + valutazione + notizie) e Trend a parte |
 | `backtest.py` | Backtest del Trend, la parte tecnica (a mano) |
+| `market_calendar.py` | Festività e chiusure anticipate della borsa USA (da aggiornare ogni anno) |
 | `themes.json` | Temi personalizzati (elenchi di ticker) |
 | `static/` | La pagina web (HTML, CSS, JavaScript) |
 | `requirements.txt` | Librerie Python necessarie |

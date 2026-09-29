@@ -246,11 +246,12 @@ def conviction(m, side, sec, themes, regime):
 # ---------------------------------------------------------------- report
 
 def session_label(now):
-    """morning = pre-market plan, close = after the 16:00 ET close, intraday = manual run during the session."""
+    """morning = pre-market plan, close = after the 16:00 ET close (13:00 on early-close days), intraday = manual run during the session."""
+    import market_calendar
     t = now.hour * 60 + now.minute
     if t < 9 * 60 + 30:
         return "morning"
-    return "close" if t >= 16 * 60 else "intraday"
+    return "close" if t >= market_calendar.close_minute(now) else "intraday"
 
 
 def previous_report(current_id):
@@ -457,7 +458,12 @@ if __name__ == "__main__":
     ap.add_argument("--notify", action="store_true", help="post a macOS notification when done")
     args = ap.parse_args()
     now = datetime.now(ET)
+    # scheduled runs (launchd, no terminal) skip weekends and US market holidays; a run from the Terminal always goes
     if now.weekday() >= 5 and not sys.stdin.isatty():
         print("weekend — skipping scheduled run")
+        sys.exit(0)
+    import market_calendar
+    if market_calendar.holiday(now) and not sys.stdin.isatty():
+        print(f"US market holiday ({market_calendar.holiday(now)}) — skipping scheduled run")
         sys.exit(0)
     run(args.notify)

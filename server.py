@@ -27,6 +27,8 @@ import requests
 import yfinance as yf
 from flask import Flask, jsonify, request, send_from_directory
 
+import market_calendar
+
 warnings.filterwarnings("ignore")
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 log = logging.getLogger("ndx")
@@ -146,17 +148,33 @@ def open_fds():
 
 
 def market_status(now=None):
+    """open / pre / post / closed, or "holiday" on NYSE holidays (market_calendar.py); early-close days end at 13:00."""
     now = now or datetime.now(ET)
     if now.weekday() >= 5:
         return "closed"
+    if market_calendar.holiday(now):
+        return "holiday"
     t = now.hour * 60 + now.minute
+    close = market_calendar.close_minute(now)          # 16:00, or 13:00 on early-close days
     if 4 * 60 <= t < 9 * 60 + 30:
         return "pre"
-    if 9 * 60 + 30 <= t < 16 * 60:
+    if 9 * 60 + 30 <= t < close:
         return "open"
-    if 16 * 60 <= t < 20 * 60:
+    if close <= t < close + 4 * 60:                    # after-hours: until 20:00, or 17:00 on early-close days
         return "post"
     return "closed"
+
+
+def market_note(now=None):
+    """Extra facts for the status line: holiday name + reopening day, early close, calendar running out."""
+    now = now or datetime.now(ET)
+    hol, early = market_calendar.holiday(now), market_calendar.early_close(now)
+    return {
+        "holiday": hol,
+        "reopen": market_calendar.next_trading_day(now).isoformat() if hol else None,
+        "earlyClose": early,
+        "calendarWarning": market_calendar.coverage_warning(now.date()),
+    }
 
 
 # ---------------------------------------------------------------- constituents
@@ -445,6 +463,7 @@ class Store:
                 "asOf": now_et.isoformat(timespec="seconds"),
                 "session": rows[0]["session"] if rows else None,
                 "status": market_status(now_et),
+                "marketNote": market_note(now_et),
                 "lastQuote": datetime.fromtimestamp(self.last_quote, ET).isoformat(timespec="seconds") if self.last_quote else None,
                 "stocks": rows,
                 "indices": idx,

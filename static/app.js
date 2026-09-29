@@ -67,6 +67,15 @@ const fX = v => isNum(v) ? fNum(v, 2) + "×" : "—";
 const fMetric = (tf, v) => !isNum(v) ? "—" : METRICS[tf].fmt ? METRICS[tf].fmt(v) : fPct(v);
 const tz = "America/New_York";
 const fTime = t => new Date(t * 1000).toLocaleTimeString("it-IT", { timeZone: tz, hour: "numeric", minute: "2-digit" });
+// the same moment on the user's own clock (browser time zone), shown next to New York time
+const fLocal = (d, sec = false) => new Date(d).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit", ...(sec ? { second: "2-digit" } : {}) });
+// a New York wall-clock time (e.g. 13:00) converted to the user's clock, today
+function nyToLocal(h, m = 0) {
+  const now = new Date(), [nh, nm] = now.toLocaleTimeString("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false }).split(":").map(Number);
+  const diff = now.getHours() * 60 + now.getMinutes() - (nh * 60 + nm);
+  const x = ((h * 60 + m + diff) % 1440 + 1440) % 1440;
+  return String(Math.floor(x / 60)).padStart(2, "0") + ":" + String(x % 60).padStart(2, "0");
+}
 const fDate = (t, o = { month: "short", day: "numeric" }) => new Date(t * 1000).toLocaleDateString("it-IT", { timeZone: tz, ...o });
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const REC = { strong_buy: "Forte acquisto", buy: "Acquisto", hold: "Mantenere", underperform: "Sottoperformance", sell: "Vendita", none: "—" };
@@ -161,16 +170,18 @@ async function load() {
 }
 
 let nextAt = 0;
+// every 60 s while the market (or pre/after-hours) is active, every 5 min when closed or on a holiday (as the server)
+const refreshMs = () => ["open", "pre", "post"].includes(state.snap?.status) ? 60_000 : 5 * 60_000;
 async function tick() {
   try { await load(); } catch (e) { console.warn("refresh failed", e); }
-  nextAt = Date.now() + 60_000;
+  nextAt = Date.now() + refreshMs();
 }
 setInterval(() => {
   if (!state.snap) return;
   const s = Math.max(0, Math.round((nextAt - Date.now()) / 1000));
   const t = new Date(state.snap.lastQuote || state.snap.asOf);
-  $("#updated").textContent = `Aggiornato ${t.toLocaleTimeString("it-IT", { timeZone: tz, hour: "numeric", minute: "2-digit", second: "2-digit" })} ora NY · prossimo aggiornamento tra ${s} s`;
-  if (s === 0 && Date.now() > nextAt) { nextAt = Date.now() + 60_000; tick(); }
+  $("#updated").textContent = `Aggiornato ${t.toLocaleTimeString("it-IT", { timeZone: tz, hour: "numeric", minute: "2-digit", second: "2-digit" })} ora NY (${fLocal(t, true)} ora locale) · prossimo aggiornamento tra ${s >= 60 ? Math.ceil(s / 60) + " min" : s + " s"}`;
+  if (s === 0 && Date.now() > nextAt) { nextAt = Date.now() + refreshMs(); tick(); }
 }, 1000);
 
 // ------------------------------------------------------------ helpers over snapshot
@@ -215,11 +226,20 @@ function renderTape() {
 $("#tape").addEventListener("click", e => { const b = e.target.closest("[data-sym]"); if (b) openDetail(b.dataset.sym); });
 
 function renderStatus() {
-  const st = state.snap.status;
-  const label = { open: "Mercato aperto", pre: "Pre-apertura", post: "Dopo la chiusura", closed: "Mercato chiuso" }[st] || st;
+  const st = state.snap.status, note = state.snap.marketNote || {};
+  let label = { open: "Mercato aperto", pre: "Pre-apertura", post: "Dopo la chiusura", closed: "Mercato chiuso" }[st] || st;
+  if (st === "holiday") {
+    const re = note.reopen ? new Date(note.reopen + "T12:00:00").toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long" }) : "";
+    label = `Mercato USA chiuso · festività (${note.holiday})${re ? ` · riapre ${re}` : ""}`;
+  } else if (note.earlyClose && ["pre", "open"].includes(st)) {
+    label += ` · chiusura anticipata alle 13:00 ora NY (${nyToLocal(13)} ora locale) · ${note.earlyClose}`;
+  }
   const el = $("#status");
   el.className = "status " + st;
   el.textContent = label;
+  const w = $("#calWarn");
+  w.hidden = !note.calendarWarning;
+  w.title = note.calendarWarning || "";
 }
 
 // ------------------------------------------------------------ timeframe segs
@@ -475,7 +495,7 @@ function renderIndexChart() {
   lineChart(el, [{ pts, color: col }], {
     height: 210, baseline: ndx.prevClose, baselineLabel: `Chiusura prec. ${fNum(ndx.prevClose, 0)}`, range: "1D", label: "Nasdaq-100 intraday",
     tip: i => { const p = pts[i]; const c = (p.v / ndx.prevClose - 1) * 100;
-      return `<div class="tip-h">${fTime(p.t)} ora NY</div><div class="tip-row"><span>NDX</span><b class="num">${fNum(p.v, 2)}</b></div>
+      return `<div class="tip-h">${fTime(p.t)} ora NY (${fLocal(p.t * 1000)} ora locale)</div><div class="tip-row"><span>NDX</span><b class="num">${fNum(p.v, 2)}</b></div>
         <div class="tip-row"><span>vs chiusura prec.</span><b class="${sign(c)}">${fPct(c)}</b></div>`; },
   });
 }
@@ -988,7 +1008,8 @@ function renderDetailHeader() {
       <button class="icon-btn" id="dFull" title="${dFull ? "Torna al pannello laterale" : "Apri a schermo intero"}" aria-label="${dFull ? "Pannello laterale" : "Schermo intero"}">${dFull ? "⤡" : "⤢"}</button>
       <button class="icon-btn close-btn" id="dClose" aria-label="Chiudi">×</button></div></div>
     ${s ? `<div class="d-price"><span class="p num">${fPrice(s.price)}</span><span class="c ${sign(s.chg)}">${fChg(s.chg)} (${fPct(s.chgPct)})</span>
-      <span class="when">${state.snap.status === "open" ? "in tempo reale · " : "ultimo · "}${esc(new Date(state.snap.lastQuote || state.snap.asOf).toLocaleTimeString("it-IT", { timeZone: tz, hour: "numeric", minute: "2-digit" }))} ora NY</span>
+      <span class="when">${state.snap.status === "open" ? "in tempo reale · " : "ultimo · "}${esc(new Date(state.snap.lastQuote || state.snap.asOf).toLocaleTimeString("it-IT", { timeZone: tz, hour: "numeric", minute: "2-digit" }))} ora NY
+        (${fLocal(state.snap.lastQuote || state.snap.asOf)} ora locale)</span>
       ${earnBadge(s)}</div>${maRow(s)}` : ""}`;
   $("#dClose").onclick = closeDetail;
   $("#dFull").onclick = toggleFull;
@@ -1793,7 +1814,7 @@ addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { set
       await new Promise(r => setTimeout(r, 3000));
     }
   }
-  nextAt = Date.now() + 60_000;
+  nextAt = Date.now() + refreshMs();
   await loadWatch();
   const h = decodeURIComponent(location.hash.slice(1));
   if (VIEWS.includes(h)) state.view = h;
