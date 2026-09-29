@@ -762,7 +762,7 @@ $("#myTbl").addEventListener("click", e => {
 });
 
 // ------------------------------------------------------------ portfolio (newest Fineco export in portafoglio/)
-const pf = { data: null, sort: { key: "value", dir: -1 }, retry: null };
+const pf = { data: null, sort: { key: "value", dir: -1 }, retry: null, dim: LS.get("pfDim", "sector") };
 const fEur = (v, d = 2) => isNum(v) ? fNum(v, d) + " €" : "—";
 const fEurS = (v, d = 2) => isNum(v) ? (v > 0 ? "+" : "") + fNum(v, d) + " €" : "—";
 // detail header for stocks outside the Nasdaq-100 that I own
@@ -805,7 +805,7 @@ function renderPortfolio() {
   const T = D.totals;
   const kpi = (l, v, sub) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
   $("#pfKpis").innerHTML = [
-    kpi("Valore attuale", fEur(T.value, 0), `costo ${fEur(T.cost, 0)}`),
+    kpi("Valore attuale", fEur(T.value, 0), `costo ${fEur(T.cost, 0)}${isNum(T.exposure) && Math.abs(T.exposure - T.value) > 1 ? ` · esposizione effettiva ${fEur(T.exposure, 0)}` : ""}`),
     kpi("Guadagno / perdita", `<span class="${sign(T.pnl)}">${fEurS(T.pnl, 0)}</span>`, `<span class="${sign(T.pnlPct)}">${fPct(T.pnlPct, 1)}</span> sul costo`),
     kpi(`Di cui effetto cambio ${info(FX_INFO)}`, `<span class="${sign(T.fxEffect)}">${fEurS(T.fxEffect, 0)}</span>`, isNum(D.fx) ? `EUR/USD oggi ${fNum(D.fx, 4)}` : "cambio non disponibile"),
     kpi("Oggi", `<span class="${sign(T.today)}">${fEurS(T.today, 0)}</span>`, "variazione dei prezzi rispetto alla chiusura precedente"),
@@ -825,7 +825,29 @@ function renderPortfolio() {
   $("#pfCount").textContent = `${rows.length} posizioni`;
   $("#pfTbl").innerHTML = `<thead><tr>${PF_COLS.map(c => `<th class="${c.cls || ""} ${pf.sort.key === c.k ? "sorted" + (pf.sort.dir > 0 ? " asc" : "") : ""}" data-k="${c.k}">${esc(c.l)}${c.i ? " " + info(c.i) : ""}</th>`).join("")}</tr></thead>
     <tbody>${rows.map(x => `<tr data-t="${esc(x.ticker || "")}">${PF_COLS.map(c => `<td class="${c.cls || ""}">${c.html(x)}</td>`).join("")}</tr>`).join("")}</tbody>`;
+  renderConcentration();
 }
+const EXPO_INFO = `<b>Valore investito</b>: quanto vale oggi quello che possiedi.<br><b>Esposizione effettiva</b>: quanto ti muovi davvero
+  con il mercato. Per i prodotti a leva 3x è 3 volte il valore (1.000 € investiti si muovono ogni giorno come 3.000 €), per tutto il resto
+  coincide con il valore. Le percentuali dell'esposizione sono sul totale dell'esposizione.`;
+const DIM_LAB = { sector: "Settore", theme: "Tema", country: "Paese / area" };
+function renderConcentration() {
+  const D = pf.data, rows = D.concentration?.[pf.dim] || [];
+  $$("#pfDimSeg button").forEach(b => b.classList.toggle("on", b.dataset.dim === pf.dim));
+  const T = D.totals, maxPct = Math.max(1, ...rows.map(r => Math.max(r.pct || 0, r.expPct || 0)));
+  $("#pfConcMeta").innerHTML = `valore investito ${fEur(T.value, 0)} · esposizione effettiva ${fEur(T.exposure, 0)} ${info(EXPO_INFO)}`;
+  $("#pfConc").innerHTML = `<thead><tr><th class="l">${DIM_LAB[pf.dim]}</th><th>Valore investito</th><th>%</th><th>Esposizione effettiva</th><th>%</th><th class="l">confronto</th></tr></thead>
+    <tbody>${rows.map(r => `<tr><td class="l"><b>${esc(r.name)}</b></td><td>${fEur(r.value, 0)}</td><td>${fNum(r.pct, 1)}%</td>
+      <td>${fEur(r.exposure, 0)}</td><td><b>${fNum(r.expPct, 1)}%</b></td>
+      <td class="l"><span class="cbar"><i class="v" style="width:${(r.pct / maxPct * 100).toFixed(1)}%"></i><i class="e" style="width:${(r.expPct / maxPct * 100).toFixed(1)}%"></i></span></td></tr>`).join("")}</tbody>`;
+  const notes = {
+    sector: "Azioni del Nasdaq-100: settore usato dalla dashboard. Altre azioni: settore di Yahoo. ETF ed ETC: portafoglio/classificazione.json (il Nasdaq-100 3x è diviso come i settori dell'indice).",
+    theme: "Azioni: temi di themes.json (un titolo in due temi conta metà in ciascuno) oppure la sezione _azioni di portafoglio/classificazione.json. ETF ed ETC: stesso file.",
+    country: "Azioni: paese della società secondo Yahoo (corretto in portafoglio/classificazione.json se serve). ETF ed ETC: area a cui sono esposti, non la sede del fondo; «Mondo» non è diviso per paese.",
+  };
+  $("#pfConcNote").innerHTML = `${notes[pf.dim]} Barra chiara = valore investito, barra scura = esposizione effettiva.`;
+}
+$("#pfDimSeg").addEventListener("click", e => { const b = e.target.closest("[data-dim]"); if (b) { pf.dim = b.dataset.dim; LS.set("pfDim", pf.dim); renderConcentration(); } });
 $("#pfTbl").addEventListener("click", e => {
   const th = e.target.closest("th[data-k]");
   if (th) {

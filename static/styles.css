@@ -656,3 +656,8 @@ table.pf td { white-space: nowrap; }
 table.pf td.l { white-space: normal; min-width: 200px; }
 table.pf tbody tr { cursor: pointer; }
 .pf-warn { color: var(--warn); margin: 0 0 8px; line-height: 1.5; }
+/* portfolio concentration: light bar = invested value, dark bar = effective exposure */
+.cbar { display: flex; flex-direction: column; gap: 2px; width: 220px; }
+.cbar i { display: block; height: 5px; border-radius: 2px; }
+.cbar i.v { background: color-mix(in srgb, var(--series-1) 40%, transparent); }
+.cbar i.e { background: var(--series-1); }

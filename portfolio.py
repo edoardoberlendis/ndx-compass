@@ -25,6 +25,8 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 PORTFOLIO_DIR = os.path.join(ROOT, "portafoglio")
 OVERRIDES = os.path.join(PORTFOLIO_DIR, "ticker.json")      # optional {ISIN: Yahoo ticker}, written by the user
 FX = "EURUSD=X"                                             # USD per 1 EUR, same convention as Fineco's "cambio"
+CLASS_FILE = os.path.join(PORTFOLIO_DIR, "classificazione.json")   # ETF/ETC and extra stock themes, edited by the user
+THEMES_FILE = os.path.join(ROOT, "themes.json")
 PRICE_TOL = 0.25            # Yahoo price vs the export's price: a larger gap means a wrong listing (the file may be days old)
 
 # Fineco symbol suffix (Reuters style) -> Yahoo suffix; ".FRA" depends on the market column (Xetra or Frankfurt floor)
@@ -35,7 +37,20 @@ COLUMNS = {"name": "Titolo", "isin": "ISIN", "symbol": "Simbolo", "market": "Mer
            "costValue": "Valore di carico", "filePrice": "P.zo di mercato", "fileFx": "Cambio di mercato",
            "fileValue": "Valore di mercato €"}
 
+# Yahoo sectors (GICS-like) -> the dashboard's Italian sector names; Yahoo countries -> Italian
+YAHOO_SECTOR_IT = {"Technology": "Tecnologia", "Communication Services": "Telecomunicazioni", "Consumer Cyclical": "Consumi discrezionali",
+                   "Consumer Defensive": "Beni di prima necessità", "Healthcare": "Sanità", "Industrials": "Industria",
+                   "Utilities": "Utility", "Financial Services": "Finanza", "Basic Materials": "Materiali di base",
+                   "Energy": "Energia", "Real Estate": "Immobiliare"}
+COUNTRY_IT = {"United States": "USA", "Israel": "Israele", "Italy": "Italia", "Netherlands": "Paesi Bassi",
+              "Cayman Islands": "Isole Cayman", "Canada": "Canada", "United Kingdom": "Regno Unito", "Germany": "Germania",
+              "France": "Francia", "Switzerland": "Svizzera", "Ireland": "Irlanda", "Taiwan": "Taiwan", "China": "Cina",
+              "Japan": "Giappone", "South Korea": "Corea del Sud", "Luxembourg": "Lussemburgo", "Denmark": "Danimarca",
+              "Sweden": "Svezia", "Spain": "Spagna", "Belgium": "Belgio", "Australia": "Australia", "Bermuda": "Bermuda"}
+LOOK_THROUGH_NDX = "come il Nasdaq-100"     # ETF sector split like the index (sector weights from the dashboard)
+
 _lock = threading.Lock()
+_meta = {}      # Yahoo ticker -> {"sector", "country"} of stocks outside the Nasdaq-100 (memory only)
 _state = {"path": None, "mtime": None, "positions": [], "error": None, "resolving": False,
           "quotes": {}, "fx": None, "quotesAt": None}
 
@@ -161,8 +176,64 @@ def _resolve_all(positions):
         res = list(ex.map(lambda p: resolve(p, overrides), positions))
     for p, (t, how) in zip(positions, res):
         p["ticker"], p["tickerHow"] = t, how
+    _fetch_meta([p["ticker"] for p in positions if p["ticker"] and p["kind"].lower().startswith("azion")])
     log.info("portfolio: %d positions, %d tickers found in %.1fs",
              len(positions), sum(1 for p in positions if p["ticker"]), time.time() - t0)
+
+
+def _fetch_meta(tickers):
+    """Sector and country from Yahoo for stocks (once per ticker, kept in memory)."""
+    todo = [t for t in tickers if t not in _meta]
+
+    def one(t):
+        try:
+            i = yf.Ticker(t).info or {}
+            return t, {"sector": i.get("sector"), "country": i.get("country")}
+        except Exception:
+            return t, {}
+    with ThreadPoolExecutor(8) as ex:
+        for t, m in ex.map(one, todo):
+            _meta[t] = m
+
+
+def _load_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        log.warning("%s unreadable (%s)", os.path.basename(path), e)
+        return {}
+
+
+def _themes_by_ticker():
+    out = {}
+    for name, tickers in _load_json(THEMES_FILE).items():
+        for t in tickers:
+            out.setdefault(t, []).append(name)
+    return out
+
+
+def classify(p, cls, themes, ndx_rows, ndx_sectors, infos):
+    """leverage + {sector|theme|country: {label: share}} for one position (shares add up to 1)."""
+    if p["kind"].upper() in ("ETF", "ETC", "ETN") or not p["kind"].lower().startswith("azion"):
+        c = cls.get(p["isin"])
+        if not c:
+            m = re.search(r"\b(\d+)x\b", p["name"], re.I)
+            lev = int(m.group(1)) if m else 1
+            return lev, {"sector": {"Non classificato": 1}, "theme": {"Non classificato": 1}, "country": {"Non classificato": 1}}, False
+        sec = ndx_sectors if c.get("settore") == LOOK_THROUGH_NDX and ndx_sectors else {c.get("settore") or "Non classificato": 1}
+        return (c.get("leva") or 1), {"sector": sec, "theme": {c.get("tema") or "Senza tema": 1},
+                                      "country": {c.get("paese") or "Non classificato": 1}}, True
+    t = p.get("ticker") or ""
+    extra = (cls.get("_azioni") or {}).get(t, {})
+    row, meta = ndx_rows.get(t), _meta.get(t, {})
+    sector = row["sector"] if row else YAHOO_SECTOR_IT.get(meta.get("sector"), meta.get("sector")) or "Non disponibile"
+    tl = [extra["tema"]] if extra.get("tema") else themes.get(t) or ["Senza tema"]
+    country = extra.get("paese") or COUNTRY_IT.get((infos.get(t) or {}).get("country") or meta.get("country"),
+                                                     (infos.get(t) or {}).get("country") or meta.get("country")) or "Non disponibile"
+    return 1, {"sector": {sector: 1}, "theme": {x: 1 / len(tl) for x in tl}, "country": {country: 1}}, True
 
 
 # ---------------------------------------------------------------- refresh (called by the server's worker)
@@ -228,14 +299,24 @@ def refresh_quotes():
 
 # ---------------------------------------------------------------- values for the page
 
-def snapshot():
-    """Positions with values in EUR, totals and warnings, for /api/portfolio."""
+def snapshot(ndx_snapshot=None, infos=None):
+    """Positions with values in EUR, totals, concentration and warnings, for /api/portfolio.
+    ndx_snapshot / infos come from the running server (its store), to reuse sectors and weights of the Nasdaq-100."""
     with _lock:
         st = {k: (list(v) if isinstance(v, list) else dict(v) if isinstance(v, dict) else v) for k, v in _state.items()}
     if not st["path"]:
         return {"file": None}
     fx_now = st["fx"]
     out, warnings = [], []
+    infos = infos or {}
+    ndx_rows = {r["ticker"]: r for r in ndx_snapshot["stocks"]} if ndx_snapshot else {}
+    ndx_sectors = {}
+    for r in ndx_rows.values():
+        ndx_sectors[r["sector"]] = ndx_sectors.get(r["sector"], 0) + (r.get("weight") or 0)
+    tot_w = sum(ndx_sectors.values())
+    ndx_sectors = {k: v / tot_w for k, v in ndx_sectors.items()} if tot_w else {}
+    cls, themes = _load_json(CLASS_FILE), _themes_by_ticker()
+    agg = {"sector": {}, "theme": {}, "country": {}}
     for p in st["positions"]:
         q = st["quotes"].get(p.get("ticker")) if p.get("ticker") else None
         usd = p["currency"].upper() != "EUR"
@@ -255,6 +336,18 @@ def snapshot():
             "fxEffect": fx_effect, "priceEffect": pnl - fx_effect, "today": today,
             "leveraged": bool(re.search(r"\b\d+x\b|leverag|short|\bbear\b|\bbull\b|turbo", p["name"], re.I)),
         })
+        lev, dims, known = classify(p, cls, themes, ndx_rows, ndx_sectors, infos)
+        x = out[-1]
+        x.update(leverage=lev, exposure=x["value"] * lev, inNdx=x["ticker"] in ndx_rows,
+                 sector=next(iter(dims["sector"])) if len(dims["sector"]) == 1 else LOOK_THROUGH_NDX,
+                 themes=list(dims["theme"]), country=next(iter(dims["country"])))
+        for dim, parts in dims.items():
+            for label, share in parts.items():
+                a = agg[dim].setdefault(label, [0.0, 0.0])
+                a[0] += x["value"] * share
+                a[1] += x["exposure"] * share
+        if not known:
+            warnings.append(f"{p['name']}: non classificato (aggiungilo in portafoglio/classificazione.json con il suo ISIN {p['isin']})")
         if not p.get("ticker") and not st["resolving"]:
             warnings.append(f"{p['name']} ({p['symbol']}): ticker non trovato su Yahoo, uso il prezzo del file")
     total = sum(x["value"] for x in out)
@@ -262,11 +355,17 @@ def snapshot():
         x["weight"] = x["value"] / total * 100 if total else None
     cost = sum(x["cost"] for x in out)
     todays = [x["today"] for x in out if x["today"] is not None]
+    exposure = sum(x["exposure"] for x in out)
+    concentration = {dim: sorted(({"name": k, "value": v, "pct": v / total * 100 if total else None,
+                                   "exposure": e, "expPct": e / exposure * 100 if exposure else None}
+                                  for k, (v, e) in parts.items()), key=lambda r: -r["exposure"])
+                     for dim, parts in agg.items()}
     return {
         "file": os.path.basename(st["path"]), "fileTime": st["mtime"], "error": st["error"],
         "resolving": st["resolving"], "quotesAt": st["quotesAt"], "fx": fx_now,
-        "positions": out, "warnings": warnings,
+        "positions": out, "warnings": warnings, "concentration": concentration,
         "totals": {"value": total, "cost": cost, "pnl": total - cost, "pnlPct": (total - cost) / cost * 100 if cost else None,
                    "fxEffect": sum(x["fxEffect"] for x in out), "today": sum(todays) if todays else None,
+                   "exposure": exposure,
                    "stale": sum(1 for x in out if not x["live"])},
     }

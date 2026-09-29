@@ -1047,7 +1047,9 @@ def api_watchlist():
 @app.route("/api/portfolio")
 def api_portfolio():
     """My positions from the newest export in portafoglio/ (personal data: served only to this Mac, never cached)."""
-    return app.response_class(json.dumps(portfolio.snapshot(), default=clean), mimetype="application/json")
+    with store.lock:
+        snap, infos = store.snapshot, dict(store.infos)
+    return app.response_class(json.dumps(portfolio.snapshot(snap, infos), default=clean), mimetype="application/json")
 
 
 @app.route("/api/movers-why")
