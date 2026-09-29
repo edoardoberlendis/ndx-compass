@@ -762,7 +762,7 @@ $("#myTbl").addEventListener("click", e => {
 });
 
 // ------------------------------------------------------------ portfolio (newest Fineco export in portafoglio/)
-const pf = { data: null, sort: { key: "value", dir: -1 }, retry: null, dim: LS.get("pfDim", "sector") };
+const pf = { data: null, sort: { key: "value", dir: -1 }, retry: null, dim: LS.get("pfDim", "sector"), cols: LS.get("pfCols", "values") };
 const fEur = (v, d = 2) => isNum(v) ? fNum(v, d) + " €" : "—";
 const fEurS = (v, d = 2) => isNum(v) ? (v > 0 ? "+" : "") + fNum(v, d) + " €" : "—";
 // detail header for stocks outside the Nasdaq-100 that I own
@@ -781,8 +781,26 @@ async function loadPortfolio() {
 const FX_INFO = `Per i titoli in dollari il risultato in euro dipende da due cose: il <b>prezzo del titolo</b> e il <b>cambio EUR/USD</b>.
   "Di cui effetto cambio" è la parte dovuta solo al cambio: quanto varrebbe la posizione al prezzo di oggi ma al cambio dei giorni
   di acquisto, confrontato con il valore di oggi. Negativo = il dollaro si è indebolito rispetto all'euro da quando hai comprato.`;
+const LEV_INFO = (n = 3) => `<b>Prodotto a leva ${n}x giornaliera.</b> Ogni giorno si muove circa ${n} volte il suo indice
+  (indice +1% → circa +${n}%, indice −1% → circa −${n}%). La leva si azzera ogni giorno, quindi su più giorni il risultato
+  <b>non</b> è ${n} volte quello dell'indice.<br><br><b>Con il mercato altalenante perde valore</b> anche se l'indice torna al punto
+  di partenza. Esempio: indice +10% e poi −9,1% = pari; prodotto 3x +30% e poi −27,3% = <b>−5,5%</b>.<br><br>
+  <b>In un crollo forte</b> può perdere gran parte del valore in pochi giorni: un calo dell'indice di circa il 33% in un solo giorno
+  lo azzererebbe. Costa anche più di un ETF normale. È pensato per periodi brevi e va controllato spesso.`;
+const pfName = x => `<b>${esc(x.name)}</b>${x.leverage > 1 ? ` <span class="lev-badge">leva ${x.leverage}x</span> ${info(LEV_INFO(x.leverage))}` : ""}
+  <div class="muted small">${esc(x.ticker || x.symbol)} · ${esc(x.kind)} · ${esc(x.currency)}</div>`;
+// Nasdaq-100 data the dashboard already has (same renderers as the Screener); "—" for the other positions
+const ndxCol = (k, l) => ({ k, l, i: COL_INFO[k], sort: x => { const s = state.bySym.get(x.ticker); return s ? C[k].sort(s) : null; },
+  html: x => { const s = state.bySym.get(x.ticker); return s ? C[k].html(s) : `<span class="muted">—</span>`; } });
+const PF_DASH = () => [
+  { k: "name", l: "Titolo", cls: "l", sort: x => x.name, html: pfName },
+  { k: "value", l: "Valore", sort: x => x.value, html: x => fEur(x.value) },
+  { k: "weight", l: "Peso", sort: x => x.weight, html: x => isNum(x.weight) ? fNum(x.weight, 1) + "%" : "—" },
+  { ...ndxCol("trend", "Trend"), cls: "" }, { ...ndxCol("signal", "Segnale"), cls: "l" }, { ...ndxCol("valLabel", "Valutazione"), cls: "l" },
+  { ...ndxCol("upside", "Potenziale analisti"), cls: "" }, { ...ndxCol("earnings", "Prossima trimestrale"), cls: "l" },
+];
 const PF_COLS = [
-  { k: "name", l: "Titolo", cls: "l", sort: x => x.name, html: x => `<b>${esc(x.name)}</b><div class="muted small">${esc(x.ticker || x.symbol)} · ${esc(x.kind)} · ${esc(x.currency)}</div>` },
+  { k: "name", l: "Titolo", cls: "l", sort: x => x.name, html: pfName },
   { k: "qty", l: "Quantità", sort: x => x.qty, html: x => fNum(x.qty, x.qty % 1 ? 2 : 0) },
   { k: "costPrice", l: "Prezzo di carico", sort: x => x.costPrice, html: x => fPrice(x.costPrice) },
   { k: "price", l: "Prezzo", sort: x => x.price, html: x => `${fPrice(x.price)}${x.live ? "" : ` <span class="muted small" title="Ticker non trovato: prezzo del file">(file)</span>`}` },
@@ -816,15 +834,25 @@ function renderPortfolio() {
   $("#pfWarn").hidden = !D.warnings.length;
   $("#pfWarn").innerHTML = D.warnings.map(w => `<div>⚠ ${esc(w)}</div>`).join("")
     + (D.warnings.length ? `<div class="muted small">Puoi indicare il ticker giusto in <code>portafoglio/ticker.json</code>, per esempio {"ISIN": "TICKER.MI"}.</div>` : "");
-  const col = PF_COLS.find(c => c.k === pf.sort.key) || PF_COLS[4];
+  const COLS = pf.cols === "dash" ? PF_DASH() : PF_COLS;
+  $$("#pfColSeg button").forEach(b => b.classList.toggle("on", b.dataset.cols === pf.cols));
+  const col = COLS.find(c => c.k === pf.sort.key) || COLS.find(c => c.k === "value");
+  // leveraged products: how much of the value, and of the effective exposure, they are
+  const lev = D.positions.filter(x => x.leverage > 1);
+  $("#pfLev").hidden = !lev.length;
+  if (lev.length) {
+    const v = d3.sum(lev, x => x.value), e = d3.sum(lev, x => x.exposure);
+    $("#pfLev").innerHTML = `⚠ <b>${lev.length === 1 ? "1 prodotto a leva" : `${lev.length} prodotti a leva`}</b> (${lev.map(x => esc(x.ticker || x.symbol)).join(", ")}):
+      ${fNum(v / T.value * 100, 1)}% del valore, ma <b>${fNum(e / T.exposure * 100, 1)}% dell'esposizione effettiva</b>. ${info(LEV_INFO(lev[0].leverage))}`;
+  }
   const rows = [...D.positions].sort((a, b) => {
     const va = col.sort(a), vb = col.sort(b);
     if (va == null) return 1; if (vb == null) return -1;
     return (typeof va === "string" ? va.localeCompare(vb) : va - vb) * pf.sort.dir;
   });
   $("#pfCount").textContent = `${rows.length} posizioni`;
-  $("#pfTbl").innerHTML = `<thead><tr>${PF_COLS.map(c => `<th class="${c.cls || ""} ${pf.sort.key === c.k ? "sorted" + (pf.sort.dir > 0 ? " asc" : "") : ""}" data-k="${c.k}">${esc(c.l)}${c.i ? " " + info(c.i) : ""}</th>`).join("")}</tr></thead>
-    <tbody>${rows.map(x => `<tr data-t="${esc(x.ticker || "")}">${PF_COLS.map(c => `<td class="${c.cls || ""}">${c.html(x)}</td>`).join("")}</tr>`).join("")}</tbody>`;
+  $("#pfTbl").innerHTML = `<thead><tr>${COLS.map(c => `<th class="${c.cls || ""} ${pf.sort.key === c.k ? "sorted" + (pf.sort.dir > 0 ? " asc" : "") : ""}" data-k="${c.k}">${esc(c.l)}${c.i ? " " + info(c.i) : ""}</th>`).join("")}</tr></thead>
+    <tbody>${rows.map(x => `<tr data-t="${esc(x.ticker || "")}" class="${x.leverage > 1 ? "lev" : ""}">${COLS.map(c => `<td class="${c.cls || ""}">${c.html(x)}</td>`).join("")}</tr>`).join("")}</tbody>`;
   renderConcentration();
 }
 const EXPO_INFO = `<b>Valore investito</b>: quanto vale oggi quello che possiedi.<br><b>Esposizione effettiva</b>: quanto ti muovi davvero
@@ -847,6 +875,7 @@ function renderConcentration() {
   };
   $("#pfConcNote").innerHTML = `${notes[pf.dim]} Barra chiara = valore investito, barra scura = esposizione effettiva.`;
 }
+$("#pfColSeg").addEventListener("click", e => { const b = e.target.closest("[data-cols]"); if (b) { pf.cols = b.dataset.cols; LS.set("pfCols", pf.cols); renderPortfolio(); } });
 $("#pfDimSeg").addEventListener("click", e => { const b = e.target.closest("[data-dim]"); if (b) { pf.dim = b.dataset.dim; LS.set("pfDim", pf.dim); renderConcentration(); } });
 $("#pfTbl").addEventListener("click", e => {
   const th = e.target.closest("th[data-k]");

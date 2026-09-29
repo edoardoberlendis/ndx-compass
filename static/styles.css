@@ -661,3 +661,8 @@ table.pf tbody tr { cursor: pointer; }
 .cbar i { display: block; height: 5px; border-radius: 2px; }
 .cbar i.v { background: color-mix(in srgb, var(--series-1) 40%, transparent); }
 .cbar i.e { background: var(--series-1); }
+/* portfolio: leveraged products */
+table.pf tr.lev td { background: color-mix(in srgb, var(--warn) 9%, transparent); }
+table.pf tr.lev td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+.lev-badge { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 4px; background: var(--warn); color: #fff; vertical-align: 1px; }
+.pf-lev { margin: 0 0 8px; padding: 8px 10px; border-radius: 6px; border-left: 3px solid var(--warn); background: var(--surface-2); line-height: 1.5; }

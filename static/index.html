@@ -109,8 +109,11 @@
     <div id="pfBody" hidden>
       <div class="kpis" id="pfKpis"></div>
       <div class="card">
-        <div class="card-h"><h2>Posizioni</h2><span class="card-meta" id="pfMeta"></span><span class="count" id="pfCount"></span></div>
+        <div class="card-h"><h2>Posizioni</h2>
+          <div class="seg small" id="pfColSeg"><button data-cols="values" class="on">Valori</button><button data-cols="dash">Dati della dashboard</button></div>
+          <span class="card-meta" id="pfMeta"></span><span class="count" id="pfCount"></span></div>
         <div id="pfWarn" class="pf-warn" hidden></div>
+        <div id="pfLev" class="pf-lev" hidden></div>
         <div class="table-wrap"><table class="scr pf" id="pfTbl"></table></div>
         <p class="muted small">Valori in euro con le stesse formule di Fineco: quantità × prezzo ÷ cambio EUR/USD (1 per i titoli in euro).
           Il costo è il "Valore di carico" del file, al cambio dei giorni di acquisto. Nessuna indicazione di acquisto o vendita.</p>
