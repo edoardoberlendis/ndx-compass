@@ -210,6 +210,7 @@ function renderAll() {
   syncTfSegs();
   if (state.view === "overview") renderOverview();
   if (state.view === "watch") renderMyStocks();
+  if (state.view === "portfolio") loadPortfolio();
   if (state.view === "screener") renderScreener();
   if (state.view === "sectors") renderSectors();
   if (state.view === "ideas" || state.view === "trade") renderIdeas();
@@ -760,6 +761,82 @@ $("#myTbl").addEventListener("click", e => {
   if (tr && !e.target.closest(".star")) openDetail(tr.dataset.t);
 });
 
+// ------------------------------------------------------------ portfolio (newest Fineco export in portafoglio/)
+const pf = { data: null, sort: { key: "value", dir: -1 }, retry: null };
+const fEur = (v, d = 2) => isNum(v) ? fNum(v, d) + " €" : "—";
+const fEurS = (v, d = 2) => isNum(v) ? (v > 0 ? "+" : "") + fNum(v, d) + " €" : "—";
+// detail header for stocks outside the Nasdaq-100 that I own
+function pfQuote(t) {
+  const x = pf.data?.positions?.find(p => p.ticker === t);
+  if (!x) return null;
+  const chg = isNum(x.prevClose) ? x.price - x.prevClose : null;
+  return { name: x.name, price: x.price, prevClose: x.prevClose, chg, chgPct: isNum(chg) ? chg / x.prevClose * 100 : null };
+}
+async function loadPortfolio() {
+  try { pf.data = await getJSON("/api/portfolio"); } catch { pf.data = { file: null, error: "Server non raggiungibile" }; }
+  renderPortfolio();
+  clearTimeout(pf.retry);
+  if (pf.data.resolving && state.view === "portfolio") pf.retry = setTimeout(loadPortfolio, 3000);   // tickers still being matched
+}
+const FX_INFO = `Per i titoli in dollari il risultato in euro dipende da due cose: il <b>prezzo del titolo</b> e il <b>cambio EUR/USD</b>.
+  "Di cui effetto cambio" è la parte dovuta solo al cambio: quanto varrebbe la posizione al prezzo di oggi ma al cambio dei giorni
+  di acquisto, confrontato con il valore di oggi. Negativo = il dollaro si è indebolito rispetto all'euro da quando hai comprato.`;
+const PF_COLS = [
+  { k: "name", l: "Titolo", cls: "l", sort: x => x.name, html: x => `<b>${esc(x.name)}</b><div class="muted small">${esc(x.ticker || x.symbol)} · ${esc(x.kind)} · ${esc(x.currency)}</div>` },
+  { k: "qty", l: "Quantità", sort: x => x.qty, html: x => fNum(x.qty, x.qty % 1 ? 2 : 0) },
+  { k: "costPrice", l: "Prezzo di carico", sort: x => x.costPrice, html: x => fPrice(x.costPrice) },
+  { k: "price", l: "Prezzo", sort: x => x.price, html: x => `${fPrice(x.price)}${x.live ? "" : ` <span class="muted small" title="Ticker non trovato: prezzo del file">(file)</span>`}` },
+  { k: "value", l: "Valore", sort: x => x.value, html: x => fEur(x.value) },
+  { k: "pnl", l: "Guadagno / perdita", sort: x => x.pnl, html: x => `<span class="${sign(x.pnl)}">${fEurS(x.pnl)}</span>` },
+  { k: "pnlPct", l: "%", sort: x => x.pnlPct, html: x => `<span class="${sign(x.pnlPct)}">${fPct(x.pnlPct, 1)}</span>` },
+  { k: "fxEffect", l: "Di cui cambio", i: FX_INFO, sort: x => x.fxEffect, html: x => x.currency === "EUR" ? `<span class="muted">—</span>` : `<span class="${sign(x.fxEffect)}">${fEurS(x.fxEffect)}</span>` },
+  { k: "today", l: "Oggi", i: "Variazione di oggi in euro, dovuta al prezzo (rispetto alla chiusura precedente della sua borsa).", sort: x => x.today, html: x => `<span class="${sign(x.today)}">${fEurS(x.today)}</span>` },
+  { k: "weight", l: "Peso", i: "Quota del valore totale del portafoglio.", sort: x => x.weight, html: x => isNum(x.weight) ? fNum(x.weight, 1) + "%" : "—" },
+];
+function renderPortfolio() {
+  const D = pf.data;
+  const empty = !D || !D.file || D.error;
+  $("#pfEmpty").hidden = !empty; $("#pfBody").hidden = empty;
+  if (empty) {
+    $("#pfEmpty").innerHTML = D?.error ? esc(D.error)
+      : `Nessun file nella cartella <code>portafoglio/</code>. Esporta le posizioni da Fineco in Excel e mettile lì: la dashboard legge da sola il file più recente.`;
+    return;
+  }
+  const T = D.totals;
+  const kpi = (l, v, sub) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
+  $("#pfKpis").innerHTML = [
+    kpi("Valore attuale", fEur(T.value, 0), `costo ${fEur(T.cost, 0)}`),
+    kpi("Guadagno / perdita", `<span class="${sign(T.pnl)}">${fEurS(T.pnl, 0)}</span>`, `<span class="${sign(T.pnlPct)}">${fPct(T.pnlPct, 1)}</span> sul costo`),
+    kpi(`Di cui effetto cambio ${info(FX_INFO)}`, `<span class="${sign(T.fxEffect)}">${fEurS(T.fxEffect, 0)}</span>`, isNum(D.fx) ? `EUR/USD oggi ${fNum(D.fx, 4)}` : "cambio non disponibile"),
+    kpi("Oggi", `<span class="${sign(T.today)}">${fEurS(T.today, 0)}</span>`, "variazione dei prezzi rispetto alla chiusura precedente"),
+  ].join("");
+  const when = D.quotesAt ? new Date(D.quotesAt * 1000).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }) : null;
+  $("#pfMeta").textContent = `file ${D.file} (esportato il ${new Date(D.fileTime * 1000).toLocaleString("it-IT", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })})`
+    + (D.resolving ? " · cerco i ticker su Yahoo…" : when ? ` · prezzi aggiornati alle ${when} ora locale` : "");
+  $("#pfWarn").hidden = !D.warnings.length;
+  $("#pfWarn").innerHTML = D.warnings.map(w => `<div>⚠ ${esc(w)}</div>`).join("")
+    + (D.warnings.length ? `<div class="muted small">Puoi indicare il ticker giusto in <code>portafoglio/ticker.json</code>, per esempio {"ISIN": "TICKER.MI"}.</div>` : "");
+  const col = PF_COLS.find(c => c.k === pf.sort.key) || PF_COLS[4];
+  const rows = [...D.positions].sort((a, b) => {
+    const va = col.sort(a), vb = col.sort(b);
+    if (va == null) return 1; if (vb == null) return -1;
+    return (typeof va === "string" ? va.localeCompare(vb) : va - vb) * pf.sort.dir;
+  });
+  $("#pfCount").textContent = `${rows.length} posizioni`;
+  $("#pfTbl").innerHTML = `<thead><tr>${PF_COLS.map(c => `<th class="${c.cls || ""} ${pf.sort.key === c.k ? "sorted" + (pf.sort.dir > 0 ? " asc" : "") : ""}" data-k="${c.k}">${esc(c.l)}${c.i ? " " + info(c.i) : ""}</th>`).join("")}</tr></thead>
+    <tbody>${rows.map(x => `<tr data-t="${esc(x.ticker || "")}">${PF_COLS.map(c => `<td class="${c.cls || ""}">${c.html(x)}</td>`).join("")}</tr>`).join("")}</tbody>`;
+}
+$("#pfTbl").addEventListener("click", e => {
+  const th = e.target.closest("th[data-k]");
+  if (th) {
+    const k = th.dataset.k;
+    pf.sort = pf.sort.key === k ? { key: k, dir: -pf.sort.dir } : { key: k, dir: k === "name" ? 1 : -1 };
+    return renderPortfolio();
+  }
+  const tr = e.target.closest("tr[data-t]");
+  if (tr && tr.dataset.t) openDetail(tr.dataset.t);
+});
+
 // ------------------------------------------------------------ screener
 const C = {
   star:   { l: "", cls: "l", sort: s => state.watch.has(s.ticker) ? 1 : 0, html: s => `<button class="star ${state.watch.has(s.ticker) ? "on" : ""}" data-star="${esc(s.ticker)}" aria-label="Preferito">${state.watch.has(s.ticker) ? "★" : "☆"}</button>` },
@@ -998,7 +1075,7 @@ function closeDetail() {
 scrim.addEventListener("click", closeDetail);
 
 function quoteFor(t) {
-  return state.bySym.get(t) || state.snap.indices[t] || null;
+  return state.bySym.get(t) || state.snap.indices[t] || pfQuote(t) || null;
 }
 function renderDetailHeader() {
   const t = state.detail, s = quoteFor(t), top = drawer.querySelector(".d-top");
@@ -1773,7 +1850,7 @@ document.addEventListener("keydown", e => {
 });
 
 // ------------------------------------------------------------ views, theme, resize
-const VIEWS = ["overview", "watch", "screener", "sectors", "ideas", "trade"];
+const VIEWS = ["overview", "watch", "portfolio", "screener", "sectors", "ideas", "trade"];
 function setView(v) {
   state.view = v; LS.set("view", v);
   if (location.hash.slice(1) !== v) history.replaceState(null, "", "#" + v);

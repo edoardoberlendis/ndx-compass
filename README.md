@@ -24,6 +24,14 @@ Oppure dal Terminale:
   (i miei titoli in cima).
 - **I miei titoli**: i preferiti (★) con prezzo, variazioni, posizione rispetto alle medie, valutazione, analisti, segnale,
   prossima trimestrale e ultima notizia. Salvati in `watchlist.json` nella cartella del progetto.
+- **Portafoglio**: le mie posizioni reali, dall'export Excel di Fineco ("Portafoglio sintesi") messo nella cartella
+  `portafoglio/` (la dashboard legge da sola il file più recente: basta sostituirlo quando compro o vendo). Per ogni
+  posizione: valore attuale in euro, guadagno/perdita in euro e in %, di cui effetto cambio (per i titoli in dollari),
+  variazione di oggi e peso sul totale. Ticker Yahoo ricavati dal simbolo Fineco (`.O`/`.N` → nessun suffisso, `.MI`,
+  `.FRA` su Xetra → `.DE`, `.PAR` → `.PA`, ...), controllati con valuta e prezzo del file; se uno non si trova si usa il
+  prezzo del file e si può indicare il ticker in `portafoglio/ticker.json` (`{"ISIN": "TICKER"}`). Stesse formule di
+  Fineco: valore = quantità × prezzo ÷ cambio EUR/USD. **I dati personali restano sul Mac**: `portafoglio/` è esclusa
+  da Git, niente viene salvato in `cache/` o nei report, a Yahoo vanno solo i ticker per i prezzi.
 - **Chi si è mosso e perché** (in Oggi): per gli 8 migliori e gli 8 peggiori del giorno cerca tra le ultime
   40 notizie Yahoo quelle che nominano la società, uscite tra la chiusura precedente e la mattina dopo, e ne
   ricava il probabile motivo con regole a parole chiave (conti, guidance, analisti, acquisizioni, cause legali,
@@ -148,6 +156,7 @@ Pesi e soglie non vengono adattati ai risultati.
 | `analysts.py` | Dati degli analisti e valutazione (scaricati una volta al giorno) |
 | `score.py` | Segnale finale (analisti + valutazione + notizie) e Trend a parte |
 | `backtest.py` | Backtest del Trend, la parte tecnica (a mano) |
+| `portfolio.py` | Portafoglio: lettura dell'export Fineco, ticker Yahoo, valori in euro |
 | `market_calendar.py` | Festività e chiusure anticipate della borsa USA (da aggiornare ogni anno) |
 | `themes.json` | Temi personalizzati (elenchi di ticker) |
 | `static/` | La pagina web (HTML, CSS, JavaScript) |
@@ -157,3 +166,4 @@ Pesi e soglie non vengono adattati ai risultati.
 | `.venv/` | Ambiente Python isolato (si ricrea con `./run.sh`) |
 | `cache/` | Dati temporanei e log del server (si può cancellare) |
 | `reports/` | Report salvati |
+| `portafoglio/` | Export Fineco delle mie posizioni (dati personali, esclusa da Git) |

@@ -650,3 +650,9 @@ table.my td.nw a:hover { text-decoration: underline; }
 /* ------------------------------------------------ US market holidays */
 .status.holiday::before { background: var(--muted); }
 .cal-warn { color: var(--warn); font-weight: 650; cursor: help; }
+
+/* ------------------------------------------------ portfolio */
+table.pf td { white-space: nowrap; }
+table.pf td.l { white-space: normal; min-width: 200px; }
+table.pf tbody tr { cursor: pointer; }
+.pf-warn { color: var(--warn); margin: 0 0 8px; line-height: 1.5; }

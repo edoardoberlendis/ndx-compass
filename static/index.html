@@ -28,6 +28,7 @@
   <div class="tablist" role="tablist">
     <button class="tab active" data-view="overview">Oggi</button>
     <button class="tab" data-view="watch">I miei titoli</button>
+    <button class="tab" data-view="portfolio">Portafoglio</button>
     <button class="tab" data-view="screener">Screener</button>
     <button class="tab" data-view="sectors">Settori</button>
     <button class="tab" data-view="ideas">Report</button>
@@ -100,6 +101,21 @@
     </div>
     <div class="chips grouped" id="presets"></div>
     <div class="table-wrap"><table class="scr" id="scr"></table></div>
+  </section>
+
+  <!-- PORTFOLIO (newest export in portafoglio/, personal data: never cached) -->
+  <section id="view-portfolio" class="view" hidden>
+    <div id="pfEmpty" class="card empty" hidden></div>
+    <div id="pfBody" hidden>
+      <div class="kpis" id="pfKpis"></div>
+      <div class="card">
+        <div class="card-h"><h2>Posizioni</h2><span class="card-meta" id="pfMeta"></span><span class="count" id="pfCount"></span></div>
+        <div id="pfWarn" class="pf-warn" hidden></div>
+        <div class="table-wrap"><table class="scr pf" id="pfTbl"></table></div>
+        <p class="muted small">Valori in euro con le stesse formule di Fineco: quantità × prezzo ÷ cambio EUR/USD (1 per i titoli in euro).
+          Il costo è il "Valore di carico" del file, al cambio dei giorni di acquisto. Nessuna indicazione di acquisto o vendita.</p>
+      </div>
+    </div>
   </section>
 
   <!-- SECTORS (sector returns; the market map lives in Oggi) -->

@@ -28,6 +28,7 @@ import yfinance as yf
 from flask import Flask, jsonify, request, send_from_directory
 
 import market_calendar
+import portfolio
 
 warnings.filterwarnings("ignore")
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
@@ -733,6 +734,7 @@ def worker():
         store.refresh_intraday()
         store.build()
         store.ready.set()
+        portfolio.refresh()                                      # my positions (portafoglio/), if an export is there
         if not analysts.is_fresh():
             store.refresh_analysts(tickers)
         store.refresh_news_all(tickers)
@@ -755,6 +757,7 @@ def worker():
             store.refresh_news_all(tickers)
             store.refresh_intraday()
             store.build()
+            portfolio.refresh()
         except Exception:
             log.exception("refresh failed")
 
@@ -1039,6 +1042,12 @@ def api_watchlist():
             news_by[t] = [{k: n.get(k) for k in ("title", "url", "publisher", "time")} for n in items]
     return app.response_class(json.dumps({"exists": True, "tickers": tickers, "news": news_by}, default=clean),
                               mimetype="application/json")
+
+
+@app.route("/api/portfolio")
+def api_portfolio():
+    """My positions from the newest export in portafoglio/ (personal data: served only to this Mac, never cached)."""
+    return app.response_class(json.dumps(portfolio.snapshot(), default=clean), mimetype="application/json")
 
 
 @app.route("/api/movers-why")
