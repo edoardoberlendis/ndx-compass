@@ -418,6 +418,7 @@ class Store:
             # final signal; the news part waits for the first background news download
             sig = sigs[t] = score.for_stock(r, self.tech.get(t), v, news_all.get(t) if news_all is not None else None)
             r["sigScore"], r["signal"] = (sig["score"], sig["signal"]) if sig else (None, None)
+            r["trend"] = sig["trend"]["score"] if sig and sig["trend"] else None   # technical score, shown apart as "Trend"
 
         # index + benchmarks
         idx = {}

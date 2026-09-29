@@ -32,11 +32,14 @@ Oppure dal Terminale:
   È un aiuto, non una certezza: il link porta all'articolo per verificare.
 - **Segnale finale** (nello Screener, in I miei titoli, in cima alla scheda del titolo e nel report): Molto positivo /
   Positivo / Neutro / Negativo / Molto negativo, da un punteggio −100…+100 che combina
-  tecnica 40% (medie 20/40/60, RSI, forza vs QQQ), analisti 25% (target, giudizio medio, upgrade/downgrade, revisioni
-  delle stime), valutazione 20% (settore + storia + PEG) e notizie 15% (tono dei titoli degli ultimi 3 giorni che
-  nominano la società, notizie scaricate ogni 2 ore). Se una parte manca, il suo peso va alle altre. Le soglie:
+  analisti 41,7% (target, giudizio medio, upgrade/downgrade, revisioni delle stime), valutazione 33,3% (settore + storia
+  + PEG) e notizie 25% (tono dei titoli degli ultimi 3 giorni che nominano la società, notizie scaricate ogni 2 ore).
+  Se una parte manca, il suo peso va alle altre; con una sola parte su tre compare **Dati insufficienti**. Le soglie:
   ≥ +50 molto positivo, ≥ +20 positivo, ≤ −20 negativo, ≤ −50 molto negativo. Calcolo in `score.py`.
+  Analisti, valutazione e notizie non hanno uno storico gratuito: il segnale **non è verificato con un backtest**.
   È una combinazione meccanica di dati pubblici, **non una consulenza finanziaria**.
+- **Trend**: il punteggio tecnico (medie 20/40/60, RSI, forza vs QQQ), mostrato accanto al segnale ma non più dentro:
+  il backtest ha mostrato che non distingue la direzione. Descrive l'andamento del prezzo, non è un voto.
 - **Screener**: i 100 titoli con colonne Panoramica / Performance / Valutazione / Tecnica, filtri (anche "Sopra/Sotto 20, 40 e 60", "Valutazione economica/cara", "Upgrade recenti", "Stime in rialzo/calo"), raggruppati per tema; un secondo clic su un filtro attivo lo toglie e torna a "Tutti". Export CSV. La vista Tecnica mostra la distanza dalle medie 20/40/60/50/200.
 - **Settori**: rendimenti dei settori pesati per capitalizzazione e peso di ogni settore nell'indice. Clic su una riga:
   compaiono i titoli di quel settore; di nuovo sulla stessa riga (o "Tutti i settori") si torna a tutti.
@@ -102,16 +105,17 @@ definiti in `themes.json` (modificabile). Ogni *setup* ha entrata, stop, target 
 
 Il report è uno screening meccanico, **non è una consulenza finanziaria**.
 
-## Backtest della parte tecnica
+## Backtest del Trend (parte tecnica)
 
 ```sh
 .venv/bin/python backtest.py   # circa 10 secondi, salva reports/backtest.json (sezione nella scheda Report)
 ```
 
 Ogni settimana degli ultimi ~10 anni ricalcola, per i titoli di oggi, il punteggio tecnico della dashboard (stesso
-codice: la verifica automatica deve dare differenza 0), lo mette nella fascia del segnale finale e misura il rendimento
+codice: la verifica automatica deve dare differenza 0), lo mette in una fascia con le stesse soglie del segnale e misura il rendimento
 a 1, 3 e 6 mesi del titolo e di QQQ negli stessi giorni: rendimento medio, extra-rendimento medio e mediano, % di volte
-meglio di QQQ, numero di casi, e la tabella anno per anno. Testa solo la parte tecnica (40% del segnale). Limiti
+meglio di QQQ, numero di casi, e la tabella anno per anno. Testa solo il Trend: visto che le fasce estreme vanno entrambe
+meglio di quelle centrali (la parte tecnica non distingue la direzione), il Trend non fa più parte del segnale finale. Limiti
 principali: survivorship bias (si usano i componenti di oggi), casi sovrapposti, un solo tipo di mercato, nessun costo.
 Pesi e soglie non vengono adattati ai risultati.
 
@@ -122,8 +126,8 @@ Pesi e soglie non vengono adattati ai risultati.
 | `server.py` | Server: scarica i dati e li serve alla pagina web |
 | `signals.py` | Report tecnico due volte al giorno (scheda Report) |
 | `analysts.py` | Dati degli analisti e valutazione (scaricati una volta al giorno) |
-| `score.py` | Segnale finale: tecnica + analisti + valutazione + notizie |
-| `backtest.py` | Backtest della parte tecnica del segnale (a mano) |
+| `score.py` | Segnale finale (analisti + valutazione + notizie) e Trend a parte |
+| `backtest.py` | Backtest del Trend, la parte tecnica (a mano) |
 | `themes.json` | Temi personalizzati (elenchi di ticker) |
 | `static/` | La pagina web (HTML, CSS, JavaScript) |
 | `requirements.txt` | Librerie Python necessarie |

@@ -564,9 +564,9 @@ const PRESET_INFO = {
   upgrades: "Negli ultimi 30 giorni le banche d'affari hanno alzato il giudizio più volte di quante l'abbiano abbassato.",
   estUp: "Negli ultimi 30 giorni gli analisti hanno alzato di oltre il 3% la stima degli utili del prossimo anno.",
   estDown: "Negli ultimi 30 giorni gli analisti hanno abbassato di oltre il 3% la stima degli utili del prossimo anno.",
-  sigBuy: "Segnale finale Positivo o Molto positivo (punteggio da +20 in su). È una combinazione meccanica, non un consiglio d'acquisto.",
-  sigNeutral: "Segnale finale Neutro: punteggio tra −20 e +20.",
-  sigSell: "Segnale finale Negativo o Molto negativo (punteggio da −20 in giù). È una combinazione meccanica, non un consiglio di vendita.",
+  sigBuy: "Segnale finale Positivo o Molto positivo (punteggio da +20 in su), da analisti, valutazione e notizie. Esclude i titoli con «Dati insufficienti». Non è un consiglio d'acquisto.",
+  sigNeutral: "Segnale finale Neutro: punteggio tra −20 e +20. Esclude i titoli con «Dati insufficienti» (una sola parte disponibile su tre).",
+  sigSell: "Segnale finale Negativo o Molto negativo (punteggio da −20 in giù), da analisti, valutazione e notizie. Esclude i titoli con «Dati insufficienti». Non è un consiglio di vendita.",
 };
 // screener quick filters grouped by topic (same filters, only laid out in rows)
 const PRESET_GROUPS = [
@@ -709,7 +709,7 @@ function maStack(s) {
   if (![p, a, b, c].every(isNum)) return null;
   return p > a && a > b && b > c ? 1 : p < a && a < b && b < c ? -1 : 0;
 }
-const MY_COLS = ["star", "ticker", "name", "price", "chgPct", "perf1M", "perfYTD", "vsSma20", "vsSma40", "vsSma60", "vsSma200", "maOrder", "valLabel", "upside", "signal", "earnings", "news"];
+const MY_COLS = ["star", "ticker", "name", "price", "chgPct", "perf1M", "perfYTD", "vsSma20", "vsSma40", "vsSma60", "vsSma200", "maOrder", "valLabel", "upside", "signal", "trend", "earnings", "news"];
 function renderMyStocks() {
   if (Date.now() - watchLoadedAt > 5 * 60_000) loadWatch().then(() => state.view === "watch" && renderMyStocks());   // fresh headlines
   const col = C[state.mySort.key] || C.chgPct;
@@ -761,7 +761,8 @@ const C = {
   target: { l: "Target", sort: s => s.target, html: s => fPrice(s.target) },
   upside: { l: "Potenziale", sort: s => s.upside, html: s => `<span class="${sign(s.upside)}">${fPct(s.upside, 1)}</span>` },
   rec:    { l: "Analisti", cls: "l", sort: s => s.recMean, html: s => esc(REC[s.rec] || "—") },
-  signal: { l: "Segnale", cls: "l", sort: s => s.sigScore, html: s => s.signal ? `${sigBadge(s.signal)} <span class="muted num">${fNum(s.sigScore, 0)}</span>` : "—" },
+  signal: { l: "Segnale", cls: "l", sort: s => s.sigScore, html: s => s.signal ? `${sigBadge(s.signal)}${isNum(s.sigScore) ? ` <span class="muted num">${fNum(s.sigScore, 0)}</span>` : ""}` : "—" },
+  trend:  { l: "Trend", sort: s => s.trend, html: s => isNum(s.trend) ? scoreBar(s.trend) : "—" },
   valLabel: { l: "Valutazione", cls: "l", sort: s => s.valRatio, html: s => valBadge(s.valLabel) },
   ps:     { l: "P/S", sort: s => s.ps, html: s => fNum(s.ps, 1) },
   evEbitda: { l: "EV/EBITDA", sort: s => s.evEbitda, html: s => fNum(s.evEbitda, 1) },
@@ -809,7 +810,8 @@ const COL_INFO = {
   target: "Prezzo obiettivo medio degli analisti, a 12 mesi.",
   upside: "Potenziale: di quanto il target medio degli analisti è sopra (o sotto) il prezzo attuale.",
   rec: "Giudizio medio degli analisti, da Forte acquisto a Vendita.",
-  signal: "Segnale finale della dashboard, da −100 a +100: tecnica 40%, analisti 25%, valutazione 20%, notizie 15%. È una combinazione meccanica, non una consulenza finanziaria.",
+  signal: "Segnale finale, da −100 a +100: analisti 42%, valutazione 33%, notizie 25% (se una parte manca, il suo peso va alle altre). Con una sola parte disponibile compare «Dati insufficienti». Non è verificato con un backtest e non è una consulenza finanziaria.",
+  trend: "Trend, da −100 a +100: come si sta muovendo il prezzo (medie 20/40/60, RSI, forza rispetto a QQQ). Descrive l'andamento, non è un voto: il backtest non ha mostrato che un Trend alto dia rendimenti migliori.",
   valLabel: "Confronto dei multipli (P/E, P/S, EV/EBITDA) con i titoli dello stesso settore e con la storia del titolo. Economica = in media oltre il 15% sotto, Cara = oltre il 18% sopra.",
   ps: "P/S: capitalizzazione diviso i ricavi di un anno. Utile per le società con pochi utili.",
   evEbitda: "EV/EBITDA: valore dell'azienda (compresi i debiti, meno la cassa) diviso il margine operativo lordo. Permette di confrontare società con debiti diversi.",
@@ -837,10 +839,10 @@ const COL_INFO = {
 };
 const colHead = k => `${esc(C[k].l)}${COL_INFO[k] ? " " + info(COL_INFO[k]) : ""}`;
 const COLSETS = {
-  overview: ["star", "ticker", "name", "sector", "industry", "mcap", "weight", "price", "chgPct", "signal", "volume", "relVol", "d30"],
+  overview: ["star", "ticker", "name", "sector", "industry", "mcap", "weight", "price", "chgPct", "signal", "trend", "volume", "relVol", "d30"],
   performance: ["star", "ticker", "name", "price", "chgPct", "perf1W", "perf1M", "perf3M", "perf6M", "perfYTD", "perf1Y", "vol20", "d30"],
   valuation: ["star", "ticker", "name", "mcap", "signal", "valLabel", "pe", "fpe", "ps", "evEbitda", "peg", "divYield", "revGrowth", "margin", "target", "upside", "rec", "anl30", "epsRev30"],
-  technical: ["star", "ticker", "name", "price", "chgPct", "signal", "rsi", "vsSma20", "vsSma40", "vsSma60", "vsSma50", "vsSma200", "range52", "fromHi52", "fromLo52", "gapPct", "relVol", "short"],
+  technical: ["star", "ticker", "name", "price", "chgPct", "trend", "signal", "rsi", "vsSma20", "vsSma40", "vsSma60", "vsSma50", "vsSma200", "range52", "fromHi52", "fromLo52", "gapPct", "relVol", "short"],
 };
 
 function screenerRows() {
@@ -897,7 +899,7 @@ $("#scr").addEventListener("click", e => {
 });
 $("#csvBtn").addEventListener("click", () => {
   const keys = ["ticker", "name", "sector", "industry", "price", "chgPct", "mcap", "weight", "volume", "relVol", "perf1W", "perf1M", "perf3M", "perf6M", "perfYTD", "perf1Y",
-    "signal", "sigScore", "pe", "fpe", "ps", "evEbitda", "peg", "valLabel", "divYield", "beta", "target", "upside", "up30", "down30", "epsRev30", "rsi", "vsSma20", "vsSma40", "vsSma60", "vsSma50", "vsSma200", "hi52", "lo52", "fromHi52"];
+    "signal", "sigScore", "trend", "pe", "fpe", "ps", "evEbitda", "peg", "valLabel", "divYield", "beta", "target", "upside", "up30", "down30", "epsRev30", "rsi", "vsSma20", "vsSma40", "vsSma60", "vsSma50", "vsSma200", "hi52", "lo52", "fromHi52"];
   const q = v => v == null ? "" : typeof v === "string" ? `"${v.replace(/"/g, '""')}"` : +v.toFixed(4);
   const csv = [keys.join(","), ...screenerRows().map(s => keys.map(k => q(s[k])).join(","))].join("\n");
   const a = document.createElement("a");
@@ -1209,26 +1211,38 @@ function maOrder(s) {
 }
 // ------------------------------------------------------------ detail: valuation & analysts (daily data, analysts.py)
 // final signal (score.py): technical 40% + analysts 25% + valuation 20% + news 15%
-const SIG_CLS = { "Molto positivo": "b2", Positivo: "b1", Neutro: "n", Negativo: "s1", "Molto negativo": "s2" };
+const SIG_CLS = { "Molto positivo": "b2", Positivo: "b1", Neutro: "n", Negativo: "s1", "Molto negativo": "s2", "Dati insufficienti": "na" };
 // reports and backtests saved before the rename still carry the old band names
 const SIG_OLD = { "Forte acquisto": "Molto positivo", Acquisto: "Positivo", Vendita: "Negativo", "Forte vendita": "Molto negativo" };
 const sigName = l => SIG_OLD[l] || l;
 const sigBadge = l => l ? `<span class="sg ${SIG_CLS[sigName(l)]}">${esc(sigName(l))}</span>` : "—";
 // "In sintesi": signal plus the first reason of the 3 parts that move the score most (score × effective weight)
+const SIG_INFO = `Il segnale combina tre parti: <b>analisti</b> (42%), <b>valutazione</b> (33%) e <b>notizie</b> (25%).
+  Se una parte manca, il suo peso va alle altre. Con una sola parte disponibile (per esempio solo le notizie) il segnale
+  non è affidabile: al suo posto compare <b>Dati insufficienti</b>.<br><br>La parte tecnica non ne fa più parte: il backtest
+  ha mostrato che non distingue la direzione. È mostrata a parte come <b>Trend</b>.`;
+const TREND_INFO = `Trend: punteggio da −100 a +100 su come si sta muovendo il prezzo (ordine e pendenza delle medie 20/40/60,
+  distanza dalle medie, RSI, forza rispetto a QQQ). Descrive l'andamento, <b>non è un voto</b>: il backtest non ha mostrato
+  che i titoli con Trend alto vadano meglio di quelli con Trend basso.`;
 function signalHTML(sig) {
   if (!sig) return "";
+  const ok = isNum(sig.score), tr = sig.trend;
   const top = sig.components.filter(c => c.used && isNum(c.score))
     .sort((a, b) => Math.abs(b.score * b.effWeight) - Math.abs(a.score * a.effWeight)).slice(0, 3);
-  return `<div class="sigbox"><h3>In sintesi</h3>
-    <div class="sig-head">${sigBadge(sig.signal)}<span class="sig-score num ${sign(sig.score)}">${sig.score > 0 ? "+" : ""}${fNum(sig.score, 0)}</span>
-      <span class="muted small">punteggio da −100 a +100 · ≥ +20 positivo, ≤ −20 negativo</span></div>
+  return `<div class="sigbox"><h3>In sintesi ${info(SIG_INFO)}</h3>
+    <div class="sig-head">${sigBadge(sig.signal)}${ok ? `<span class="sig-score num ${sign(sig.score)}">${sig.score > 0 ? "+" : ""}${fNum(sig.score, 0)}</span>
+      <span class="muted small">punteggio da −100 a +100 · ≥ +20 positivo, ≤ −20 negativo</span>`
+      : `<span class="muted small">disponibile solo ${top.length} parte su 3: servono almeno 2 parti tra analisti, valutazione e notizie</span>`}</div>
     <ol class="top3">${top.map(c => `<li><b>${esc(c.name)}</b> <span class="num ${sign(c.score)}">${c.score > 0 ? "+" : ""}${fNum(c.score, 0)}</span> · ${esc(c.reasons[0] || "")}</li>`).join("")}</ol>
+    <div class="muted small">Analisti, valutazione e notizie non hanno uno storico gratuito: questo segnale non è verificato con un backtest.</div>
+    ${tr ? `<div class="trend-row"><b>Trend</b> ${info(TREND_INFO)} ${scoreBar(tr.score)} <span class="muted small">andamento del prezzo, non un voto</span>
+      <ul class="why">${tr.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>` : ""}
     <details class="fold"><summary><span class="small">Dettaglio del segnale</span></summary>
     <div class="sig-comps">${sig.components.map(c => `<div class="sig-c ${c.used ? "" : "off"}">
       <div class="sig-cn"><b>${esc(c.name)}</b> <span class="muted">${c.used ? `peso ${fNum(c.effWeight * 100, 0)}%` : "non disponibile"}</span></div>
       <div>${c.used ? scoreBar(c.score) : ""}</div>
       <ul class="why">${c.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>`).join("")}</div>
-    <div class="muted small">Combinazione automatica di dati pubblici (pesi: tecnica 40%, analisti 25%, valutazione 20%, notizie 15%).
+    <div class="muted small">Combinazione automatica di dati pubblici (pesi: analisti 42%, valutazione 33%, notizie 25%).
       Non è una consulenza finanziaria: usalo come punto di partenza per le tue verifiche.</div></details></div>`;
 }
 const VAL_CLS = { Economica: "cheap", "In linea": "fair", Cara: "rich" };
@@ -1386,7 +1400,7 @@ function renderBacktest() {
   $("#btSeg").innerHTML = Object.keys(B.results).map(h => `<button data-bt="${h}" class="${h === bt.hz ? "on" : ""}">${h === "1M" ? "1 mese" : h === "3M" ? "3 mesi" : "6 mesi"}</button>`).join("");
   $("#btMeta").textContent = `${dayIT(B.from)} → ${dayIT(B.to)} · ${B.stocks} titoli di oggi · ${fNum(B.observations, 0)} casi (uno a settimana)`;
   const pc = v => `<span class="${sign(v)}">${fPct(v, 2)}</span>`;
-  const table = `<div class="table-wrap"><table class="scr"><thead><tr><th class="l">Segnale tecnico</th><th>Casi</th><th>Rendimento medio</th><th>QQQ stesso periodo</th>
+  const table = `<div class="table-wrap"><table class="scr"><thead><tr><th class="l">Fascia del Trend</th><th>Casi</th><th>Rendimento medio</th><th>QQQ stesso periodo</th>
       <th>Extra vs QQQ (media)</th><th>Extra vs QQQ (mediana)</th><th>% volte meglio di QQQ</th><th>vs media di tutti i titoli</th></tr></thead>
     <tbody>${rows.map(x => `<tr class="${x.band === "Tutti i titoli" ? "bt-all" : ""}"><td class="l">${x.band === "Tutti i titoli" ? "<b>Tutti i titoli</b>" : sigBadge(x.band)}</td>
       <td>${fNum(x.n, 0)}</td><td>${pc(x.ret)}</td><td>${pc(x.qqq)}</td><td><b>${pc(x.excess)}</b></td><td>${pc(x.excessMedian)}</td>
@@ -1397,8 +1411,8 @@ function renderBacktest() {
   const limits = `<h4 class="bt-h">Limiti: leggili prima di fidarti dei numeri</h4><ul class="why bt-lim">${B.limits.map(l => `<li><b>${esc(l.title)}.</b> ${esc(l.text)}</li>`).join("")}</ul>
     <p class="muted small">Il calcolo del punteggio nel backtest coincide con quello della dashboard (differenza massima su casi di controllo: ${fNum(B.checkMaxDiff, 2)}).
     Per rifarlo: <code>.venv/bin/python backtest.py</code> (circa 10 secondi).</p>`;
-  $("#btBody").innerHTML = `<p class="small muted">Ogni settimana, per ogni titolo, il punteggio tecnico (medie 20/40/60, RSI, forza vs QQQ) viene messo nella stessa fascia
-    del segnale finale. Poi si misura quanto ha reso il titolo nei ${bt.hz === "1M" ? "21" : bt.hz === "3M" ? "63" : "126"} giorni di borsa successivi, e quanto QQQ negli stessi giorni.</p>${table}${years}${limits}`;
+  $("#btBody").innerHTML = `<p class="small muted">Ogni settimana, per ogni titolo, il punteggio tecnico, cioè il <b>Trend</b> (medie 20/40/60, RSI, forza vs QQQ),
+    viene messo in una fascia con le stesse soglie del segnale. Visto questo risultato, il Trend non fa più parte del segnale finale. Poi si misura quanto ha reso il titolo nei ${bt.hz === "1M" ? "21" : bt.hz === "3M" ? "63" : "126"} giorni di borsa successivi, e quanto QQQ negli stessi giorni.</p>${table}${years}${limits}`;
 }
 $("#btSeg").addEventListener("click", e => { const b = e.target.closest("[data-bt]"); if (b) { bt.hz = b.dataset.bt; renderBacktest(); } });
 
@@ -1595,7 +1609,7 @@ function ideaCard(i) {
       ? lvCell("Stop mobile", fPrice(lv.stop)) + lvCell("vs media 20", fPct(st.vs20, 1), sign(st.vs20)) + lvCell("RSI", fNum(st.rsi, 0)) + lvCell("vs QQQ 1M", fChg(st.rs1m), sign(st.rs1m)) + lvCell("ATR", fNum(st.atrPct, 1) + "%")
       : lvCell(i.side === "avoid" ? "Short vicino a" : "Entrata", fPrice(lv.entry)) + lvCell("Stop", fPrice(lv.stop), "down") + lvCell("Target", fPrice(lv.target), "up") + lvCell("R : R", fNum(lv.rr, 1)) + lvCell("Rischio", fNum(lv.riskPct, 1) + "%")}</div>
     <ul class="why">${i.why.map(w => `<li>${esc(w)}</li>`).join("")}</ul>
-    ${i.signal ? `<div class="idea-sig">Segnale finale: ${sigBadge(i.signal.signal)} <span class="muted num">${fNum(i.signal.score, 0)}</span></div>` : ""}
+    ${i.signal ? `<div class="idea-sig">Segnale finale: ${sigBadge(i.signal.signal)}${isNum(i.signal.score) ? ` <span class="muted num">${fNum(i.signal.score, 0)}</span>` : ""}</div>` : ""}
     <div class="tags"><span>${esc(i.sector)}</span>${i.themes.map(t => `<span>${esc(t)}</span>`).join("")}</div>
   </div>`;
 }
@@ -1622,7 +1636,7 @@ function renderMaTable(R) {
   const q = ($("#maFind").value || "").trim().toLowerCase();
   const cols = [
     ["ticker", "Ticker", "l tk", s => esc(s.ticker)], ["sector", "Settore", "l", s => esc(s.sector)],
-    ["score", "Punteggio", "", s => scoreBar(s.score)],
+    ["score", "Trend", "", s => scoreBar(s.score)],
     ["stack", "Ordine medie", "l", s => `<span class="stack ${s.stack}">${s.stack === "bull" ? "20>40>60" : s.stack === "bear" ? "20<40<60" : "misto"}</span>`],
     ["vs20", "vs media 20", "", s => `<span class="${sign(s.vs20)}">${fPct(s.vs20, 1)}</span>`],
     ["vs60", "vs media 60", "", s => `<span class="${sign(s.vs60)}">${fPct(s.vs60, 1)}</span>`],
@@ -1637,6 +1651,9 @@ function renderMaTable(R) {
   const head = `<thead><tr>${cols.map(([k, l, c]) => `<th class="${c.split(" ")[0]} ${key === k ? "sorted" + (dir > 0 ? " asc" : "") : ""}" data-mk="${k}">${l}</th>`).join("")}</tr></thead>`;
   $("#maTable").innerHTML = `${head}<tbody>${rows.map(s => `<tr data-t="${esc(s.ticker)}">${cols.map(([, , c, f]) => `<td class="${c}">${f(s)}</td>`).join("")}</tr>`).join("")}</tbody>`;
   $("#maHead").innerHTML = head;
+  // reports saved before the change carry a signal that still included the technical part
+  const oldSig = R.ideas.some(i => i.signal?.components?.some(c => c.key === "tech"));
+  $("#maNote").textContent = oldSig ? "segnale calcolato con la versione precedente (tecnica inclusa)" : "";
   syncMaHead();
 }
 // The table scrolls sideways inside its card, so its own header cannot stick to the page: a copy of the header

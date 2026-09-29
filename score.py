@@ -1,8 +1,11 @@
-"""Final signal per stock: technical 40% + analysts 25% + valuation 20% + news 15%.
+"""Final signal per stock: analysts 25 + valuation 20 + news 15 (rescaled: 41.7% / 33.3% / 25%).
+
+The technical part is no longer in the signal: the backtest (backtest.py) showed it does not tell the direction
+apart, so it is returned separately as "trend" (how the price is moving, not a vote).
 
 Every component is a score from -100 (clearly negative) to +100 (clearly positive) with the Italian
-reasons behind it. A component without data is left out and the other weights are rescaled, so a
-stock with no analyst coverage is judged on the remaining parts (the detail panel says so).
+reasons behind it. A component without data is left out and the other weights are rescaled; with fewer than
+MIN_PARTS components the signal is "Dati insufficienti" (no score).
 
     >= +50 Molto positivo · >= +20 Positivo · between Neutro · <= -20 Negativo · <= -50 Molto negativo
 
@@ -16,8 +19,10 @@ from datetime import datetime, timedelta
 
 from server import ET, classify_headline, mentions, name_words, news_time
 
-WEIGHTS = {"tech": 0.40, "analysts": 0.25, "valuation": 0.20, "news": 0.15}
-NAMES = {"tech": "Tecnica", "analysts": "Analisti", "valuation": "Valutazione", "news": "Notizie"}
+WEIGHTS = {"analysts": 0.25, "valuation": 0.20, "news": 0.15}   # same ratios as before, technical 0.40 removed
+NAMES = {"analysts": "Analisti", "valuation": "Valutazione", "news": "Notizie"}
+MIN_PARTS = 2                     # a signal from a single part (e.g. only news) is not shown
+INSUFFICIENT = "Dati insufficienti"
 NEWS_DAYS = 3
 KEY_NEWS = {"earnings", "guidance", "analyst", "deal", "legal"}   # categories that move prices the most
 # market-wide pieces that merely list the stock: their tone is about the market, not the company
@@ -141,19 +146,22 @@ def news(ticker, name, items, now=None):
 # ---------------------------------------------------------------- combine
 
 def combine(tech=None, anl=None, val=None, nws=None):
-    comps = {"tech": tech, "analysts": anl, "valuation": val, "news": nws}
+    comps = {"analysts": anl, "valuation": val, "news": nws}
     avail = {k: c for k, c in comps.items() if c is not None}
-    if "tech" not in avail:                    # without prices there is no meaningful signal
+    if not avail and tech is None:
         return None
     wsum = sum(WEIGHTS[k] for k in avail)
-    score = sum(c["score"] * WEIGHTS[k] for k, c in avail.items()) / wsum
+    enough = len(avail) >= MIN_PARTS
+    score = sum(c["score"] * WEIGHTS[k] for k, c in avail.items()) / wsum if enough else None
     return {
-        "score": round(score, 1), "signal": level(score),
+        "score": round(score, 1) if enough else None, "signal": level(score) if enough else INSUFFICIENT,
         "components": [{"key": k, "name": NAMES[k], "weight": WEIGHTS[k], "used": k in avail,
                         "effWeight": WEIGHTS[k] / wsum if k in avail else 0,
                         "score": round(comps[k]["score"], 1) if k in avail else None,
                         "reasons": comps[k]["reasons"] if k in avail else ["Dati non disponibili: peso ridistribuito sulle altre parti"]}
                        for k in WEIGHTS],
+        # trend of the price (technical score), shown next to the signal but not part of it
+        "trend": {"score": round(tech["score"], 1), "reasons": tech["reasons"]} if tech else None,
     }
 
 

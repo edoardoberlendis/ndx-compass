@@ -263,7 +263,7 @@ def previous_report(current_id):
 
 
 def add_final_signals(rows, infos):
-    """Final signal (score.py: technical + analysts + valuation + news), the same one the dashboard shows.
+    """Final signal (score.py: analysts + valuation + news; the trend is returned apart), the same one the dashboard shows.
     Sets m["signal"], m["sigScore"] and the full detail in m["_signal"]."""
     import analysts
     import score
