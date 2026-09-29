@@ -1572,6 +1572,15 @@ function renderIdeaCards(R) {
 function showIdeas() {
   setView("trade");
 }
+// report price clearly dated ("chiusura 28 set"), plus today's live price and the change since the report
+function ideaPrice(i) {
+  const R = ideasState.report, st = i.stats;
+  const day = new Date(R.dataAsOf + "T12:00:00").toLocaleDateString("it-IT", { day: "numeric", month: "short" });
+  const when = R.intraday ? `prezzo del ${day} (seduta in corso)` : `chiusura ${day}`;
+  const live = state.bySym.get(i.ticker)?.price, d = isNum(live) && i.price ? (live / i.price - 1) * 100 : null;
+  return `<div class="px-rep"><span class="px-when">${when}</span> <b>${fPrice(i.price)}</b> <span class="${sign(st.ret1d)}">${fPct(st.ret1d)}</span></div>
+    ${isNum(live) ? `<div class="px-now">ora ${fPrice(live)} <span class="${sign(d)}">${fPct(d)} dal report</span></div>` : ""}`;
+}
 function ideaCard(i) {
   const lv = i.levels, st = i.stats;
   const bars = Math.round(i.conviction / 20);
@@ -1579,7 +1588,7 @@ function ideaCard(i) {
   return `<div class="idea">
     <div class="idea-h"><div style="min-width:0"><span class="tt" data-open="${esc(i.ticker)}">${esc(i.ticker)}</span> <span class="nm">${esc(i.name)}</span><br>
       <span class="setup ${i.side}">${esc(setupIT(i.setup))}</span></div>
-      <div class="px"><b>${fPrice(i.price)}</b><br><span class="${sign(st.ret1d)}">${fPct(st.ret1d)}</span>
+      <div class="px">${ideaPrice(i)}
       <div class="conv" title="Convinzione ${i.conviction}/100: punteggio trend, fase del gruppo e allineamento con il mercato">convinzione <span class="m">${[1, 2, 3, 4, 5].map(k => `<i class="${k <= bars ? "on" : ""}"></i>`).join("")}</span></div></div></div>
     <div class="chart" data-chart="${esc(i.ticker)}"></div>
     <div class="lv">${i.side === "manage"

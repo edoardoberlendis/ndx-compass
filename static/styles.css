@@ -638,3 +638,6 @@ table.my td.nw a:hover { text-decoration: underline; }
 
 /* ------------------------------------------------ Idee: my stocks' setup changes (one line) */
 .my-setup { border-left: 3px solid var(--accent); line-height: 1.5; }
+/* idea cards: report price labelled with its date, live price underneath */
+.idea-h .px .px-when { font-size: 11px; color: var(--muted); }
+.idea-h .px .px-now { font-size: 12px; color: var(--ink-2); margin: 2px 0 4px; }
