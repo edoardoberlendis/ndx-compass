@@ -37,7 +37,7 @@ Oppure dal Terminale:
   nominano la società, notizie scaricate ogni 2 ore). Se una parte manca, il suo peso va alle altre. Le soglie:
   ≥ +50 molto positivo, ≥ +20 positivo, ≤ −20 negativo, ≤ −50 molto negativo. Calcolo in `score.py`.
   È una combinazione meccanica di dati pubblici, **non una consulenza finanziaria**.
-- **Screener**: i 100 titoli con colonne Panoramica / Performance / Valutazione / Tecnica, filtri (anche "Sopra/Sotto 20, 40 e 60", "Valutazione economica/cara", "Upgrade recenti", "Stime in rialzo/calo"), export CSV. La vista Tecnica mostra la distanza dalle medie 20/40/60/50/200.
+- **Screener**: i 100 titoli con colonne Panoramica / Performance / Valutazione / Tecnica, filtri (anche "Sopra/Sotto 20, 40 e 60", "Valutazione economica/cara", "Upgrade recenti", "Stime in rialzo/calo"), raggruppati per tema; un secondo clic su un filtro attivo lo toglie e torna a "Tutti". Export CSV. La vista Tecnica mostra la distanza dalle medie 20/40/60/50/200.
 - **Settori**: rendimenti dei settori pesati per capitalizzazione e peso di ogni settore nell'indice. Clic su una riga:
   compaiono i titoli di quel settore; di nuovo sulla stessa riga (o "Tutti i settori") si torna a tutti.
 - **Report**: il report tecnico generato da `signals.py` (vedi sotto): sintesi, mappa di rotazione, temi, cosa è cambiato

@@ -876,7 +876,13 @@ function renderScreener() {
   if (!rows.length) $("#scr").insertAdjacentHTML("beforeend", `<tbody><tr><td colspan="${cols.length}" class="empty">Nessun titolo corrisponde ai filtri</td></tr></tbody>`);
 }
 $("#colSeg").addEventListener("click", e => { const b = e.target.closest("[data-cols]"); if (b) { state.cols = b.dataset.cols; LS.set("cols", state.cols); renderScreener(); } });
-$("#presets").addEventListener("click", e => { const b = e.target.closest("[data-p]"); if (b) { state.preset = b.dataset.p; renderScreener(); } });
+// clicking the active filter again switches it off (back to "Tutti")
+$("#presets").addEventListener("click", e => {
+  const b = e.target.closest("[data-p]");
+  if (!b) return;
+  state.preset = state.preset === b.dataset.p ? "all" : b.dataset.p;
+  renderScreener();
+});
 $("#sectorSel").addEventListener("change", e => { state.sector = e.target.value; renderScreener(); });
 $("#scrFind").addEventListener("input", () => renderScreener());
 $("#scr").addEventListener("click", e => {
