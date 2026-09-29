@@ -15,6 +15,7 @@ import argparse
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -257,7 +258,7 @@ def session_label(now):
 def previous_report(current_id):
     """Most recent saved report other than the one being (re)generated."""
     for rid in list_reports():
-        if rid < current_id:
+        if report_key(rid) < report_key(current_id):
             with open(os.path.join(REPORT_DIR, rid + ".json")) as f:
                 return json.load(f)
     return None
@@ -424,12 +425,20 @@ def save(report):
     return path
 
 
+# same-day reports in time order (alphabetically "close" would come before "morning")
+SESSION_ORDER = {"morning": 0, "intraday": 1, "afternoon": 2, "close": 3}
+REPORT_ID = re.compile(r"^\d{4}-\d{2}-\d{2}_[a-z]+$")   # e.g. 2026-09-28_close (not latest.json, backtest.json)
+
+
+def report_key(rid):
+    day, _, session = rid.partition("_")
+    return day, SESSION_ORDER.get(session, 1)
+
+
 def list_reports():
-    out = []
-    for fn in sorted(os.listdir(REPORT_DIR), reverse=True):
-        if fn.endswith(".json") and fn != "latest.json":
-            out.append(fn[:-5])
-    return out
+    """Saved report ids, newest first."""
+    ids = [fn[:-5] for fn in os.listdir(REPORT_DIR) if fn.endswith(".json") and REPORT_ID.match(fn[:-5])]
+    return sorted(ids, key=report_key, reverse=True)
 
 
 def notify(report):

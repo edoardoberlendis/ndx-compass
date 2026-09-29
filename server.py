@@ -1073,9 +1073,9 @@ _report_job = {"running": False, "error": None, "started": None}
 
 @app.route("/api/reports")
 def api_reports():
+    import signals  # local import: signals imports this module
     os.makedirs(REPORT_DIR, exist_ok=True)
-    ids = sorted((f[:-5] for f in os.listdir(REPORT_DIR) if f.endswith(".json") and f != "latest.json"), reverse=True)
-    return jsonify({"reports": ids, "job": _report_job})
+    return jsonify({"reports": signals.list_reports(), "job": _report_job})
 
 
 @app.route("/api/report/<rid>")
