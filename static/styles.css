@@ -182,6 +182,18 @@ main { padding: 16px; max-width: 1800px; margin: 0 auto; }
 .card-meta { color: var(--muted); font-size: 11.5px; }
 .ov-grid { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 16px; }
 .ov-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+/* wide screens: the right column never makes the row taller than the map; the earnings list scrolls inside its card */
+@media (min-width: 1281px) {
+  .ov-side { position: relative; }
+  .ov-side-in { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 16px; }
+  .earn-card { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  .earn-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+}
+/* narrower screens: the column goes under the map as before, the list scrolls after ~360px */
+@media (max-width: 1280px) {
+  .ov-side-in { display: contents; }
+  .earn-list { max-height: 360px; overflow-y: auto; }
+}
 .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
 .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
