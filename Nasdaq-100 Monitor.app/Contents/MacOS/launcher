@@ -40,9 +40,13 @@ if [ ! -x "$PY" ]; then
   [ -x "$PY312" ] || { alert "Python 3.12 non trovato. Installalo da python.org e riapri l'app."; exit 1; }
   $ARCH "$PY312" -m venv "$DIR/.venv" >>"$LOG" 2>&1 || { alert "Non riesco a creare .venv. Guarda cache/server.log"; exit 1; }
 fi
-if ! $PYRUN -c "import flask, yfinance, pandas, numpy, requests, lxml" 2>/dev/null; then
-  /usr/bin/osascript -e 'display notification "Installo le librerie Python (primo avvio)…" with title "Nasdaq-100 Monitor"'
+# libraries: install when .venv is new, requirements.txt changed (fingerprint in .venv/.requirements.sha, same as run.sh)
+# or an import fails
+REQ_SHA=$(/usr/bin/shasum "$DIR/requirements.txt" | cut -d' ' -f1)
+if [ "$(cat "$DIR/.venv/.requirements.sha" 2>/dev/null)" != "$REQ_SHA" ] || ! $PYRUN -c "import flask, yfinance, pandas, numpy, requests, lxml" 2>/dev/null; then
+  /usr/bin/osascript -e 'display notification "Installo le librerie Python…" with title "Nasdaq-100 Monitor"'
   $PYRUN -m pip install -q -r "$DIR/requirements.txt" >>"$LOG" 2>&1 || { alert "Non riesco a installare le librerie Python. Guarda cache/server.log"; exit 1; }
+  echo "$REQ_SHA" > "$DIR/.venv/.requirements.sha"
 fi
 
 cd "$DIR"
@@ -50,7 +54,7 @@ nohup $PYRUN server.py >>"$LOG" 2>&1 &
 disown
 for i in $(seq 1 40); do up && break; sleep 0.5; done
 if up; then
-  /usr/bin/osascript -e 'display notification "Carico i dati di mercato… (circa 20 secondi)" with title "Nasdaq-100 Monitor"'
+  /usr/bin/osascript -e 'display notification "Carico i dati di mercato… (circa 10 secondi)" with title "Nasdaq-100 Monitor"'
   open "$URL"
 else
   alert "Il server non è partito. Guarda cache/server.log nella cartella del progetto."

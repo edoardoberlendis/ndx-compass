@@ -281,6 +281,59 @@ def download(tickers, **kw):
     return {}
 
 
+# ---------------------------------------------------------------- daily history cache (faster start)
+# The 2-year daily history is saved in cache/daily.pkl. At start (and at each daily refresh) only the last days are
+# downloaded again. Yahoo adjusts past prices for dividends and splits, so a stock whose older overlapping closes
+# changed is downloaded again in full; a damaged or too old cache means a full download, as before.
+DAILY_CACHE = os.path.join(CACHE_DIR, "daily.pkl")
+DAILY_CACHE_MAX_AGE_D = 10     # older than this: download everything again
+DAILY_OVERLAP_D = 7            # calendar days downloaded again before the last cached bar
+DAILY_ADJ_TOL = 0.001          # 0.1%: a larger change in an old close means an adjustment -> full download of that stock
+
+
+def load_daily_cache():
+    try:
+        c = pd.read_pickle(DAILY_CACHE)
+        if not (isinstance(c, dict) and c.get("v") == 1 and isinstance(c.get("data"), dict) and c["data"]):
+            return None
+        if time.time() - c["saved"] > DAILY_CACHE_MAX_AGE_D * 86400:
+            log.info("daily cache older than %d days: full download", DAILY_CACHE_MAX_AGE_D)
+            return None
+        return c["data"], c["saved"]
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        log.warning("daily cache unreadable (%s): full download", e)
+        return None
+
+
+def save_daily_cache(data):
+    try:
+        pd.to_pickle({"v": 1, "saved": time.time(), "data": data}, DAILY_CACHE + ".tmp")
+        os.replace(DAILY_CACHE + ".tmp", DAILY_CACHE)
+    except Exception as e:
+        log.warning("daily cache not saved (%s)", e)
+
+
+def merge_daily(old, new, tickers):
+    """Append the freshly downloaded days to the cached history. Returns (merged, tickers to download in full)."""
+    merged, redo = {}, []
+    for t in tickers:
+        o, n = old.get(t), new.get(t)
+        if o is None or o.empty or n is None or n.empty:
+            redo.append(t)
+            continue
+        common = o.index[:-1].intersection(n.index)          # the last cached bar may have been a partial session
+        if len(common):
+            a, b = o.loc[common, "Close"], n.loc[common, "Close"]
+            if ((a - b).abs() / b.abs()).max() > DAILY_ADJ_TOL:
+                redo.append(t)
+                continue
+        m = pd.concat([o[o.index < n.index.min()], n])
+        merged[t] = m[m.index >= m.index.max() - pd.Timedelta(days=2 * 365 + 7)]   # keep ~2 years, as period="2y"
+    return merged, redo
+
+
 # ---------------------------------------------------------------- store
 
 class Store:
@@ -322,26 +375,49 @@ class Store:
                 self.analysts_running = False
         threading.Thread(target=job, daemon=True).start()
 
-    def daily_due(self):
+    def daily_due(self, last_ts=None):
         """Once per ET day, plus once after the close so perf windows include the final bar."""
-        if not self.last_daily:
+        last_ts = last_ts or self.last_daily
+        if not last_ts:
             return True
         now = datetime.now(ET)
-        last = datetime.fromtimestamp(self.last_daily, ET)
+        last = datetime.fromtimestamp(last_ts, ET)
         cutoff = now.replace(hour=DAILY_AFTER_CLOSE[0], minute=DAILY_AFTER_CLOSE[1], second=0, microsecond=0)
         return last.date() != now.date() or last < cutoff <= now
 
     def refresh_daily(self):
         tickers = [c["ticker"] for c in self.constituents] + list(BENCHMARKS) + [SIGNAL_BENCH]
         t0 = time.time()
-        d = download(tickers, period="2y", interval="1d")
+        old, d, how = self.daily, None, "full download"
+        if not old:                                   # first run after start: in-memory history still empty
+            cached_daily = load_daily_cache()
+            if cached_daily and not self.daily_due(cached_daily[1]) and all(t in cached_daily[0] for t in tickers):
+                # saved today (and after the close, if it is evening): same as a server that stayed on, nothing to download
+                d, how = cached_daily[0], "cache already up to date"
+                saved_at = cached_daily[1]
+            elif cached_daily:
+                old = cached_daily[0]
+        if old and d is None:
+            last = max(df.index.max() for df in old.values())
+            start = (last - pd.Timedelta(days=DAILY_OVERLAP_D)).strftime("%Y-%m-%d")
+            new = download(tickers, start=start, interval="1d")
+            if new:
+                d, redo = merge_daily(old, new, tickers)
+                if redo:
+                    d.update(download(redo, period="2y", interval="1d"))
+                how = f"cache + days since {start}, {len(redo)} downloaded in full"
+        if not d:
+            d = download(tickers, period="2y", interval="1d")
         if d:
             tech = self.technicals(d)
+            fresh = how != "cache already up to date"
             with self.lock:
                 self.daily = d
                 self.tech = tech
-                self.last_daily = time.time()
-            log.info("daily history: %d series in %.1fs", len(d), time.time() - t0)
+                self.last_daily = time.time() if fresh else saved_at
+            if fresh:
+                save_daily_cache(d)
+            log.info("daily history: %d series in %.1fs (%s)", len(d), time.time() - t0, how)
 
     def technicals(self, daily):
         """Same trend score as the report (signals.metrics), on completed daily bars."""

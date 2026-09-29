@@ -14,7 +14,7 @@ Tieni l'app dentro questa cartella; per una scorciatoia trascinala nel Dock. Il 
 Oppure dal Terminale:
 
 ```sh
-./run.sh            # crea .venv se manca, installa le librerie, avvia il server e apre il browser (Ctrl+C per fermare)
+./run.sh            # crea .venv se manca, installa le librerie (solo se requirements.txt è cambiato), avvia il server e apre il browser (Ctrl+C per fermare)
 ```
 
 ## Cosa contiene
@@ -80,7 +80,10 @@ Tastiera: `/` cerca, `Esc` chiude la scheda.
 - **Festività della borsa USA**: elenco NYSE 2026–2028 in `market_calendar.py` (fonte: nyse.com/markets/hours-calendars),
   con le chiusure anticipate alle 13:00 ora di New York. Nei giorni festivi lo stato diventa "Mercato USA chiuso ·
   festività (nome) · riapre …". Tre mesi prima della fine dell'elenco compare un avviso ⚠ accanto allo stato.
-- **Storico giornaliero**: una volta al giorno, più una volta dopo la chiusura USA.
+- **Storico giornaliero**: una volta al giorno, più una volta dopo la chiusura USA. È salvato in `cache/daily.pkl`:
+  riavviando il server nello stesso giorno non si scarica niente (avvio in circa 4 secondi invece di 8–9); dopo qualche
+  giorno si scaricano solo i giorni mancanti (i titoli con dividendi o frazionamenti nel frattempo vengono riscaricati
+  per intero). Se la cache è rovinata o più vecchia di 10 giorni si riscarica tutto.
 - **Fondamentali, dati analisti e stime**: una volta al giorno, salvati in `cache/infos.json` e `cache/analysts.json`.
 
 Così si fanno poche richieste a Yahoo Finance ed è più difficile essere bloccati. I dati possono essere in ritardo.
