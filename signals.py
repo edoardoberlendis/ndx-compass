@@ -2,7 +2,7 @@
 
 Rule-based technical screening: 20/40/60-day moving-average structure, relative
 strength vs QQQ, and sector / theme rotation (AI chips, memory, power, ...).
-Output is a JSON report in reports/ that the dashboard's Ideas tab reads.
+Output is a JSON report in reports/ that the dashboard's Report and Pattern tecnici tabs read.
 
     python3 signals.py              # run now (session inferred from US time)
     python3 signals.py --notify     # ...and post a macOS notification (used by launchd)
@@ -144,6 +144,8 @@ def group_stats(name, members, kind):
 
 
 # ---------------------------------------------------------------- setups
+# The setups are no longer shown as trade ideas: the pattern backtest (backtest.py --patterns, plan phase 11) did not
+# validate them. classify() stays as the reference definition that the backtest's fast version is checked against.
 
 def levels(m, side, entry, stop, target_hint=None):
     risk = abs(entry - stop)
@@ -190,58 +192,6 @@ def classify(m):
 
 SETUP_EXTENDED, SETUP_BULL_X, SETUP_BEAR_X = "Tirato", "Incrocio rialzista", "Incrocio ribassista"
 SETUP_PULLBACK = "Ritracciamento in trend rialzista"
-# reports saved before the Italian translation carry English setup names: translate them before comparing
-SETUP_OLD_EN = {"Extended": SETUP_EXTENDED, "Bullish crossover": SETUP_BULL_X, "Bearish crossover": SETUP_BEAR_X,
-                "Pullback in uptrend": SETUP_PULLBACK, "Momentum leader": "Leader di momentum",
-                "Oversold in uptrend": "Ipervenduto in trend rialzista", "Downtrend": "Trend ribassista"}
-QUADRANT_IT = {"Leading": "leader", "Weakening": "in indebolimento", "Lagging": "in ritardo", "Improving": "in miglioramento"}
-
-
-def it(x, fmt):
-    """Format a number with an Italian decimal comma."""
-    return format(x, fmt).replace(".", ",")
-
-
-def rationale(m, sec, themes, setup):
-    out = []
-    stack_txt = {"bull": "Prezzo sopra le medie 20 > 40 > 60 giorni, tutte in salita",
-                 "bear": "Prezzo sotto le medie 20 < 40 < 60 giorni, tutte in discesa",
-                 "mixed": "Medie mobili miste (nessun ordine chiaro)"}[m["stack"]]
-    out.append(stack_txt)
-    out.append(f"{it(m['vs20'], '+.1f')}% vs media 20 · {it(m['vs40'], '+.1f')}% vs media 40 · {it(m['vs60'], '+.1f')}% vs media 60")
-    if setup == SETUP_PULLBACK:
-        out.append("Tornato sulla media a 20 giorni mentre le medie a 40/60 continuano a salire")
-    if setup == SETUP_BULL_X:
-        out.append("La media a 20 giorni ha superato quella a 60 nelle ultime 5 sedute")
-    if setup == SETUP_BEAR_X:
-        out.append("La media a 20 giorni è scesa sotto quella a 60 nelle ultime 5 sedute")
-    if setup == SETUP_EXTENDED:
-        out.append("Molto sopra la media a 20 giorni: rischio di ritorno verso la media, non inseguire")
-    word = "Fa meglio di" if m["rs1m"] >= 0 else "Fa peggio di"
-    out.append(f"{word} QQQ di {it(abs(m['rs1m']), '.1f')} punti in 1 mese ({it(m['rs3m'], '+.1f')} punti in 3 mesi)")
-    out.append(f"RSI {m['rsi']:.0f}" + (" (ipercomprato)" if m["rsi"] > 70 else " (ipervenduto)" if m["rsi"] < 30 else ""))
-    if m["volRatio"]:
-        out.append(f"Volumi 20 g / 60 g {it(m['volRatio'], '.2f')}×" + (": accumulo" if m["volRatio"] > 1.15 and m["stack"] == "bull" else ""))
-    ctx = [f"{sec['name']}: {QUADRANT_IT[sec['quadrant']]}"] if sec else []
-    ctx += [f"{t['name']}: {QUADRANT_IT[t['quadrant']]}" for t in themes]
-    if ctx:
-        out.append("Contesto dei gruppi: " + " · ".join(ctx))
-    return out
-
-
-def conviction(m, side, sec, themes, regime):
-    s = abs(m["score"])
-    groups = ([sec] if sec else []) + themes
-    good = {"long": ("Leading", "Improving"), "watch": ("Leading", "Improving"), "avoid": ("Lagging", "Weakening")}.get(side, ())
-    if groups:
-        s += 15 * sum(g["quadrant"] in good for g in groups) / len(groups)
-    if side in ("long", "watch") and regime["bias"] == "long":
-        s += 10
-    if side == "avoid" and regime["bias"] == "defensive":
-        s += 10
-    if m.get("levels_rr", 0) >= 2:
-        s += 5
-    return int(max(0, min(100, s)))
 
 
 # ---------------------------------------------------------------- report
@@ -290,6 +240,7 @@ def add_final_signals(rows, infos):
 
 
 def build_report():
+    import backtest  # local import: backtest imports this module
     t0 = time.time()
     now = datetime.now(ET)
     cons = load_constituents()
@@ -298,7 +249,7 @@ def build_report():
     with open(os.path.join(ROOT, "themes.json")) as f:
         theme_def = json.load(f)
 
-    data = download(tickers + [BENCH], period="1y", interval="1d")
+    data = download(tickers + [BENCH], period="2y", interval="1d")     # the patterns look back 252 sessions
     if BENCH not in data:
         raise RuntimeError("benchmark download failed")
     bench = data[BENCH]["Close"].dropna()
@@ -344,37 +295,13 @@ def build_report():
         g = group_stats(name, [rows.get(t) for t in tks], "theme")
         if g and g["n"] >= 1:
             themes[name] = g
-    ticker_themes = {t: [themes[n] for n in themes if t in themes[n]["tickers"]] for t in rows}
-
-    ideas = []
-    for t, m in rows.items():
-        cls = classify(m)
-        if not cls or cls[2] is None:
-            continue
-        setup, side, lv = cls
-        sec, th = sectors.get(m["sector"]), ticker_themes[t]
-        m["setup"] = setup
-        m["levels_rr"] = lv.get("rr") or 0
-        ideas.append({
-            "ticker": t, "name": m["name"], "sector": m["sector"], "themes": [x["name"] for x in th],
-            "setup": setup, "side": side, "levels": lv, "price": m["price"], "score": m["score"],
-            "conviction": conviction(m, side, sec, th, regime),
-            "why": rationale(m, sec, th, setup),
-            "chart": m["_chart"],
-            "stats": {k: clean(m[k]) for k in ("vs20", "vs40", "vs60", "rsi", "rs1m", "rs3m", "volRatio", "atrPct", "ret1d", "ret1w", "ret1m")},
-            "signal": m.get("_signal"),
-        })
-    ideas.sort(key=lambda i: -i["conviction"])
-
     rid = f"{now:%Y-%m-%d}_{session_label(now)}"
     prev = previous_report(rid)
-    changes = diff_reports(prev, rows, ideas, sectors, themes) if prev else None
+    changes = diff_reports(prev, rows, sectors, themes) if prev else None
 
-    longs = [i for i in ideas if i["side"] == "long"]
     lead = sorted(themes.values(), key=lambda g: -g["score"])
     headline = (f"{regime['label']}. Temi più forti: {', '.join(g['name'] for g in lead[:3])}. "
-                f"Più deboli: {', '.join(g['name'] for g in lead[-2:])}. "
-                f"{len(longs)} setup di acquisto, {sum(i['side'] == 'avoid' for i in ideas)} da evitare.")
+                f"Più deboli: {', '.join(g['name'] for g in lead[-2:])}.")
 
     report = {
         "id": rid,
@@ -385,8 +312,8 @@ def build_report():
         "regime": regime,
         "sectors": sorted(sectors.values(), key=lambda g: -g["score"]),
         "themes": sorted(themes.values(), key=lambda g: -g["score"]),
-        "ideas": ideas,
-        "stocks": [{k: clean(v) if not isinstance(v, str) else v for k, v in m.items() if not k.startswith("_") and k != "levels_rr"}
+        "patterns": backtest.patterns_today(data, bench),
+        "stocks": [{k: clean(v) if not isinstance(v, str) else v for k, v in m.items() if not k.startswith("_")}
                    for m in sorted(rows.values(), key=lambda r: -r["score"])],
         "changes": changes,
         "prevId": prev["id"] if prev else None,
@@ -396,9 +323,7 @@ def build_report():
     return report
 
 
-def diff_reports(prev, rows, ideas, sectors, themes):
-    prev_ideas = {i["ticker"]: SETUP_OLD_EN.get(i["setup"], i["setup"]) for i in prev.get("ideas", [])}
-    now_ideas = {i["ticker"]: i["setup"] for i in ideas}
+def diff_reports(prev, rows, sectors, themes):
     prev_scores = {s["ticker"]: s["score"] for s in prev.get("stocks", [])}
     prev_groups = {g["name"]: g for g in prev.get("sectors", []) + prev.get("themes", [])}
     movers = sorted(((t, r["score"] - prev_scores[t]) for t, r in rows.items() if t in prev_scores and abs(r["score"] - prev_scores[t]) >= 1), key=lambda x: -abs(x[1]))[:10]
@@ -410,8 +335,6 @@ def diff_reports(prev, rows, ideas, sectors, themes):
         g["dScore"] = round(g["score"] - p["score"], 1) if p else None
     return {
         "since": prev["id"],
-        "newIdeas": [{"ticker": t, "setup": s} for t, s in now_ideas.items() if prev_ideas.get(t) != s],
-        "dropped": [{"ticker": t, "setup": s} for t, s in prev_ideas.items() if t not in now_ideas],
         "scoreMovers": [{"ticker": t, "delta": round(d, 1), "score": rows[t]["score"]} for t, d in movers],
         "rotations": rotations,
     }
@@ -442,10 +365,9 @@ def list_reports():
 
 
 def notify(report):
-    longs = [i["ticker"] for i in report["ideas"] if i["side"] == "long"][:5]
     session = {"morning": "del mattino", "close": "della sera"}.get(report["session"], "intraday")
     title = f"Report Nasdaq-100 {session}"
-    msg = f"{report['regime']['label']} · Migliori acquisti: {', '.join(longs) or 'nessuno'}"
+    msg = f"{report['regime']['label']} · Temi più forti: {', '.join(g['name'] for g in report['themes'][:3]) or '—'}"
     # Pass text as argv, not spliced into the script: no quoting issues and non-ASCII (·) survives launchd.
     script = ('on run argv\n'
               'display notification (item 1 of argv) with title (item 2 of argv) subtitle "Apri localhost:8100/#ideas"\n'

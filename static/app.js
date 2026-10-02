@@ -214,7 +214,7 @@ function renderAll() {
   if (state.view === "screener") renderScreener();
   if (state.view === "sectors") renderSectors();
   if (state.view === "ideas" || state.view === "trade") renderIdeas();
-  if (state.detail) renderDetailHeader();
+  if (state.detail) { renderDetailHeader(); renderTA(); }
 }
 
 function renderTape() {
@@ -1369,6 +1369,186 @@ async function loadDetailChart() {
   }
 }
 
+// ------------------------------------------------------------ detail: Analisi tecnica (index stocks only)
+// Raw levels come from the server (technical.py, closed sessions); entry is the live price and the plan is computed here,
+// so it follows the risk percentage chosen in the section. Rule of the dashboard: only patterns that passed the test
+// (reports/patterns.json) can appear in the verdict, and never as "favorevole". Texts are fixed, numbers come from the data.
+const TA_ATR = { stopMa: 0.5, stopAtr: 2, okMin: 1.5, okMax: 3.5, entry: 0.25, stopLevel: 1 };   // multiples of the ATR
+const TA_NEAR = 5, TA_RANGE = 12;      // resistance "near": within 5% below the 52-week high; sideways phase: at most 12% wide
+const dTA = { t: null, ta: null, fx: null, trend: "", sel: {} };
+const fUsd = v => isNum(v) ? fNum(v, 2) + " $" : "—";
+const taNum = (k, d) => { const v = +LS.get(k, d); return isNum(v) && v > 0 ? v : d; };
+const TA_INFO = `Una lettura tecnica del titolo in cinque parti. Solo il <b>verdetto</b> si basa su pattern che hanno superato il test
+  della scheda Pattern tecnici; tutto il resto descrive la situazione e aiuta a decidere <b>quanto rischiare</b>, non dice se il prezzo salirà.`;
+const TA_PLAN_INFO = `Questi livelli servono a <b>decidere in anticipo quanto rischi</b>, non a prevedere il prezzo.<br><br>
+  <b>Stop</b>: il prezzo sotto il quale esci. Si appoggia a un livello oggettivo (media a 50 giorni, ultimo minimo) oppure alla volatilità.<br>
+  <b>ATR</b>: di quanto si muove in media il titolo in un giorno (ultime 14 sedute).<br>
+  <b>Target</b>: convenzionale, a 2 volte il rischio. Non è una previsione.<br>
+  <b>Quante azioni</b>: il numero con cui, se scatta lo stop, perdi al massimo la percentuale del portafoglio che hai scelto,
+  senza superare il massimo per posizione. Lo stop non garantisce il prezzo di uscita: con un'apertura in forte ribasso la perdita può essere maggiore.`;
+const TA_WAIT_INFO = `Un ordine condizionato compra solo se il prezzo supera un livello. Qui il livello è la resistenza più un
+  <b>margine di un quarto di ATR</b> (l'ATR è il movimento medio di un giorno): serve a non far scattare l'ordine per un superamento di pochi centesimi.<br><br>
+  Lo stop è un ATR sotto il livello rotto: se il prezzo torna sotto, la rottura è fallita.`;
+
+function taStops(entry, L, breakLevel) {
+  const a = L.atr, opts = [];
+  if (isNum(breakLevel)) opts.push({ id: "level", v: breakLevel - TA_ATR.stopLevel * a, label: `un ATR sotto il livello rotto (${fUsd(breakLevel)})` });
+  else if (isNum(L.sma50)) opts.push({ id: "sma50", v: L.sma50 - TA_ATR.stopMa * a, label: `sotto la media 50 (${fUsd(L.sma50)}) meno mezzo ATR` });
+  opts.push({ id: "low", v: L.low.v - TA_ATR.stopMa * a, label: `sotto l'ultimo minimo (${fUsd(L.low.v)} del ${dayShort(L.low.date)}) meno mezzo ATR` });
+  if (!isNum(breakLevel)) opts.push({ id: "atr", v: entry - TA_ATR.stopAtr * a, label: `${TA_ATR.stopAtr} × ATR sotto l'entrata` });
+  const ok = opts.filter(o => o.v < entry).map(o => ({ ...o, atrs: (entry - o.v) / a }));
+  let def, why;
+  if (isNum(breakLevel)) { def = ok[0]; why = "se il prezzo torna sotto il livello appena superato, la rottura è fallita."; }
+  else {
+    def = ok.filter(o => o.id !== "atr" && o.atrs >= TA_ATR.okMin && o.atrs <= TA_ATR.okMax).sort((x, y) => x.atrs - y.atrs)[0];
+    why = def ? `è il livello oggettivo più vicino a una distanza ragionevole (tra ${fNum(TA_ATR.okMin, 1)} e ${fNum(TA_ATR.okMax, 1)} ATR).`
+      : `media 50 e ultimo minimo sono troppo vicini o troppo lontani dal prezzo (fuori da ${fNum(TA_ATR.okMin, 1)}–${fNum(TA_ATR.okMax, 1)} ATR): uso la volatilità.`;
+    def = def || ok.find(o => o.id === "atr");
+  }
+  return { opts: ok, def, why };
+}
+function taSize(entry, stop, cap, fx, riskPct, maxPct) {
+  if (!isNum(cap) || !(cap > 0) || !isNum(fx)) return null;
+  const risk = entry - stop;
+  const byRisk = Math.floor(cap * riskPct / 100 * fx / risk), byCap = Math.floor(cap * maxPct / 100 * fx / entry);
+  const n = Math.max(0, Math.min(byRisk, byCap));
+  return { n, byRisk, capped: byCap < byRisk, value: n * entry, valueEur: n * entry / fx, pct: n * entry / fx / cap * 100,
+    byRiskPct: byRisk * entry / fx / cap * 100, loss: n * risk, lossEur: n * risk / fx, lossPct: n * risk / fx / cap * 100 };
+}
+// one plan (buy now, or a waiting level): entry, stop with its options, target and size
+function taPlanHTML(id, entry, entryNote, L, money, breakLevel) {
+  const { opts, def, why } = taStops(entry, L, breakLevel);
+  if (!def) return `<p class="muted small">Livelli non calcolabili per questo titolo.</p>`;
+  const st = opts.find(o => o.id === dTA.sel[id]) || def, risk = entry - st.v, target = entry + 2 * risk;
+  const pct = v => fPct((v / entry - 1) * 100, 1);
+  const res = !isNum(breakLevel) && L.high52.v > entry && L.high52.v < target
+    ? `<div class="ta-note">⚠ Prima del target c'è il massimo a 52 settimane a ${fUsd(L.high52.v)} (${pct(L.high52.v)}): fino a lì il rapporto è solo ${fNum((L.high52.v - entry) / risk, 1)} : 1.</div>` : "";
+  const others = opts.filter(o => o.id !== st.id);
+  const z = taSize(entry, st.v, money.cap, money.fx, money.risk, money.max);
+  const size = !z ? `<span class="muted">inserisci il capitale qui sopra</span>`
+    : !z.n ? `<b>0</b> <span class="muted">con questo capitale e questo rischio non si arriva a un'azione intera</span>`
+    : `<b>${fNum(z.n, 0)}</b> <span class="muted">valore ${fUsd(z.value)} ≈ ${fEur(z.valueEur, 0)}, ${fNum(z.pct, 1)}% del portafoglio</span>
+      ${z.capped ? `<div class="ta-note">Limitate dal massimo per posizione del ${fNum(money.max, 0)}%: con il solo rischio dell'${fNum(money.risk, 1)}% sarebbero ${fNum(z.byRisk, 0)}, cioè il ${fNum(z.byRiskPct, 0)}% del portafoglio.</div>` : ""}
+      <div class="ta-note">Se scatta lo stop perdi circa ${fUsd(z.loss)} ≈ ${fEur(z.lossEur, 0)} (${fNum(z.lossPct, 1)}% del portafoglio).</div>`;
+  return `<div class="ta-plan">
+    <div><span>${isNum(breakLevel) ? "Livello di rottura" : "Entrata"}</span><div><b>${fUsd(entry)}</b> <span class="muted">${entryNote}</span></div></div>
+    <div><span>Stop</span><div><b>${fUsd(st.v)}</b> <span class="down">${pct(st.v)}</span> <span class="muted">${st.label} · ${fNum(st.atrs, 1)} ATR</span>
+      ${st.id === def.id ? `<div class="ta-note">Perché: ${why}</div>` : `<div class="ta-note">Scelto da te al posto di quello proposto.</div>`}
+      ${others.length ? `<div class="ta-note">Altre opzioni: ${others.map(o => `<button class="ta-opt" data-ta-stop="${id}:${o.id}">${fUsd(o.v)} (${pct(o.v)}) ${o.label}${o.id === def.id ? " · proposto" : ""}</button>`).join(" ")}</div>` : ""}</div></div>
+    <div><span>Target</span><div><b>${fUsd(target)}</b> <span class="up">${pct(target)}</span> <span class="muted">convenzionale: 2 volte il rischio → rapporto rischio/rendimento 2,0 : 1</span>${res}</div></div>
+    <div><span>Quante azioni</span><div>${size}</div></div></div>`;
+}
+function taVerdict(ta) {
+  const P = pt.data;
+  if (!P) return `<p class="muted">Test dei pattern non disponibile: dal Terminale <code>.venv/bin/python backtest.py --patterns</code>. Senza test non c'è nessun segnale verificato.</p>`;
+  const mine = ta.patterns.map(x => ({ ...x, p: P.patterns.find(p => p.key === x.key) })).filter(x => x.p);
+  const when = x => x.date ? `, scattato il ${dayShort(x.date)}` : "";
+  const ok = mine.filter(x => x.p.favorable), no = mine.filter(x => !x.p.favorable);
+  return `${ok.length ? ok.map(x => `<div class="ta-ok"><b>${esc(x.p.name)}</b>${when(x)} ${info(PT_INFO[x.key] || "")}
+        <span class="pt-badge edge">${ptEdge(x.p) ? "Test superato di misura" : "Test superato"}</span><div>${ptSay(x.p, P)} È un'informazione, non un'indicazione di acquisto.</div></div>`).join("")
+      : `<p class="ta-none"><b>Nessun segnale tecnico verificato oggi.</b></p>`}
+    ${no.length ? `<div class="muted small">Pattern presenti ma non verificati (non hanno superato il test):</div>
+      <ul class="ta-list">${no.map(x => `<li>${esc(x.p.name)}${when(x)} ${info(PT_INFO[x.key] || "")} <span class="ta-tag">non verificato</span></li>`).join("")}</ul>` : ""}
+    <button class="link-btn" data-ta-goto="trade">Vedi i risultati del test nella scheda Pattern tecnici →</button>`;
+}
+// fixed phrases chosen from the numbers: stock vs group at 1 and 3 months, and the group's rotation phase vs the Nasdaq-100
+function taGroupSay(t, g) {
+  const what = g.kind === "sector" ? "settore" : `tema «${esc(g.name)}»`;
+  const a = g.vs1m, b = g.vs3m, T = 1;
+  const stock = a > T && b > T ? `più forte del suo ${what}` : a < -T && b < -T ? `più debole del suo ${what}`
+    : b > T && a < -T ? `davanti al suo ${what} a 3 mesi, ma rimasto indietro nell'ultimo mese`
+    : b < -T && a > T ? `indietro rispetto al suo ${what} a 3 mesi, ma in recupero nell'ultimo mese`
+    : a < -T ? `rimasto indietro rispetto al suo ${what} nell'ultimo mese (in linea a 3 mesi)`
+    : a > T ? `più forte del suo ${what} nell'ultimo mese (in linea a 3 mesi)`
+    : b > T ? `davanti al suo ${what} a 3 mesi (in linea nell'ultimo mese)`
+    : b < -T ? `indietro rispetto al suo ${what} a 3 mesi (in linea nell'ultimo mese)`
+    : `in linea con il suo ${what}`;
+  const phase = { Leading: "è più forte del Nasdaq-100 e continua a guadagnare terreno", Improving: "è più debole del Nasdaq-100 ma sta recuperando",
+    Weakening: "è più forte del Nasdaq-100 a 1 mese ma sta perdendo terreno", Lagging: "è più debole del Nasdaq-100 e continua a perdere terreno" }[g.quadrant];
+  return `${esc(t)} è ${stock}; il ${g.kind === "sector" ? "settore" : "tema"} ${phase}.`;
+}
+function taGroups(t, ta) {
+  if (!ta.groups.length) return `<p class="muted">Settore e tema non disponibili.</p>`;
+  const pp = v => `<span class="${sign(v)}">${fChg(v)}</span>`;
+  return `<div class="table-wrap"><table class="scr ta-grp"><thead><tr><th class="l">Gruppo</th><th class="l">Fase ${info(`Fase di rotazione rispetto a QQQ, come nella mappa della scheda Report:
+      <b>Leader</b> = più forte a 1 mese e a 1 settimana; <b>In indebolimento</b> = più forte a 1 mese ma non nell'ultima settimana;
+      <b>In miglioramento</b> = più debole a 1 mese ma in recupero nell'ultima settimana; <b>In ritardo</b> = più debole su entrambe.`)}</th>
+      <th>Gruppo vs QQQ 1 sett.</th><th>Gruppo vs QQQ 1 mese</th><th>${esc(t)} vs gruppo 1 mese</th><th>${esc(t)} vs gruppo 3 mesi</th></tr></thead>
+    <tbody>${ta.groups.map(g => `<tr><td class="l"><b>${esc(g.name)}</b><div class="muted small">${g.kind === "sector" ? "settore" : "tema"} · ${g.n} titoli</div></td>
+      <td class="l"><span class="q ${g.quadrant}">${QLAB[g.quadrant]}</span></td><td>${pp(g.rs1w)}</td><td>${pp(g.rs1m)}</td><td>${pp(g.vs1m)}</td><td>${pp(g.vs3m)}</td></tr>`).join("")}</tbody></table></div>
+    <p class="ta-say"><b>In sintesi.</b> ${ta.groups.map(g => taGroupSay(t, g)).join(" ")}</p>
+    <p class="muted small">Valori in punti percentuali: media dei titoli del gruppo meno QQQ, e titolo meno la media del gruppo.</p>`;
+}
+// waiting levels: resistances the price has not broken yet, each tied to a tested (and failed) pattern
+function taWaiting(ta, price) {
+  const out = [], h = ta.high52, r = ta.range;
+  if (price <= h.v && price >= h.v * (1 - TA_NEAR / 100))
+    out.push({ id: "high52", level: h.v, what: `massimo a 52 settimane (chiusura più alta dell'ultimo anno, ${dayShort(h.date)})` });
+  if (r.width <= TA_RANGE && price <= r.hi && Math.abs(r.hi / h.v - 1) > 0.001)
+    out.push({ id: "range_break", level: r.hi, what: `massimo della fase laterale delle ultime ${r.days} sedute (ampiezza ${fNum(r.width, 1)}%)` });
+  return out.sort((a, b) => a.level - b.level);
+}
+function taWaitHTML(w, ta, price, money) {
+  const P = pt.data, p = P?.patterns.find(x => x.key === w.id), h = p?.horizons["3M"];
+  const x = w.level + TA_ATR.entry * ta.atr;
+  const test = !p ? `<b>Pattern non verificato</b>: il test dei pattern non è disponibile.`
+    : `<b>${p.favorable ? "Pattern che ha superato il test, con i suoi limiti" : "Pattern non verificato: in passato, in media, non ha dato un vantaggio"}.</b>
+      «${esc(p.name)}»: ${fNum(p.n, 0)} casi; a 3 mesi, rispetto agli altri titoli nello stesso giorno, media ${ptPts(h.vsAll)} punti e mediana ${ptPts(h.vsAllMedian)};
+      ha battuto QQQ nel ${pctR(h.beat)} dei casi (tutti i titoli: ${pctR(P.all.horizons["3M"].beat)}). Condizioni del test rispettate: ${p.checks.filter(Boolean).length} su 6.
+      <b>Non è un consiglio di acquisto.</b>`;
+  return `<div class="ta-wait"><p class="warn-box">${test}</p>
+    <p>Resistenza: ${w.what} a <b>${fUsd(w.level)}</b>, ${fPct((w.level / price - 1) * 100, 1)} dal prezzo.<br>
+      <b>Livello di rottura: ordine di acquisto condizionato sopra ${fUsd(x)}</b> <span class="muted">(resistenza + un quarto di ATR)</span></p>
+    ${taPlanHTML(w.id, x, "se l'ordine scatta", ta, money, w.level)}
+    <p class="muted small">Nota: l'ordine condizionato scatta solo sul prezzo${w.id === "high52" || w.id === "range_break" ? ", mentre il pattern richiede anche volumi alti (almeno 1,5 volte la media a 50 giorni) e una chiusura sopra il livello" : ""}.
+      Dopo l'attivazione conviene controllare i volumi.</p></div>`;
+}
+function renderTA() {
+  const el = $("#dTA"), t = state.detail, ta = dTA.ta, s = state.bySym.get(t);
+  if (!el || dTA.t !== t || !ta || !s) return;
+  if (el.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;   // typing: do not redraw
+  const pfOk = pf.data && pf.data.file && !pf.data.error && pf.data.totals?.value > 0;
+  const fx = (pfOk && pf.data.fx) || dTA.fx;
+  const manual = +LS.get("taCapital", 0) || null;
+  const money = { cap: pfOk ? pf.data.totals.value : manual, fx, risk: taNum("taRisk", 1), max: taNum("taMax", 20) };
+  const price = s.price, waits = taWaiting(ta, price);
+  const capLine = pfOk ? `Portafoglio: <b>${fEur(money.cap, 0)}</b> dalla scheda Portafoglio`
+    : `Portafoglio non caricato: capitale <input type="number" id="taCapital" min="0" step="100" value="${manual || ""}" placeholder="es. 20000"> €`;
+  el.innerHTML = `<h3>Analisi tecnica ${info(TA_INFO)} <span class="muted small ta-asof">livelli alla chiusura del ${dayIT(ta.asOf)} · prezzo attuale ${fUsd(price)}</span></h3>
+    <div class="ta-part"><h4>1 · Verdetto</h4>${taVerdict(ta)}</div>
+    <div class="ta-part"><h4>2 · Medie e trend</h4>${dTA.trend}</div>
+    <div class="ta-part"><h4>3 · Settore e tema</h4>${taGroups(t, ta)}</div>
+    <div class="ta-part"><h4>4 · Piano di rischio ${info(TA_PLAN_INFO)}</h4>
+      <div class="ta-money"><label>Rischio massimo <input type="number" id="taRisk" min="0.1" max="10" step="0.1" value="${money.risk}"> % del portafoglio</label>
+        <label>Massimo per posizione <input type="number" id="taMax" min="1" max="100" step="1" value="${money.max}"> %</label>
+        <span>${capLine}${isNum(fx) ? ` · cambio EUR/USD ${fNum(fx, 4)}` : " · cambio EUR/USD non disponibile"}</span></div>
+      <p class="muted small">Se comprassi adesso. ATR = ${fUsd(ta.atr)} (${fNum(ta.atr / price * 100, 1)}% del prezzo): quanto si muove in media il titolo in un giorno.</p>
+      ${taPlanHTML("now", price, "prezzo attuale", ta, money)}</div>
+    <div class="ta-part"><h4>5 · Livelli di attesa (ordine condizionato) ${info(TA_WAIT_INFO)}</h4>
+      ${waits.length ? waits.map(w => taWaitHTML(w, ta, price, money)).join("")
+        : `<p class="muted">Nessun livello di attesa: il prezzo non è entro il ${TA_NEAR}% sotto il massimo a 52 settimane (${fUsd(ta.high52.v)}${price > ta.high52.v ? ", già superato" : ""}) né dentro una fase laterale stretta.</p>`}</div>
+    <p class="disclaimer">Screening meccanico a scopo di studio: i livelli non sono previsioni né consigli. Non è una consulenza finanziaria.</p>`;
+}
+async function taEnsure() {      // the pattern test and the portfolio value, loaded once
+  const jobs = [];
+  if (!pt.data) jobs.push(getJSON("/api/patterns").then(d => { pt.data = d; }).catch(() => {}));
+  if (!pf.data) jobs.push(getJSON("/api/portfolio").then(d => { pf.data = d; }).catch(() => {}));
+  if (jobs.length) { await Promise.all(jobs); renderTA(); }
+}
+drawer.addEventListener("click", e => {
+  const o = e.target.closest("[data-ta-stop]");
+  if (o) { const [id, v] = o.dataset.taStop.split(":"); dTA.sel[id] = v; return renderTA(); }
+  const g = e.target.closest("[data-ta-goto]");
+  if (g) { closeDetail(); setView(g.dataset.taGoto); }
+});
+drawer.addEventListener("change", e => {
+  if (!["taRisk", "taMax", "taCapital"].includes(e.target.id)) return;
+  const v = parseFloat(e.target.value);
+  LS.set(e.target.id, isNum(v) && v > 0 ? v : e.target.id === "taRisk" ? 1 : e.target.id === "taMax" ? 20 : 0);
+  e.target.blur();
+  renderTA();
+});
+
 async function loadDetailInfo() {
   const t = state.detail;
   let data = { info: {}, news: [] };
@@ -1418,10 +1598,14 @@ async function loadDetailInfo() {
       ${stat("Utile per azione (12 mesi)", fNum(i.trailingEps, 2))}${stat("Utile per azione atteso", fNum(i.forwardEps, 2))}
       ${stat("Ricavi (12 mesi)", "$" + fBig(i.totalRevenue))}${stat("Rendimento dividendo", isNum(i.dividendYield) && i.dividendYield > 0 ? fNum(i.dividendYield, 2) + "%" : "—")}
     </div>`;
-  drawer.querySelector(".d-rest").innerHTML = `<div class="d-cols">
-      <div class="d-col">${trend}${s.ticker ? valuationHTML(data.valuation, fundamentals) : ""}</div>
+  // index stocks: the Trend block lives inside "Analisi tecnica" (part 2), not twice
+  const hasTA = !!(s.ticker && data.ta);
+  Object.assign(dTA, { t, ta: hasTA ? data.ta : null, fx: data.fx, trend: trend.replace('<div class="d-sec"><h3>Trend</h3>', '<div>'), sel: {} });
+  drawer.querySelector(".d-rest").innerHTML = `${hasTA ? `<div class="d-sec ta" id="dTA"></div>` : ""}<div class="d-cols">
+      <div class="d-col">${hasTA ? "" : trend}${s.ticker ? valuationHTML(data.valuation, fundamentals) : ""}</div>
       <div class="d-col">${s.ticker ? analystsHTML(data.analysts, s, tgt) : ""}${newsSec}</div></div>${company}`;
   drawer.querySelector(".d-sum").innerHTML = signalHTML(data.signal);
+  if (hasTA) { renderTA(); taEnsure(); }
   renderDetailNews();
   const more = $("#aboutMore");
   if (more) more.onclick = () => { $("#about").classList.toggle("clamp"); more.textContent = $("#about").classList.contains("clamp") ? "Mostra altro" : "Mostra meno"; };
@@ -1551,19 +1735,13 @@ function rangeViz(lo, hi, price, target, title, ends) {
 
 
 // ------------------------------------------------------------ ideas (twice-daily trend report)
-const ideasState = { report: null, id: LS.get("repId", "latest"), grp: "themes", side: "all", theme: "", maSort: { key: "score", dir: -1 }, loadedId: null };
+const ideasState = { report: null, id: LS.get("repId", "latest"), grp: "themes", maSort: { key: "score", dir: -1 }, loadedId: null };
 // "2026-09-28_morning" -> "28 set 2026 · mattina"
 const dayIT = iso => new Date(iso + "T12:00:00").toLocaleDateString("it-IT", { day: "numeric", month: "short", year: "numeric" });
 const repLabel = id => {
   const [d, s] = id.split("_");
   return `${dayIT(d)} · ${{ morning: "mattina", close: "sera", afternoon: "pomeriggio", intraday: "seduta" }[s] || s}`;
 };
-const SIDES = [
-  { id: "long", label: "Setup di acquisto", desc: "ingressi a favore del trend con rischio definito" },
-  { id: "watch", label: "Da osservare", desc: "ipervenduti dentro un trend rialzista più lungo: attendi un'inversione" },
-  { id: "manage", label: "Tirati: da gestire", desc: "trend forti molto sopra la media a 20 giorni: alza lo stop, non inseguire" },
-  { id: "avoid", label: "Da evitare / candidati short", desc: "medie in discesa e forza relativa debole" },
-];
 const QCOL = { Leading: "--up", Weakening: "--warn", Lagging: "--down", Improving: "--accent" };
 
 async function renderIdeas() {
@@ -1572,9 +1750,9 @@ async function renderIdeas() {
   const sel = $("#repSel");
   sel.innerHTML = `<option value="latest">Ultimo report</option>` + list.map(id => `<option value="${esc(id)}">${esc(repLabel(id))}</option>`).join("");
   sel.value = list.includes(ideasState.id) ? ideasState.id : "latest";
-  $("#ideasEmpty").hidden = $("#tradeEmpty").hidden = list.length > 0;
-  $("#ideasBody").hidden = $("#tradeBody").hidden = !list.length;
-  if (!list.length) return;
+  $("#ideasEmpty").hidden = list.length > 0;
+  $("#ideasBody").hidden = !list.length;
+  if (!list.length) { if (state.view === "trade") drawPatterns(); return; }   // the test results need no report
   if (ideasState.loadedId !== sel.value || !ideasState.report) {
     try { ideasState.report = await getJSON(`/api/report/${encodeURIComponent(sel.value)}`); ideasState.loadedId = sel.value; }
     catch (e) { $("#brief").innerHTML = `<div class="empty">Impossibile caricare il report (${esc(e.message)})</div>`; return; }
@@ -1584,38 +1762,120 @@ async function renderIdeas() {
     try { ideasState.prev = { id: R.prevId, R: await getJSON(`/api/report/${encodeURIComponent(R.prevId)}`) }; }
     catch { ideasState.prev = { id: R.prevId, R: null }; }
   }
-  if (state.view === "trade") drawTrade(); else drawIdeas();
+  if (state.view === "trade") drawPatterns(); else drawIdeas();
 }
-// setup names of reports saved before the Italian translation (same table as signals.SETUP_OLD_EN)
-const SETUP_EN = { Extended: "Tirato", "Bullish crossover": "Incrocio rialzista", "Bearish crossover": "Incrocio ribassista",
-  "Pullback in uptrend": "Ritracciamento in trend rialzista", "Momentum leader": "Leader di momentum",
-  "Oversold in uptrend": "Ipervenduto in trend rialzista", Downtrend: "Trend ribassista" };
-const setupIT = x => SETUP_EN[x] || x;
-// one short line, only when some of my stocks (watchlist.json) changed setup since the previous report
-function renderMySetupChanges(R) {
-  const el = $("#mySetup"), P = ideasState.prev?.id === R.prevId ? ideasState.prev.R : null;
-  el.hidden = true;
-  if (!P) return;
-  const before = new Map(P.ideas.map(i => [i.ticker, setupIT(i.setup)]));
-  const now = new Map(R.ideas.map(i => [i.ticker, setupIT(i.setup)]));
-  const items = [...state.watch].map(t => {
-    const a = before.get(t), b = now.get(t);
-    if (a === b) return null;
-    const what = b ? (a ? `ora ${b}, prima ${a}` : `ora ${b}`) : `non più ${a}`;
-    return `<b class="tlink" data-open="${esc(t)}">${esc(t)}</b> (${esc(what)})`;
-  }).filter(Boolean);
-  if (!items.length) return;
-  el.innerHTML = `${items.length === 1 ? "1 dei tuoi titoli ha" : `${items.length} dei tuoi titoli hanno`} cambiato setup
-    rispetto al report ${esc(repLabel(R.prevId))}: ${items.join(", ")}.`;
-  el.hidden = false;
+// ------------------------------------------------------------ Pattern tecnici
+// Test results come from reports/patterns.json (backtest.py --patterns); the stocks showing each pattern come from the
+// report chosen in the Report tab. Rule of the page: no pattern is ever presented as "favorevole"; a pattern that passed
+// the test is shown as information, with its caveats. Explanations are fixed texts, the numbers come from the test.
+const PT_INFO = {
+  high52: "Il titolo chiude al prezzo più alto dell'ultimo anno e quel giorno si scambiano molte più azioni del solito. L'idea è che un massimo raggiunto con tanti scambi mostri un interesse forte dei compratori.",
+  near52: "Il prezzo è a non più del 5% dal punto più alto dell'ultimo anno. È un modo semplice per dire che il titolo è forte.",
+  mom12_1: "Il titolo è tra i migliori per rendimento nell'ultimo anno, senza contare l'ultimo mese (che spesso va in senso contrario). È il «momentum» classico: l'idea è che chi è salito tenda a continuare.",
+  pull50: "Il titolo è in salita, ha rallentato ed è tornato ad appoggiarsi sulla media dei prezzi degli ultimi 50 giorni. L'idea è comprare un titolo forte durante una pausa.",
+  range_break: "Per circa un mese e mezzo il prezzo si è mosso poco, dentro una fascia stretta; oggi esce dalla fascia verso l'alto con molti scambi. L'idea è che dopo una pausa parta un nuovo movimento.",
+  golden: "La media dei prezzi degli ultimi 50 giorni sale sopra quella degli ultimi 200. Indica che la tendenza recente è diventata più forte di quella di lungo periodo. È un segnale lento: arriva quando il titolo è già salito da un po'.",
+  leader: "Titolo con le medie a 20, 40 e 60 giorni in ordine rialzista che nell'ultimo mese ha fatto nettamente meglio di QQQ, senza essere già troppo lontano dalla media a 20. Era un setup della vecchia scheda Idee.",
+  pullback: "Titolo con le medie a 40 e 60 giorni in salita, tornato vicino alla media a 20 giorni. Era un setup della vecchia scheda Idee.",
+  bull_x: "La media dei prezzi a 20 giorni ha appena superato quella a 60 giorni: il breve periodo torna più forte del medio. Era un setup della vecchia scheda Idee.",
+};
+const pt = { data: null };
+const dayShort = iso => new Date(iso + "T12:00:00").toLocaleDateString("it-IT", { day: "numeric", month: "short" });
+// signed points; a value that rounds to 0,00 is shown with more digits (the golden cross median is +0,0003)
+const ptPts = v => !isNum(v) ? "—" : (v > 0 ? "+" : "") + fNum(v, v !== 0 && Math.abs(v) < 0.005 ? 4 : 2);
+const ptEdge = p => p.favorable && p.horizons["3M"].vsAllMedian < 0.5;   // passed, but the typical case is barely above the others
+
+function ptChecks(p, P) {
+  const h3 = p.horizons["3M"], h6 = p.horizons["6M"];
+  const vals = [
+    `Media dell'extra a 3 mesi: ${ptPts(h3.vsAll)} punti (serve almeno +0,5).`,
+    `Mediana dell'extra a 3 mesi: ${ptPts(h3.vsAllMedian)} punti (serve sopra 0).`,
+    `Anni con media positiva: ${p.yearsPositive} su ${p.yearsCounted} con almeno 20 casi (ne servono almeno 6).`,
+    `Media 2017–2021: ${ptPts(p.early)} punti · media 2022–2026: ${ptPts(p.late)} punti (servono entrambe positive).`,
+    `Media dell'extra a 6 mesi: ${ptPts(h6.vsAll)} punti (non deve essere negativa).`,
+    `Casi: ${fNum(p.n, 0)} (ne servono almeno 100).`,
+  ];
+  return p.checks.map((ok, k) => `<span class="info ck" tabindex="0" role="button"
+    data-info="${esc(`<b>${k + 1}. ${esc(P.rule[k])}</b><br>${vals[k]} ${ok ? "✅" : "❌"}`)}">${k + 1} ${ok ? "✅" : "❌"}</span>`).join("");
 }
-// Idee: my stocks' setup changes + trade idea cards of the report chosen in Report
-function drawTrade() {
-  const R = ideasState.report;
-  if (!R) return;
-  $("#tradeMeta").textContent = `Report: ${repLabel(R.id)} · prezzi del ${dayIT(R.dataAsOf)}`;
-  renderMySetupChanges(R);
-  renderIdeaCards(R);
+function ptSay(p, P) {
+  const h = p.horizons["3M"], all = P.all.horizons["3M"];
+  if (p.favorable)
+    return `Ha superato il test${ptEdge(p) ? ", ma il vantaggio è minimo" : ""} (ha battuto QQQ a 3 mesi nel ${pctR(h.beat)} dei casi contro il ${pctR(all.beat)}
+      di tutti i titoli) e, avendo provato ${P.patterns.length} pattern, potrebbe essere dovuto al caso.`;
+  if (h.vsAll >= 0.5 && h.vsAllMedian <= 0)
+    return `In media ha fatto meglio degli altri titoli (${ptPts(h.vsAll)} punti a 3 mesi), ma il caso tipico no: la mediana è negativa
+      (${ptPts(h.vsAllMedian)}). Il vantaggio viene da pochi titoli saliti molto.`;
+  if (h.vsAll > 0 && h.vsAllMedian <= 0)
+    return `Il vantaggio medio sugli altri titoli è troppo piccolo (${ptPts(h.vsAll)} punti a 3 mesi) e nel caso tipico ha fatto peggio (mediana ${ptPts(h.vsAllMedian)}).`;
+  if (h.vsAll <= 0)
+    return `In media ha fatto peggio degli altri titoli (${ptPts(h.vsAll)} punti a 3 mesi; mediana ${ptPts(h.vsAllMedian)}).`;
+  return "Non rispetta tutte le condizioni: passa sopra quelle con ❌ per vedere i numeri.";
+}
+function ptStocks(p, T) {
+  if (!T) return `<div class="pt-stocks"><span class="l">Titoli:</span><span class="muted">non disponibili in questo report (è precedente a questa pagina): genera un nuovo report nella scheda Report.</span></div>`;
+  const list = T.stocks[p.key] || [], ev = p.kind === "evento";
+  const btn = x => `<button class="pt-tk ${state.watch.has(x.ticker) ? "mine" : ""}" data-open="${esc(x.ticker)}"
+    ${state.watch.has(x.ticker) ? 'title="Tra i tuoi titoli"' : ""}>${state.watch.has(x.ticker) ? "★ " : ""}${esc(x.ticker)}${x.date ? `<small>${dayShort(x.date)}</small>` : ""}</button>`;
+  return `<div class="pt-stocks"><span class="l">${ev ? `Titoli nelle ultime ${T.days} sedute` : "Titoli oggi"}${list.length ? ` (${list.length})` : ""}:</span>
+    ${list.length ? list.map(btn).join("") : `<span class="muted">nessuno</span>`}</div>`;
+}
+function ptDetails(p, P) {
+  const pc = v => `<span class="${sign(v)}">${fPct(v, 2)}</span>`, pp = v => `<span class="${sign(v)}">${ptPts(v)}</span>`;
+  const hz = { "1M": "1 mese", "3M": "3 mesi", "6M": "6 mesi" };
+  const rows = Object.keys(P.horizons).map(k => { const h = p.horizons[k], a = P.all.horizons[k];
+    return `<tr><td class="l"><b>${hz[k] || k}</b></td><td>${pc(h.ret)}</td><td>${pc(h.retMedian)}</td><td>${pc(h.qqq)}</td><td>${pp(h.excess)}</td><td>${pp(h.excessMedian)}</td>
+      <td>${fNum(h.beat, 1)}% <span class="muted">(tutti ${fNum(a.beat, 1)}%)</span></td><td><b>${pp(h.vsAll)}</b></td><td>${pp(h.vsAllMedian)}</td></tr>`; }).join("");
+  const years = p.byYear.map(y => `<tr class="${y.n < 20 ? "muted" : ""}"><td class="l">${y.year}</td><td>${fNum(y.n, 0)}</td>
+    <td>${y.n ? pp(y.vsAll3M) : "—"}${y.n && y.n < 20 ? " *" : ""}</td><td>${y.n ? pp(y.excess3M) : "—"}</td></tr>`).join("");
+  return `<details class="fold"><summary>Dettagli del test (1, 3 e 6 mesi, anno per anno)</summary>
+    <p class="small muted"><b>Regola esatta.</b> ${esc(p.rule)} ${p.kind === "evento" ? `Conta solo il primo giorno, poi ${P.pauseDays} sedute di pausa per lo stesso titolo.` : "Misurato una volta a settimana."}
+      Casi: ${fNum(p.n, 0)} su ${p.tickers} titoli diversi.</p>
+    <div class="table-wrap"><table class="scr"><thead><tr><th class="l">Dopo</th><th>Rendimento medio</th><th>Rendimento mediano</th><th>QQQ stesso periodo</th><th>Extra vs QQQ (media)</th>
+      <th>Extra vs QQQ (mediana)</th><th>% volte meglio di QQQ</th><th>Extra vs tutti i titoli (media)</th><th>Extra vs tutti (mediana)</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <h4 class="bt-h">A 3 mesi, anno per anno</h4>
+    <div class="table-wrap"><table class="scr"><thead><tr><th class="l">Anno</th><th>Casi</th><th>Extra vs tutti i titoli</th><th>Extra vs QQQ</th></tr></thead><tbody>${years}</tbody></table></div>
+    <p class="small muted">* meno di 20 casi: l'anno non conta per la condizione 3. Gli «extra» sono in punti percentuali.</p></details>`;
+}
+async function drawPatterns() {
+  if (!pt.data) {
+    try { pt.data = await getJSON("/api/patterns"); }
+    catch { $("#ptIntro").hidden = true; $("#ptMeta").textContent = "";
+      $("#ptBody").innerHTML = `<div class="card empty">Nessun test dei pattern ancora. Dal Terminale: <code>.venv/bin/python backtest.py --patterns</code></div>`; return; }
+  }
+  const P = pt.data, R = ideasState.report, T = R?.patterns || null;
+  const passed = P.patterns.filter(p => p.favorable), failed = P.patterns.length - passed.length;
+  const passTxt = !passed.length ? "nessuno ha superato il test"
+    : `${failed} non ${failed === 1 ? "ha" : "hanno"} superato il test e ${passed.length} lo ${passed.length === 1 ? "ha" : "hanno"} superato${passed.every(ptEdge) ? " di misura" : ""}`;
+  $("#ptIntro").hidden = false;
+  $("#ptIntro").innerHTML = `<b>Nessun pattern è mostrato come «favorevole».</b> Su ${P.patterns.length} pattern provati con il backtest (${P.from.slice(0, 4)}–${P.to.slice(0, 4)}), ${passTxt}.
+    I titoli elencati sono un'informazione, non un'indicazione di acquisto. Non è una consulenza finanziaria.`;
+  const how = `Per ogni caso passato di un pattern si misura quanto ha reso il titolo nei 3 mesi successivi e lo si confronta con la media di
+    tutti i titoli del Nasdaq-100 nello stesso giorno: la differenza è l'«extra». Un pattern supera il test solo se rispetta tutte e 6 le condizioni,
+    fissate prima di vedere i risultati:<br>${P.rule.map((r, k) => `${k + 1}. ${esc(r)}`).join("<br>")}`;
+  $("#ptMeta").innerHTML = `${T ? `Titoli: prezzi del ${dayIT(T.asOf)}${R.intraday ? " (seduta in corso)" : " (chiusura)"} · ` : ""}test del ${dayIT(P.generated.slice(0, 10))}
+    su ${P.stocks} titoli · Come leggere il test ${info(how)}`;
+  const nOk = p => p.checks.filter(Boolean).length;
+  const order = [...P.patterns].sort((a, b) => (b.favorable - a.favorable) || (nOk(b) - nOk(a)) || (b.horizons["3M"].vsAll - a.horizons["3M"].vsAll));
+  const c = P.control;
+  $("#ptBody").innerHTML = order.map(p => `<div class="card pt-card">
+      <div class="card-h"><h2>${esc(p.name)} ${info(`${PT_INFO[p.key] || ""}<br><br><b>Regola esatta.</b> ${esc(p.rule)}`)}</h2>
+        <span class="pt-badge ${p.favorable ? "edge" : ""}">${p.favorable ? (ptEdge(p) ? "Test superato di misura" : "Test superato") : "Test non superato"}</span></div>
+      <div class="pt-checks"><span>Condizioni:</span>${ptChecks(p, P)}<span class="n">${fNum(p.n, 0)} casi</span></div>
+      <p class="pt-say">${ptSay(p, P)}</p>
+      ${ptStocks(p, T)}
+      ${ptDetails(p, P)}
+    </div>`).join("") + `<div class="card pt-card">
+      <details class="fold"><summary>Controllo casuale: ${c.passed} pattern finti su ${c.runs} hanno superato il test</summary>
+        <p class="small muted">Un pattern finto sceglie titoli a caso, con la stessa frequenza media dei pattern di tipo evento (circa ${fNum(c.casesMean, 0)} casi).
+        Ripetuto ${c.runs} volte, ha superato tutte e 6 le condizioni ${c.passed} ${c.passed === 1 ? "volta" : "volte"} (${fNum(c.passedPct, 1)}%): se fosse successo più del 5% delle volte,
+        la regola sarebbe troppo facile da superare per caso. Quante volte ha superato la singola condizione: ${c.passedEach.map((n, k) => `${k + 1}: ${n}`).join(" · ")}.
+        La condizione 2 è la più dura: pochi titoli salgono moltissimo e alzano la media, quindi il titolo tipico sta sotto la media di tutti.</p></details>
+      <details class="fold"><summary>Limiti del test: leggili prima di fidarti dei numeri</summary>
+        <ul class="why bt-lim">${P.limits.map(l => `<li><b>${esc(l.title)}.</b> ${esc(l.text)}</li>`).join("")}</ul>
+        <p class="small muted">I pattern «Leader di momentum», «Ritracciamento in trend rialzista» e «Incrocio rialzista» sono calcolati con le stesse regole di signals.py
+        (${fNum(P.signalsCheck.compared, 0)} confronti, ${P.signalsCheck.different} differenze). Per rifare il test: <code>.venv/bin/python backtest.py --patterns</code></p></details>
+    </div>`;
 }
 
 function drawIdeas() {
@@ -1723,12 +1983,11 @@ function renderRRG(R) {
   g.append("line").attr("x1", 0).attr("x2", iw).attr("y1", y(0)).attr("y2", y(0)).attr("stroke", css("--baseline"));
   [["Leading", iw - 6, 12, "end"], ["Weakening", iw - 6, ih - 6, "end"], ["Lagging", 6, ih - 6, "start"], ["Improving", 6, 12, "start"]]
     .forEach(([t, px, py, a]) => g.append("text").attr("class", "rrg-q").attr("x", px).attr("y", py).attr("text-anchor", a).text(QLAB[t]));
-  const pts = g.selectAll("g.pt").data(groups).join("g").attr("class", "pt").attr("transform", d => `translate(${x(d.rs1m)},${y(d.rs1w)})`).style("cursor", "pointer");
+  const pts = g.selectAll("g.pt").data(groups).join("g").attr("class", "pt").attr("transform", d => `translate(${x(d.rs1m)},${y(d.rs1w)})`);
   pts.append("circle").attr("r", 12).attr("fill", "transparent");
   pts.append("circle").attr("r", d => 4 + Math.sqrt(d.n) * 1.3).attr("fill", d => css(QCOL[d.quadrant])).attr("stroke", css("--surface")).attr("stroke-width", 2);
   pts.append("text").attr("class", "rrg-label").attr("x", d => x(d.rs1m) > iw - 120 ? -10 : 10).attr("text-anchor", d => x(d.rs1m) > iw - 120 ? "end" : "start").attr("y", 4).text(d => d.name);
-  pts.on("mousemove", (ev, d) => showTip(groupTip(d), ev)).on("mouseleave", hideTip)
-    .on("click", (ev, d) => { hideTip(); if (d.kind === "theme") { ideasState.theme = d.name; showIdeas(); } });
+  pts.on("mousemove", (ev, d) => showTip(groupTip(d), ev)).on("mouseleave", hideTip);
   svg.append("text").attr("class", "ref-label").attr("x", m.l + iw).attr("y", H - 2).attr("text-anchor", "end").text("Rendimento relativo a 1 mese vs QQQ (punti) →");
 }
 function groupTip(d) {
@@ -1807,77 +2066,6 @@ function renderChanges(R) {
     : `<li class="muted">Nessun cambiamento rilevante rispetto al report ${esc(repLabel(c.since))}.</li>`;
 }
 
-function renderIdeaCards(R) {
-  const all = R.ideas.filter(i => !ideasState.theme || i.themes.includes(ideasState.theme));
-  $("#sideChips").innerHTML = [{ id: "all", label: "Tutti" }, ...SIDES].map(s => {
-    const n = s.id === "all" ? all.length : all.filter(i => i.side === s.id).length;
-    return `<button data-side="${s.id}" class="${ideasState.side === s.id ? "on" : ""}">${esc(s.label)}<span>${n}</span></button>`;
-  }).join("");
-  const ts = $("#themeSel");
-  ts.innerHTML = `<option value="">Tutti i temi</option>` + R.themes.map(t => `<option>${esc(t.name)}</option>`).join("");
-  ts.value = ideasState.theme;
-  $("#maKey").innerHTML = `<span><i style="background:var(--ink)"></i>Prezzo</span><span><i style="background:var(--series-1)"></i>Media 20</span><span><i style="background:var(--series-2)"></i>Media 40</span><span><i style="background:var(--series-3)"></i>Media 60</span>`;
-  const host = $("#ideaGroups");
-  host.innerHTML = SIDES.filter(s => ideasState.side === "all" || ideasState.side === s.id).map(s => {
-    const list = all.filter(i => i.side === s.id);
-    if (!list.length) return "";
-    return `<div class="idea-group"><h3>${esc(s.label)} <small>${list.length} · ${esc(s.desc)}</small></h3><div class="ideas">${list.map(ideaCard).join("")}</div></div>`;
-  }).join("") || `<div class="card empty">Nessun setup per questo filtro.</div>`;
-  host.querySelectorAll("[data-chart]").forEach(el => {
-    const i = R.ideas.find(x => x.ticker === el.dataset.chart);
-    drawIdeaChart(el, i);
-  });
-}
-// clicking a theme (rotation map or table) opens the Idee tab filtered on it
-function showIdeas() {
-  setView("trade");
-}
-// report price clearly dated ("chiusura 28 set"), plus today's live price and the change since the report
-function ideaPrice(i) {
-  const R = ideasState.report, st = i.stats;
-  const day = new Date(R.dataAsOf + "T12:00:00").toLocaleDateString("it-IT", { day: "numeric", month: "short" });
-  const when = R.intraday ? `prezzo del ${day} (seduta in corso)` : `chiusura ${day}`;
-  const live = state.bySym.get(i.ticker)?.price, d = isNum(live) && i.price ? (live / i.price - 1) * 100 : null;
-  return `<div class="px-rep"><span class="px-when">${when}</span> <b>${fPrice(i.price)}</b> <span class="${sign(st.ret1d)}">${fPct(st.ret1d)}</span></div>
-    ${isNum(live) ? `<div class="px-now">ora ${fPrice(live)} <span class="${sign(d)}">${fPct(d)} dal report</span></div>` : ""}`;
-}
-function ideaCard(i) {
-  const lv = i.levels, st = i.stats;
-  const bars = Math.round(i.conviction / 20);
-  const lvCell = (l, v, cls = "") => `<div><div class="l">${l}</div><div class="v ${cls}">${v}</div></div>`;
-  return `<div class="idea">
-    <div class="idea-h"><div style="min-width:0"><span class="tt" data-open="${esc(i.ticker)}">${esc(i.ticker)}</span> <span class="nm">${esc(i.name)}</span><br>
-      <span class="setup ${i.side}">${esc(setupIT(i.setup))}</span></div>
-      <div class="px">${ideaPrice(i)}
-      <div class="conv" title="Convinzione ${i.conviction}/100: punteggio trend, fase del gruppo e allineamento con il mercato">convinzione <span class="m">${[1, 2, 3, 4, 5].map(k => `<i class="${k <= bars ? "on" : ""}"></i>`).join("")}</span></div></div></div>
-    <div class="chart" data-chart="${esc(i.ticker)}"></div>
-    <div class="lv">${i.side === "manage"
-      ? lvCell("Stop mobile", fPrice(lv.stop)) + lvCell("vs media 20", fPct(st.vs20, 1), sign(st.vs20)) + lvCell("RSI", fNum(st.rsi, 0)) + lvCell("vs QQQ 1M", fChg(st.rs1m), sign(st.rs1m)) + lvCell("ATR", fNum(st.atrPct, 1) + "%")
-      : lvCell(i.side === "avoid" ? "Short vicino a" : "Entrata", fPrice(lv.entry)) + lvCell("Stop", fPrice(lv.stop), "down") + lvCell("Target", fPrice(lv.target), "up") + lvCell("R : R", fNum(lv.rr, 1)) + lvCell("Rischio", fNum(lv.riskPct, 1) + "%")}</div>
-    <ul class="why">${i.why.map(w => `<li>${esc(w)}</li>`).join("")}</ul>
-    ${i.signal ? `<div class="idea-sig">Segnale finale: ${sigBadge(i.signal.signal)}${isNum(i.signal.score) ? ` <span class="muted num">${fNum(i.signal.score, 0)}</span>` : ""}</div>` : ""}
-    <div class="tags"><span>${esc(i.sector)}</span>${i.themes.map(t => `<span>${esc(t)}</span>`).join("")}</div>
-  </div>`;
-}
-function drawIdeaChart(el, i) {
-  const c = i.chart, n = c.c.length;
-  const pts = k => (c[k] || []).map((v, j) => ({ t: c.t[j], v }));
-  const refs = i.side === "manage" ? [{ v: i.levels.stop, label: "stop mobile", color: css("--down") }]
-    : [{ v: i.levels.entry, label: "entrata", color: css("--muted") }, { v: i.levels.stop, label: "stop", color: css("--down") }, { v: i.levels.target, label: "target", color: css("--up") }];
-  lineChart(el, [
-    { pts: pts("c"), color: css("--ink"), width: 1.75 },
-    { pts: pts("s20"), color: css("--series-1"), width: 1.5 },
-    { pts: pts("s40"), color: css("--series-2"), width: 1.5 },
-    { pts: pts("s60"), color: css("--series-3"), width: 1.5 },
-  ], {
-    height: 160, range: "6M", refs, label: `${i.ticker}: prezzo con medie a 20/40/60 giorni`,
-    tip: j => `<div class="tip-h">${fDate(c.t[j], { month: "short", day: "numeric", year: "numeric" })}</div>
-      <div class="tip-row"><span>Chiusura</span><b class="num">${fPrice(c.c[j])}</b></div>
-      ${[["s20", "Media 20", "--series-1"], ["s40", "Media 40", "--series-2"], ["s60", "Media 60", "--series-3"]].map(([k, l, v]) =>
-        `<div class="tip-row"><span><i class="swatch" style="background:var(${v})"></i>${l}</span><span class="num">${fPrice((c[k] || [])[j])}</span></div>`).join("")}`,
-  });
-}
-
 function renderMaTable(R) {
   const q = ($("#maFind").value || "").trim().toLowerCase();
   const cols = [
@@ -1898,7 +2086,7 @@ function renderMaTable(R) {
   $("#maTable").innerHTML = `${head}<tbody>${rows.map(s => `<tr data-t="${esc(s.ticker)}">${cols.map(([, , c, f]) => `<td class="${c}">${f(s)}</td>`).join("")}</tr>`).join("")}</tbody>`;
   $("#maHead").innerHTML = head;
   // reports saved before the change carry a signal that still included the technical part
-  const oldSig = R.ideas.some(i => i.signal?.components?.some(c => c.key === "tech"));
+  const oldSig = (R.ideas || []).some(i => i.signal?.components?.some(c => c.key === "tech"));
   $("#maNote").textContent = oldSig ? "segnale calcolato con la versione precedente (tecnica inclusa)" : "";
   syncMaHead();
 }
@@ -1922,19 +2110,13 @@ function syncMaHead() {
 addEventListener("scroll", syncMaHead, { passive: true });
 
 $("#repSel").addEventListener("change", e => { ideasState.id = e.target.value; LS.set("repId", ideasState.id); renderIdeas(); });
-$("#themeSel").addEventListener("change", e => { ideasState.theme = e.target.value; renderIdeaCards(ideasState.report); });
-$("#sideChips").addEventListener("click", e => { const b = e.target.closest("[data-side]"); if (b) { ideasState.side = b.dataset.side; renderIdeaCards(ideasState.report); } });
 document.addEventListener("click", e => {
   const b = e.target.closest("[data-grp-seg] button");
   if (b) { ideasState.grp = b.dataset.grp; renderRRG(ideasState.report); renderGroupTable(ideasState.report); }
 });
-$("#grpTable").addEventListener("click", e => {
-  const tr = e.target.closest("tr[data-g]");
-  if (tr && tr.dataset.kind === "theme") { ideasState.theme = tr.dataset.g; ideasState.side = "all"; showIdeas(); }
-});
 $("#view-trade").addEventListener("click", e => {
-  const t = e.target.closest("[data-open], .changes [data-t]");
-  if (t) openDetail(t.dataset.open || t.dataset.t);
+  const t = e.target.closest("[data-open]");
+  if (t) openDetail(t.dataset.open);
 });
 $("#view-ideas").addEventListener("click", e => {
   const t = e.target.closest("[data-open], .changes-list [data-t], #maTable tr[data-t]");

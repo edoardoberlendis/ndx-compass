@@ -416,6 +416,7 @@ class Store:
         self.news_at = 0.0
         self.news_running = False
         self.signals = {}       # ticker -> final signal detail (score.py), rebuilt with every snapshot
+        self.ta = {}            # ticker -> levels, patterns and groups for the detail's "Analisi tecnica" (technical.py)
 
     # -- refreshers
     def refresh_analysts(self, tickers):
@@ -470,10 +471,17 @@ class Store:
             d = download(tickers, period="2y", interval="1d")
         if d:
             tech = self.technicals(d)
+            try:
+                import technical  # local import: technical imports this module
+                ta = technical.build(d, self.constituents, tech)
+            except Exception:
+                log.exception("technical analysis failed")     # prices must not depend on it
+                ta = {}
             fresh = how != "cache already up to date"
             with self.lock:
                 self.daily = d
                 self.tech = tech
+                self.ta = ta
                 self.last_daily = time.time() if fresh else saved_at
             if fresh:
                 save_daily_cache(d)
@@ -1010,7 +1018,18 @@ def api_stock(ticker):
         "signal": store.signals.get(ticker),
         # a few trend figures of the technical score, for the detail's Trend section
         "tech": {k: (store.tech.get(ticker) or {}).get(k) for k in ("slope20", "slope40", "slope60", "volRatio")},
+        # raw numbers of the "Analisi tecnica" section (index stocks only) and the EUR/USD rate for the position size
+        "ta": store.ta.get(ticker),
+        "fx": cached(("fx",), 900, eurusd) if ticker in store.ta else None,
     }, default=clean, allow_nan=False), mimetype="application/json")
+
+
+def eurusd():
+    """USD per 1 EUR (last Yahoo quote), or None."""
+    try:
+        return float(download(["EURUSD=X"], period="5d", interval="1d")["EURUSD=X"]["Close"].dropna().iloc[-1])
+    except Exception:
+        return None
 
 
 def recent_news(ticker, name, k=5):
@@ -1130,6 +1149,14 @@ def api_backtest():
     if not os.path.exists(os.path.join(REPORT_DIR, "backtest.json")):
         return jsonify({"error": "missing"}), 404
     return send_from_directory(REPORT_DIR, "backtest.json", max_age=0)
+
+
+@app.route("/api/patterns")
+def api_patterns():
+    """Last test of the technical patterns (backtest.py --patterns, run by hand)."""
+    if not os.path.exists(os.path.join(REPORT_DIR, "patterns.json")):
+        return jsonify({"error": "missing"}), 404
+    return send_from_directory(REPORT_DIR, "patterns.json", max_age=0)
 
 
 @app.route("/api/report/run", methods=["POST"])

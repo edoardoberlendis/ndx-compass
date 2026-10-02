@@ -32,7 +32,7 @@
     <button class="tab" data-view="screener">Screener</button>
     <button class="tab" data-view="sectors">Settori</button>
     <button class="tab" data-view="ideas">Report</button>
-    <button class="tab" data-view="trade">Idee</button>
+    <button class="tab" data-view="trade">Pattern tecnici</button>
   </div>
   <div class="updated"><span class="status" id="status"></span><span class="cal-warn" id="calWarn" hidden>⚠ Festività USA: elenco da aggiornare</span><span id="updated"></span></div>
 </nav>
@@ -151,22 +151,11 @@
     </div>
   </section>
 
-  <!-- TRADE IDEAS (experimental; same report as the Report tab) -->
+  <!-- PATTERN TECNICI (test results from reports/patterns.json + today's stocks from the report; view id "trade" kept for saved links) -->
   <section id="view-trade" class="view" hidden>
-    <p class="warn-box">Queste idee (entrata, stop e target) si basano solo sulla parte tecnica: medie 20/40/60, RSI e forza rispetto a QQQ.
-      Il backtest nella scheda Report non ha dimostrato che questa parte dia un vantaggio. Usale come spunti da verificare,
-      non come indicazioni operative. Non è una consulenza finanziaria.</p>
-    <div class="toolbar"><span class="muted" id="tradeMeta"></span><button class="link-btn" data-goto="ideas">Cambia report nella scheda Report →</button></div>
-    <div id="tradeEmpty" class="card empty" hidden>Nessun report ancora: generane uno dalla scheda <b>Report</b>.</div>
-    <div id="tradeBody">
-      <div class="card my-setup" id="mySetup" hidden></div>
-      <div class="toolbar">
-        <div class="chips" id="sideChips"></div>
-        <select id="themeSel" aria-label="Tema"></select>
-        <div class="series-key" id="maKey"></div>
-      </div>
-      <div id="ideaGroups"></div>
-    </div>
+    <p class="warn-box" id="ptIntro"></p>
+    <div class="toolbar"><span class="muted" id="ptMeta"></span><button class="link-btn" data-goto="ideas">Cambia report nella scheda Report →</button></div>
+    <div id="ptBody"></div>
   </section>
 
   <!-- REPORT (twice-daily trend report; view id "ideas" kept for saved links) -->
@@ -187,7 +176,7 @@
         <p class="hint">x: rendimento vs QQQ a 1 mese · y: vs QQQ a 1 settimana. I gruppi tendono a ruotare in senso orario: In miglioramento → Leader → In indebolimento → In ritardo.</p>
       </div>
       <div class="card">
-        <div class="card-h"><h2 id="grpTitle">Temi</h2><span class="card-meta">struttura medie 20/40/60 · Δ vs report precedente · clicca un tema per vederne le idee</span></div>
+        <div class="card-h"><h2 id="grpTitle">Temi</h2><span class="card-meta">struttura medie 20/40/60 · Δ vs report precedente</span></div>
         <table class="scr grp" id="grpTable"></table>
       </div>
 
