@@ -1077,6 +1077,15 @@ def api_portfolio():
     return app.response_class(json.dumps(pf, default=clean), mimetype="application/json")
 
 
+@app.route("/api/portfolio/risk")
+def api_portfolio_risk():
+    """Risk of my portfolio (risk.py): personal data, computed in memory, never cached on disk."""
+    import risk
+    with store.lock:
+        snap, infos = store.snapshot, dict(store.infos)
+    return app.response_class(json.dumps(risk.snapshot(portfolio.snapshot(snap, infos)), default=clean), mimetype="application/json")
+
+
 @app.route("/api/rules", methods=["POST"])
 def api_rules():
     """Save my investment rules in portafoglio/regole.json (only from the dashboard open on this Mac)."""

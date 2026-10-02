@@ -44,6 +44,17 @@ Oppure dal Terminale:
   (10 / 35 / 15 / 25 / 50 / 80 / 5 / 15 / 1%, avviso dal 90% del limite) e la spunta "ampio" per i miei ETF. Si salvano
   in `portafoglio/regole.json` (fuori da Git, solo da questo Mac); finché non salvo valgono i valori proposti, indicati
   come "non ancora confermati". Superare un limite non è un ordine di vendita: è un punto da guardare.
+- **Rischio del portafoglio** (scheda Portafoglio, sotto i totali), con ⓘ semplici: **volatilità annua** e confronto con
+  QQQ; **beta** sul Nasdaq-100; **scenario** "se il Nasdaq-100 perde il 10% / 20% il portafoglio perde circa X €"
+  (beta × calo × valore, la leva entra con i prezzi veri dei prodotti a leva); **massima perdita storica** del
+  portafoglio di oggi negli ultimi 2 anni, con le date e QQQ negli stessi giorni; **contributo al rischio** di ogni
+  posizione confrontato con il suo peso in euro (⚠ da 1,5 volte il peso); **correlazione** media pesata e le 5 coppie
+  più simili. Metodo (`risk.py`): 2 anni di chiusure giornaliere convertite in euro, portafoglio simulato con i pesi di
+  oggi tenuti fissi; volatilità e massima perdita sui rendimenti giornalieri, beta, contributo e correlazioni su quelli
+  settimanali (Milano e Francoforte chiudono prima di New York). Restano fuori, e sono elencate con il motivo, le
+  posizioni con meno di 6 mesi di prezzi o con prezzi storici anomali (salti di un giorno oltre +150% / −75%). Limiti
+  scritti nella sezione: due anni sono pochi, pesi di oggi nel passato, scenario lineare, stime e non previsioni.
+  I prezzi si scaricano una volta al giorno e restano in memoria.
 - **Portafoglio**: le mie posizioni reali, dall'export Excel di Fineco ("Portafoglio sintesi") messo nella cartella
   `portafoglio/` (la dashboard legge da sola il file più recente). Il file si carica dalla scheda con il pulsante
   **Carica file Fineco** o trascinandolo sulla pagina: prima compare un'anteprima (posizioni nuove, vendute, con
@@ -254,6 +265,7 @@ residuo (favorisce i pattern di forza), test multipli, casi sovrapposti, nessun 
 | `analysts.py` | Dati degli analisti e valutazione (scaricati una volta al giorno) |
 | `score.py` | Segnale finale (analisti + valutazione + notizie) e Trend a parte |
 | `backtest.py` | Backtest del Trend e, con `--patterns`, test dei pattern tecnici (a mano) |
+| `risk.py` | Rischio del portafoglio: volatilità, beta, scenario, massima perdita, contributo al rischio, correlazione |
 | `rules.py` | Le mie regole di investimento (limiti) e il controllo sul portafoglio |
 | `technical.py` | Numeri della sezione Analisi tecnica nella scheda del titolo (ATR, livelli, pattern, settore e tema) |
 | `portfolio.py` | Portafoglio: lettura dell'export Fineco, ticker Yahoo, valori in euro |

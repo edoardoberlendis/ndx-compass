@@ -896,6 +896,9 @@ function pfQuote(t) {
 async function loadPortfolio() {
   try { pf.data = await getJSON("/api/portfolio"); } catch { pf.data = { file: null, error: "Server non raggiungibile" }; }
   renderPortfolio();
+  if (pf.data.file && !pf.data.error && !pf.data.resolving) {     // recomputed when the file changes, otherwise every 5 minutes
+    if (risk.data?.status !== "ok" || risk.file !== pf.data.file || Date.now() - risk.at > 5 * 60_000) { risk.file = pf.data.file; risk.at = Date.now(); loadRisk(); }
+  } else { risk.data = null; renderRisk(); }
   clearTimeout(pf.retry);
   if (pf.data.resolving && state.view === "portfolio") pf.retry = setTimeout(loadPortfolio, 3000);   // tickers still being matched
 }
@@ -996,6 +999,59 @@ function renderConcentration() {
     country: "Azioni: paese della società secondo Yahoo (corretto in portafoglio/classificazione.json se serve). ETF ed ETC: area a cui sono esposti, non la sede del fondo; «Mondo» non è diviso per paese.",
   };
   $("#pfConcNote").innerHTML = `${notes[pf.dim]} Barra chiara = valore investito, barra scura = esposizione effettiva.`;
+}
+// ---- risk of the portfolio (risk.py): estimates on the last 2 years with today's weights, limits always shown
+const RISK_INFO = {
+  all: `Quanto può oscillare il portafoglio <b>com'è oggi</b>. I numeri sono stime sugli ultimi 2 anni, calcolate come se avessi sempre avuto i pesi di oggi,
+    con tutti i prezzi convertiti in euro. Non sono previsioni: leggi i limiti in fondo alla sezione.`,
+  vol: `<b>Volatilità annua</b>: di quanto oscilla di solito il valore in un anno, in più o in meno. Con una volatilità del 25%, in circa due anni su tre
+    il risultato dell'anno resta entro ±25% dalla media; negli altri va oltre. Più è alta, più le oscillazioni sono ampie. QQQ è il fondo che replica il Nasdaq-100.`,
+  beta: `<b>Beta</b>: di quanto si muove in media il portafoglio quando il Nasdaq-100 si muove dell'1%. Beta 1 = come l'indice; 1,3 = il 30% in più, in salita e in discesa;
+    0,7 = il 30% in meno. È stimato sui rendimenti settimanali degli ultimi 2 anni.`,
+  scen: `<b>Scenario</b>: beta × calo dell'indice × valore del portafoglio, a cambio EUR/USD fermo. I prodotti a leva entrano con i loro prezzi veri, quindi la leva è già contata.
+    È una stima lineare: nei cali forti e veloci la perdita reale può essere più grande, soprattutto con prodotti a leva giornaliera.`,
+  dd: `<b>Massima perdita storica</b> (drawdown): il calo più profondo, dal punto più alto al punto più basso successivo, che il portafoglio di oggi avrebbe avuto negli ultimi 2 anni.
+    Serve a chiedersi: «avrei retto questa discesa senza vendere nel momento peggiore?».`,
+  rc: `<b>Contributo al rischio</b>: quanta parte delle oscillazioni del portafoglio dipende da ogni posizione (la somma fa 100%). Dipende dal peso, da quanto la posizione oscilla
+    e da quanto si muove insieme alle altre. Se una posizione pesa il 6% in euro ma porta il 19% del rischio, conta sul rischio 3 volte il suo peso (⚠ da 1,5 volte in su).`,
+  corr: `<b>Correlazione</b>: da −1 a +1, quanto due posizioni si muovono insieme. Vicino a 1 = quasi la stessa cosa (per esempio due ETF sullo stesso indice): tenerle entrambe
+    diversifica poco. La media è pesata per i pesi delle posizioni: sotto 0,3 bassa, tra 0,3 e 0,6 media, sopra 0,6 alta.`,
+};
+const risk = { data: null, retry: null, file: null, at: 0 };
+async function loadRisk() {
+  clearTimeout(risk.retry);
+  try { risk.data = await getJSON("/api/portfolio/risk"); } catch { risk.data = { status: "error", error: "server non raggiungibile" }; }
+  renderRisk();
+  if (risk.data.status === "loading" && state.view === "portfolio") risk.retry = setTimeout(loadRisk, 3000);
+}
+function renderRisk() {
+  const el = $("#pfRisk"), D = risk.data;
+  if (!D || D.status === "none") { el.hidden = true; return; }
+  el.hidden = false;
+  const head = meta => `<div class="card-h"><h2>Rischio ${info(RISK_INFO.all)}</h2><span class="card-meta">${meta}</span></div>`;
+  if (D.status === "loading") { el.innerHTML = head("") + `<div class="empty">Calcolo in corso: scarico 2 anni di prezzi delle tue posizioni (qualche secondo)…</div>`; return; }
+  if (D.status !== "ok") { el.innerHTML = head("") + `<div class="empty">Rischio non calcolabile al momento (${esc(D.error || "dati mancanti")}).</div>`; return; }
+  const kpi = (l, i, v, sub) => `<div class="kpi"><div class="l">${l} ${info(i)}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
+  const dd = D.drawdown, b = D.beta;
+  const betaSay = !isNum(b) ? "" : Math.abs(b - 1) < 0.05 ? "si muove circa come l'indice" : `si muove il ${fNum(Math.abs(b - 1) * 100, 0)}% ${b > 1 ? "più" : "meno"} dell'indice`;
+  const left = D.left.length ? ` · fuori dal calcolo: ${D.left.map(x => `${esc(x.name)} (${fNum(x.weight, 1)}% del valore: ${esc(x.why)})`).join(", ")}` : "";
+  el.innerHTML = head(`stima dal ${dayIT(D.from)} al ${dayIT(D.to)}, con i pesi di oggi, in euro · copre il ${fNum(D.coverage, 0)}% del valore${D.left.length ? ` (${D.left.length} ${D.left.length === 1 ? "posizione esclusa" : "posizioni escluse"}, vedi i limiti)` : ""}`) + `
+    <div class="kpis">
+      ${kpi("Volatilità annua", RISK_INFO.vol, fNum(D.vol, 0) + "%", `QQQ: ${fNum(D.benchVol, 0)}%`)}
+      ${kpi("Beta sul Nasdaq-100", RISK_INFO.beta, fNum(b, 2), betaSay)}
+      ${kpi("Se il Nasdaq-100 perde", RISK_INFO.scen, D.scenarios.map(s => `<div class="risk-sc">−${s.drop}% → <span class="down">circa ${fEur(s.loss, 0)}</span></div>`).join(""), `circa ${D.scenarios.map(s => fNum(s.pct, 0) + "%").join(" e ")} del portafoglio`)}
+      ${kpi("Massima perdita storica", RISK_INFO.dd, `<span class="down">${fNum(dd.pct, 0)}%</span>`, `dal ${dayIT(dd.peak)} al ${dayIT(dd.trough)} · QQQ negli stessi giorni ${fNum(dd.benchSame, 0)}%`)}
+    </div>
+    <h4 class="bt-h">Contributo al rischio ${info(RISK_INFO.rc)} <span class="muted" style="text-transform:none;letter-spacing:0">chi pesa sul rischio più di quanto pesa in euro</span></h4>
+    <div class="table-wrap"><table class="scr"><thead><tr><th class="l">Posizione</th><th>Peso in euro</th><th>Quota del rischio</th><th>Rapporto</th><th>Beta</th><th>Volatilità annua</th></tr></thead>
+      <tbody>${D.positions.map(p => `<tr><td class="l"><b>${esc(p.name)}</b>${p.fullName !== p.name ? ` <span class="muted small">${esc(p.fullName)}</span>` : ""}</td>
+        <td>${fNum(p.weight, 1)}%</td><td><b>${fNum(p.risk, 1)}%</b></td><td class="${p.flag ? "down" : ""}">${fNum(p.ratio, 1)}×${p.flag ? " ⚠" : ""}</td><td>${fNum(p.beta, 2)}</td><td>${fNum(p.vol, 0)}%</td></tr>`).join("")}</tbody></table></div>
+    <h4 class="bt-h">Correlazione ${info(RISK_INFO.corr)}</h4>
+    <p>${isNum(D.correlation.avg) ? `Media <b>${fNum(D.correlation.avg, 2)}</b> (${D.correlation.label}): ${{ bassa: "le posizioni si muovono in modo abbastanza indipendente.", media: "le posizioni si muovono in parte insieme.", alta: "le posizioni tendono a muoversi insieme: nei cali scendono quasi tutte." }[D.correlation.label]}` : "Non calcolabile."}
+      ${D.correlation.pairs.length ? `<br><span class="muted">Coppie più simili:</span> ${D.correlation.pairs.map(x => `${esc(x.a)} ↔ ${esc(x.b)} <b>${fNum(x.corr, 2)}</b>`).join(" · ")}` : ""}</p>
+    <details class="fold"><summary><span class="small">Limiti di questi calcoli: leggili prima di fidarti dei numeri</span></summary>
+      <ul class="why bt-lim">${D.limits.map(l => `<li><b>${esc(l.title)}.</b> ${esc(l.text)}</li>`).join("")}</ul>
+      <p class="muted small">Calcolato sul ${fNum(D.coverage, 0)}% del valore (${fEur(D.covered, 0)})${left}. Stime, non previsioni. Non è una consulenza finanziaria.</p></details>`;
 }
 // ---- my investment rules (rules.py, portafoglio/regole.json): the box on top of the tab and the page to edit them.
 // Every line shows the measured value and the limit that produced it. Texts are fixed, numbers come from the server.

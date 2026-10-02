@@ -714,3 +714,7 @@ table.pf tr.lev td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 .rules-in .small { display: inline-block; width: 86px; text-align: right; }
 .rules-etf { display: flex; padding: 4px 0; }
 @media (max-width: 560px) { .rules-form label { grid-template-columns: 1fr; gap: 4px; } }
+/* ------------------------------------------------ portfolio: risk */
+#pfRisk .kpis { margin-bottom: 4px; }
+#pfRisk .kpi .v .risk-sc { font-size: 15px; line-height: 1.5; }
+#pfRisk p { line-height: 1.6; margin: 4px 0 8px; }
