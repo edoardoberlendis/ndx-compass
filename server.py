@@ -731,6 +731,17 @@ def intraday_breadth(rows, intra):
 store = Store()
 
 
+def save_portfolio_history():
+    """Today's picture of my portfolio in portafoglio/storico/ (history.py); never stops the price refresh."""
+    try:
+        import history
+        with store.lock:
+            snap, infos = store.snapshot, dict(store.infos)
+        history.record(portfolio.snapshot(snap, infos))
+    except Exception:
+        log.exception("portfolio history not saved")
+
+
 def worker():
     try:
         store.constituents = load_constituents()
@@ -743,6 +754,7 @@ def worker():
         store.refresh_intraday()
         store.build()
         store.ready.set()
+        portfolio.on_quotes = save_portfolio_history             # today's picture after every price refresh
         portfolio.refresh()                                      # my positions (portafoglio/), if an export is there
         macro_calendar.refresh()                                 # US macro events: official dates + BLS values
         if not analysts.is_fresh():
@@ -1075,6 +1087,13 @@ def api_portfolio():
     pf = portfolio.snapshot(snap, infos)
     pf["rules"] = rules.evaluate(pf)          # my limits and whether the portfolio respects them
     return app.response_class(json.dumps(pf, default=clean), mimetype="application/json")
+
+
+@app.route("/api/portfolio/history")
+def api_portfolio_history():
+    """Value over time and time-weighted performance vs QQQ and a global ETF (history.py): personal data, local only."""
+    import history
+    return app.response_class(json.dumps(history.performance(), default=clean), mimetype="application/json")
 
 
 @app.route("/api/portfolio/risk")

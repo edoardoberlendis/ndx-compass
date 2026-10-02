@@ -718,3 +718,6 @@ table.pf tr.lev td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 #pfRisk .kpis { margin-bottom: 4px; }
 #pfRisk .kpi .v .risk-sc { font-size: 15px; line-height: 1.5; }
 #pfRisk p { line-height: 1.6; margin: 4px 0 8px; }
+/* ------------------------------------------------ portfolio: history and performance */
+#pfPerf .perf-flow { font-size: 10px; }
+#pfPerf .series-key { margin-bottom: 4px; }

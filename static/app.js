@@ -899,6 +899,7 @@ async function loadPortfolio() {
   if (pf.data.file && !pf.data.error && !pf.data.resolving) {     // recomputed when the file changes, otherwise every 5 minutes
     if (risk.data?.status !== "ok" || risk.file !== pf.data.file || Date.now() - risk.at > 5 * 60_000) { risk.file = pf.data.file; risk.at = Date.now(); loadRisk(); }
   } else { risk.data = null; renderRisk(); }
+  if (pf.data.file && !pf.data.error) loadPerf(); else { perf.data = null; renderPerf(); }
   clearTimeout(pf.retry);
   if (pf.data.resolving && state.view === "portfolio") pf.retry = setTimeout(loadPortfolio, 3000);   // tickers still being matched
 }
@@ -1000,6 +1001,66 @@ function renderConcentration() {
   };
   $("#pfConcNote").innerHTML = `${notes[pf.dim]} Barra chiara = valore investito, barra scura = esposizione effettiva.`;
 }
+// ---- history and performance (history.py): daily pictures in portafoglio/storico/, time-weighted return vs references
+const PERF_INFO = `<b>Rendimento ponderato per il tempo.</b> Se oggi il portafoglio vale 30.000 € e domani aggiungi 5.000 €, il valore sale a 35.000 € ma non hai guadagnato nulla.
+  Per questo ogni giorno il rendimento è calcolato <b>solo sui soldi che c'erano già</b> (valore di fine giornata meno i soldi aggiunti, diviso il valore del giorno prima),
+  e i rendimenti dei giorni vengono concatenati. Misura come sono andate le tue scelte, indipendentemente da quando hai versato o prelevato: è il metodo con cui si misurano i fondi.<br><br>
+  <b>Guadagno in euro</b>: variazione del valore meno i soldi aggiunti (più quelli tolti).<br><br>
+  I riferimenti sono in euro e comprendono i dividendi: QQQ (Nasdaq-100) e VWCE (Vanguard FTSE All-World, azionario mondiale quotato in Europa).`;
+const perf = { data: null, range: LS.get("pfPerfRange", "ALL"), at: 0 };
+async function loadPerf() {
+  if (perf.data && Date.now() - perf.at < 5 * 60_000) return renderPerf();
+  perf.at = Date.now();
+  try { perf.data = await getJSON("/api/portfolio/history"); } catch { perf.data = null; }
+  renderPerf();
+}
+function renderPerf() {
+  const el = $("#pfPerf"), D = perf.data;
+  if (!D) { el.hidden = true; return; }
+  el.hidden = false;
+  const ranges = [["1M", "1 mese", 31], ["3M", "3 mesi", 92], ["YTD", "Da inizio anno", 0], ["ALL", "Tutto", 0]];
+  const head = `<div class="card-h"><h2>Performance ${info(PERF_INFO)}</h2><div class="seg small">${ranges.map(([k, l]) => `<button data-perf="${k}" class="${perf.range === k ? "on" : ""}">${l}</button>`).join("")}</div></div>`;
+  const all = D.points;
+  if (all.length < 2) {
+    el.innerHTML = head + `<div class="empty">${all.length ? `Lo storico parte dal ${dayIT(all[0].date)}: grafico e rendimenti compaiono dal secondo giorno salvato.` : "Nessun giorno salvato ancora: lo storico parte al prossimo aggiornamento dei prezzi."}</div>
+      <p class="muted small">Ogni giorno la dashboard salva valore, costo e posizioni in <code>portafoglio/storico/</code>, solo su questo Mac.</p>`;
+    return;
+  }
+  const lastDay = all.at(-1).date, r = ranges.find(x => x[0] === perf.range) || ranges[3];
+  const from = r[0] === "YTD" ? lastDay.slice(0, 4) + "-01-01" : r[2] ? new Date(Date.parse(lastDay) - r[2] * 864e5).toISOString().slice(0, 10) : "";
+  let k0 = all.findIndex(p => p.date >= from);
+  if (k0 > 0) k0 -= 1;                                   // the day before the period is its starting point
+  const pts = all.slice(Math.max(0, k0)), a = pts[0], z = pts.at(-1);
+  const t = p => Date.parse(p.date + "T12:00:00") / 1000;
+  const ret = k => isNum(z[k]) && isNum(a[k]) && a[k] ? (z[k] / a[k] - 1) * 100 : null;
+  const flows = pts.slice(1).reduce((s, p) => s + p.flow, 0), gain = z.value - a.value - flows;
+  const series = [["twr", "Portafoglio", "--ink"], ["qqq", D.bench?.qqq || "QQQ in euro", "--series-1"], ["world", D.bench?.world || "VWCE", "--series-2"]].filter(([k]) => pts.some(p => isNum(p[k])));
+  const pc = v => `<span class="${sign(v)}">${fPct(v, 1)}</span>`;
+  const fl = D.flows.filter(f => f.date > a.date && f.date <= z.date);
+  el.innerHTML = head + `
+    ${D.short ? `<p class="warn-box">Lo storico ha ${all.length} ${all.length === 1 ? "giorno" : "giorni"} (dal ${dayIT(all[0].date)}): è ancora troppo corto per trarre conclusioni. Sotto i 3 mesi le differenze con i riferimenti possono essere solo caso.</p>` : ""}
+    <h4 class="bt-h">Valore nel tempo (€) <span class="muted" style="text-transform:none;letter-spacing:0">▲ soldi aggiunti · ▼ soldi tolti</span></h4><div id="pfPerfVal" class="chart"></div>
+    <h4 class="bt-h">Rendimento dall'inizio del periodo (%)</h4>
+    <div class="series-key">${series.map(([, l, c]) => `<span><i style="background:var(${c})"></i>${esc(l)}</span>`).join("")}</div><div id="pfPerfRet" class="chart"></div>
+    <div class="table-wrap"><table class="scr"><thead><tr><th class="l">Dal ${dayIT(a.date)} al ${dayIT(z.date)}</th>${series.map(([, l]) => `<th>${esc(l)}</th>`).join("")}<th>Guadagno in euro</th><th>Soldi aggiunti (netti)</th></tr></thead>
+      <tbody><tr><td class="l"><b>Rendimento</b> <span class="muted small">ponderato per il tempo</span></td>${series.map(([k]) => `<td><b>${pc(ret(k))}</b></td>`).join("")}
+        <td><span class="${sign(gain)}">${fEurS(gain, 0)}</span></td><td>${fEurS(flows, 0)}</td></tr></tbody></table></div>
+    <p class="small"><span class="muted">Movimenti nel periodo:</span> ${fl.length ? fl.map(f => `${dayShort(f.date)} ${f.bought ? `acquisti +${fEur(f.bought, 0)}` : ""}${f.bought && f.sold ? ", " : ""}${f.sold ? `vendite −${fEur(f.sold, 0)}${f.estimated ? " (stimato)" : ""}` : ""}`).join(" · ") : "nessuno"}</p>
+    <details class="fold"><summary><span class="small">Limiti di questo calcolo</span></summary><ul class="why bt-lim">${D.limits.map(l => `<li><b>${esc(l.title)}.</b> ${esc(l.text)}</li>`).join("")}</ul>
+      <p class="muted small">${pts.filter(p => p.rebuilt).length} giorni ricostruiti nel periodo. Dati salvati in <code>portafoglio/storico/</code>, solo su questo Mac; i giorni passati non vengono mai modificati.</p></details>`;
+  const tipDay = i => `<div class="tip-h">${dayIT(pts[i].date)}${pts[i].rebuilt ? " · ricostruito" : ""}</div>`;
+  const ch = lineChart($("#pfPerfVal"), [{ pts: pts.map(p => ({ t: t(p), v: p.value })), color: css("--ink"), width: 1.8 }], {
+    height: 200, range: pts.length > 120 ? "1Y" : "1M", yFmt: v => fNum(v, 0), label: "Valore del portafoglio in euro",
+    tip: i => `${tipDay(i)}<div class="tip-row"><span>Valore</span><b class="num">${fEur(pts[i].value, 0)}</b></div>${pts[i].flow ? `<div class="tip-row"><span>${pts[i].flow > 0 ? "Soldi aggiunti" : "Soldi tolti"}</span><b class="num">${fEurS(pts[i].flow, 0)}</b></div>` : ""}`,
+  });
+  if (ch?.x) d3.select("#pfPerfVal svg").append("g").attr("transform", `translate(${ch.m.l},0)`).selectAll("text").data(pts.map((p, i) => ({ p, i })).filter(d => d.p.flow)).join("text")
+    .attr("class", "perf-flow").attr("x", d => ch.x(d.i)).attr("y", 11).attr("text-anchor", "middle").attr("fill", d => css(d.p.flow > 0 ? "--up" : "--down")).text(d => d.p.flow > 0 ? "▲" : "▼");
+  lineChart($("#pfPerfRet"), series.map(([k, , c]) => ({ pts: pts.map(p => ({ t: t(p), v: isNum(p[k]) && a[k] ? (p[k] / a[k] - 1) * 100 : null })), color: css(c), width: k === "twr" ? 2 : 1.5 })), {
+    height: 200, range: pts.length > 120 ? "1Y" : "1M", baseline: 0, area: false, yFmt: v => fNum(v, 1) + "%", label: "Rendimento del portafoglio e dei riferimenti",
+    tip: i => tipDay(i) + series.map(([k, l, c]) => `<div class="tip-row"><span><i class="swatch" style="background:var(${c})"></i>${esc(l)}</span><b class="num">${isNum(pts[i][k]) && a[k] ? fPct((pts[i][k] / a[k] - 1) * 100, 1) : "—"}</b></div>`).join(""),
+  });
+}
+document.addEventListener("click", e => { const b = e.target.closest("[data-perf]"); if (b) { perf.range = b.dataset.perf; LS.set("pfPerfRange", perf.range); renderPerf(); } });
 // ---- risk of the portfolio (risk.py): estimates on the last 2 years with today's weights, limits always shown
 const RISK_INFO = {
   all: `Quanto può oscillare il portafoglio <b>com'è oggi</b>. I numeri sono stime sugli ultimi 2 anni, calcolate come se avessi sempre avuto i pesi di oggi,

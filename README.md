@@ -55,6 +55,19 @@ Oppure dal Terminale:
   posizioni con meno di 6 mesi di prezzi o con prezzi storici anomali (salti di un giorno oltre +150% / −75%). Limiti
   scritti nella sezione: due anni sono pochi, pesi di oggi nel passato, scenario lineare, stime e non previsioni.
   I prezzi si scaricano una volta al giorno e restano in memoria.
+- **Storico e performance** (scheda Portafoglio): ogni giorno, a ogni aggiornamento dei prezzi, la dashboard salva in
+  `portafoglio/storico/AAAA-MM-GG.json` valore, costo, cambio e posizioni (solo su questo Mac; i giorni passati non si
+  modificano e non si cancellano; i giorni con la dashboard spenta sono ricostruiti con le ultime quantità e le
+  chiusure di quei giorni, e segnati come tali). Riquadro **Performance**: grafico del valore in euro con ▲▼ nei giorni
+  di acquisti e vendite, e rendimento confrontato con **QQQ in euro** e **VWCE** (Vanguard FTSE All-World, Xetra),
+  per 1 mese, 3 mesi, da inizio anno o tutto. Il rendimento è **ponderato per il tempo**: ogni giorno si calcola solo
+  sui soldi che c'erano già (valore di fine giornata meno i soldi aggiunti, diviso il valore del giorno prima) e i
+  giorni si concatenano, così versamenti e prelievi non contano come guadagni o perdite. I movimenti si ricavano dal
+  confronto tra il nuovo file Fineco e il precedente (`portafoglio/storico/flussi.json`): acquisti = aumento del
+  "Valore di carico" (esatto), vendite = quantità × prezzo di mercato (stimato). Limiti: i movimenti hanno la data
+  di caricamento del file, non ci sono liquidità né dividendi incassati, sotto i 3 mesi lo storico è troppo corto per
+  trarre conclusioni. Lo storico parte dal 2 ottobre 2026; dal solo file attuale il passato non si può ricostruire
+  (mancano date e prezzi dei singoli acquisti).
 - **Portafoglio**: le mie posizioni reali, dall'export Excel di Fineco ("Portafoglio sintesi") messo nella cartella
   `portafoglio/` (la dashboard legge da sola il file più recente). Il file si carica dalla scheda con il pulsante
   **Carica file Fineco** o trascinandolo sulla pagina: prima compare un'anteprima (posizioni nuove, vendute, con
@@ -265,6 +278,7 @@ residuo (favorisce i pattern di forza), test multipli, casi sovrapposti, nessun 
 | `analysts.py` | Dati degli analisti e valutazione (scaricati una volta al giorno) |
 | `score.py` | Segnale finale (analisti + valutazione + notizie) e Trend a parte |
 | `backtest.py` | Backtest del Trend e, con `--patterns`, test dei pattern tecnici (a mano) |
+| `history.py` | Storico giornaliero del portafoglio e rendimento ponderato per il tempo contro QQQ e VWCE |
 | `risk.py` | Rischio del portafoglio: volatilità, beta, scenario, massima perdita, contributo al rischio, correlazione |
 | `rules.py` | Le mie regole di investimento (limiti) e il controllo sul portafoglio |
 | `technical.py` | Numeri della sezione Analisi tecnica nella scheda del titolo (ATR, livelli, pattern, settore e tema) |

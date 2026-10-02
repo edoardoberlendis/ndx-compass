@@ -50,6 +50,7 @@ COUNTRY_IT = {"United States": "USA", "Israel": "Israele", "Italy": "Italia", "N
               "Sweden": "Svezia", "Spain": "Spagna", "Belgium": "Belgio", "Australia": "Australia", "Bermuda": "Bermuda"}
 LOOK_THROUGH_NDX = "come il Nasdaq-100"     # ETF sector split like the index (sector weights from the dashboard)
 
+on_quotes = None            # set by the server: called after every price refresh (saves the day's picture, history.py)
 _lock = threading.Lock()
 _meta = {}      # Yahoo ticker -> {"sector", "country"} of stocks outside the Nasdaq-100 (memory only)
 _state = {"path": None, "mtime": None, "positions": [], "error": None, "resolving": False,
@@ -370,6 +371,8 @@ def refresh_quotes():
         _state["quotes"] = quotes
         _state["fx"] = quotes.get(FX, {}).get("price")
         _state["quotesAt"] = time.time()
+    if on_quotes:
+        on_quotes()
 
 
 # ---------------------------------------------------------------- values for the page
