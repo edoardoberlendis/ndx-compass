@@ -702,3 +702,15 @@ table.pf tr.lev td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn.primary:hover { filter: brightness(1.08); background: var(--accent); }
+/* ------------------------------------------------ portfolio: my rules */
+.pf-rules { border-left: 4px solid var(--up); }
+.pf-rules.near { border-left-color: var(--warn); }
+.pf-rules.over { border-left-color: var(--down); }
+.pf-rules-head { font-size: 14px; margin-bottom: 4px; }
+.pf-rules-list { list-style: none; margin: 6px 0; padding: 0; line-height: 1.8; font-variant-numeric: tabular-nums; }
+.rules-form label { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--grid); }
+.rules-in { white-space: nowrap; color: var(--ink-2); }
+.rules-in input { width: 68px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--ink); font: inherit; font-variant-numeric: tabular-nums; text-align: right; }
+.rules-in .small { display: inline-block; width: 86px; text-align: right; }
+.rules-etf { display: flex; padding: 4px 0; }
+@media (max-width: 560px) { .rules-form label { grid-template-columns: 1fr; gap: 4px; } }

@@ -1069,9 +1069,26 @@ def api_watchlist():
 @app.route("/api/portfolio")
 def api_portfolio():
     """My positions from the newest export in portafoglio/ (personal data: served only to this Mac, never cached)."""
+    import rules  # local import: keeps the personal-data modules together
     with store.lock:
         snap, infos = store.snapshot, dict(store.infos)
-    return app.response_class(json.dumps(portfolio.snapshot(snap, infos), default=clean), mimetype="application/json")
+    pf = portfolio.snapshot(snap, infos)
+    pf["rules"] = rules.evaluate(pf)          # my limits and whether the portfolio respects them
+    return app.response_class(json.dumps(pf, default=clean), mimetype="application/json")
+
+
+@app.route("/api/rules", methods=["POST"])
+def api_rules():
+    """Save my investment rules in portafoglio/regole.json (only from the dashboard open on this Mac)."""
+    import rules
+    if not local_request():
+        return jsonify(error="Le regole si modificano solo dalla dashboard aperta su questo Mac."), 403
+    body = request.get_json(silent=True) or {}
+    try:
+        rules.save(body.get("limits"), body.get("broad"))
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(ok=True)
 
 
 def local_request():

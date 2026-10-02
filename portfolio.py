@@ -285,9 +285,14 @@ def _themes_by_ticker():
     return out
 
 
+def is_fund(kind):
+    """ETF, ETC, ETN and anything Fineco does not call a share ("Azione")."""
+    return kind.upper() in ("ETF", "ETC", "ETN") or not kind.lower().startswith("azion")
+
+
 def classify(p, cls, themes, ndx_rows, ndx_sectors, infos):
     """leverage + {sector|theme|country: {label: share}} for one position (shares add up to 1)."""
-    if p["kind"].upper() in ("ETF", "ETC", "ETN") or not p["kind"].lower().startswith("azion"):
+    if is_fund(p["kind"]):
         c = cls.get(p["isin"])
         if not c:
             m = re.search(r"\b(\d+)x\b", p["name"], re.I)

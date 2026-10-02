@@ -34,6 +34,16 @@ Oppure dal Terminale:
   BEA vengono riletti per aggiungere le date nuove, con un avviso se il controllo non riesce o se l'elenco sta per finire.
 - **I miei titoli**: i preferiti (★) con prezzo, variazioni, posizione rispetto alle medie, valutazione, analisti, segnale,
   prossima trimestrale e ultima notizia. Salvati in `watchlist.json` nella cartella del progetto.
+- **Le mie regole** (in cima alla scheda Portafoglio): pochi limiti, come il mandato di una banca privata. Riquadro
+  **Rispetto delle regole**: verde se tutto è nei limiti, altrimenti l'elenco dei limiti superati con valore, limite e
+  di quanto (per esempio "Prodotti a leva: 28,8% dell'esposizione effettiva, limite 15% (+13,8 punti)"), in giallo quelli
+  vicini al limite. Limiti: singolo titolo, singolo ETF ampio, altro ETF/ETC (quota del valore); tema, settore, paese
+  (quota dell'esposizione effettiva, dove un prodotto a leva 3x conta 3 volte); prodotti a leva (sul valore e
+  sull'esposizione effettiva); rischio massimo per singola operazione (usato per il numero di azioni nell'Analisi
+  tecnica, insieme al limite per singolo titolo). **Modifica regole** apre la pagina con i campi, i valori proposti
+  (10 / 35 / 15 / 25 / 50 / 80 / 5 / 15 / 1%, avviso dal 90% del limite) e la spunta "ampio" per i miei ETF. Si salvano
+  in `portafoglio/regole.json` (fuori da Git, solo da questo Mac); finché non salvo valgono i valori proposti, indicati
+  come "non ancora confermati". Superare un limite non è un ordine di vendita: è un punto da guardare.
 - **Portafoglio**: le mie posizioni reali, dall'export Excel di Fineco ("Portafoglio sintesi") messo nella cartella
   `portafoglio/` (la dashboard legge da sola il file più recente). Il file si carica dalla scheda con il pulsante
   **Carica file Fineco** o trascinandolo sulla pagina: prima compare un'anteprima (posizioni nuove, vendute, con
@@ -87,9 +97,10 @@ Oppure dal Terminale:
     **livelli di attesa**. Piano di rischio: entrata al prezzo attuale; stop sotto la media 50 o sotto l'ultimo minimo
     (20 sedute), meno mezzo ATR, scegliendo il più vicino tra 1,5 e 3,5 ATR, altrimenti 2 × ATR (le altre opzioni si
     possono cliccare); target convenzionale a 2 volte il rischio, con avviso se prima c'è il massimo a 52 settimane;
-    numero di azioni per rischiare al massimo una percentuale del portafoglio (default 1%) senza superare un massimo
-    per posizione (default 20%), con il valore in euro dalla scheda Portafoglio e il cambio EUR/USD (se il portafoglio
-    non è caricato si inserisce il capitale a mano; percentuali e capitale restano solo nel browser). Livelli di
+    numero di azioni per rischiare al massimo una percentuale del portafoglio senza superare un massimo
+    per posizione, entrambi presi dalle mie regole (rischio per operazione e limite per singolo titolo), con il valore
+    in euro dalla scheda Portafoglio e il cambio EUR/USD (se il portafoglio non è caricato si inserisce il capitale a
+    mano, che resta solo nel browser). Livelli di
     attesa: se il prezzo è entro il 5% sotto il massimo a 52 settimane o dentro una fase laterale (30 sedute, ampiezza
     ≤ 12%), ordine condizionato sopra la resistenza + un quarto di ATR, stop un ATR sotto il livello rotto, sempre con
     la scritta "pattern non verificato" e i numeri del test. I livelli servono a decidere il rischio in anticipo, non a
@@ -243,6 +254,7 @@ residuo (favorisce i pattern di forza), test multipli, casi sovrapposti, nessun 
 | `analysts.py` | Dati degli analisti e valutazione (scaricati una volta al giorno) |
 | `score.py` | Segnale finale (analisti + valutazione + notizie) e Trend a parte |
 | `backtest.py` | Backtest del Trend e, con `--patterns`, test dei pattern tecnici (a mano) |
+| `rules.py` | Le mie regole di investimento (limiti) e il controllo sul portafoglio |
 | `technical.py` | Numeri della sezione Analisi tecnica nella scheda del titolo (ATR, livelli, pattern, settore e tema) |
 | `portfolio.py` | Portafoglio: lettura dell'export Fineco, ticker Yahoo, valori in euro |
 | `macro_calendar.py` | Eventi macro USA: date ufficiali, controllo automatico, valori BLS (da aggiornare ogni anno per CPI e occupazione) |

@@ -752,7 +752,7 @@ $("#macro").addEventListener("click", e => { const b = e.target.closest("[data-m
 function openMacro(e) {
   if (!e) return;
   const M = MACRO[e.kind], w = macroWhen(e), v = e.values, R = e.relevance;
-  state.detail = null; state.macro = e;
+  state.detail = null; state.panel = null; state.macro = e;
   const tk = t => quoteFor(t) ? `<button class="pt-tk ${state.watch.has(t) ? "mine" : ""}" data-mopen="${esc(t)}">${esc(t)}</button>` : `<span class="pt-tk off">${esc(t)}</span>`;
   const values = e.kind === "cpi" || e.kind === "jobs"
     ? (v ? `<div class="d-stats one"><div><span>${v.released ? "<b>Uscito</b>" : "Ultimo dato disponibile"} · ${esc(monthIT(v.period))}</span><span>${macroFigures(e.kind, v)}</span></div>
@@ -936,6 +936,7 @@ function renderPortfolio() {
   const D = pf.data;
   const empty = !D || !D.file || D.error;
   $("#pfEmpty").hidden = !empty; $("#pfBody").hidden = empty;
+  renderRules();
   if (empty) {
     $("#pfEmpty").innerHTML = D?.error ? esc(D.error)
       : `Nessun file del portafoglio. Esporta le posizioni da Fineco in Excel (.xls) e caricale con il pulsante <b>Carica file Fineco</b> qui sopra, oppure trascina il file su questa pagina.`;
@@ -996,6 +997,77 @@ function renderConcentration() {
   };
   $("#pfConcNote").innerHTML = `${notes[pf.dim]} Barra chiara = valore investito, barra scura = esposizione effettiva.`;
 }
+// ---- my investment rules (rules.py, portafoglio/regole.json): the box on top of the tab and the page to edit them.
+// Every line shows the measured value and the limit that produced it. Texts are fixed, numbers come from the server.
+const RULE_FIELDS = [
+  ["stock", "Singolo titolo", "% del valore", "Se un titolo a questo peso dimezza, perdi metà di questa quota del portafoglio. Il 10% è anche il tetto usato dai fondi europei per una singola società."],
+  ["etfBroad", "Singolo ETF ampio", "% del valore", "Un ETF ampio (Nasdaq-100, mondo…) è già diversificato, ma oltre circa un terzo su un solo indice vuol dire dipendere da quell'indice."],
+  ["etfOther", "Altro ETF o ETC (tematico, di settore, materie prime)", "% del valore", "È meno diversificato di un ETF ampio e più di un singolo titolo: il limite sta in mezzo."],
+  ["theme", "Singolo tema", "% dell'esposizione effettiva", "I titoli di uno stesso tema si muovono in blocco (per esempio i chip per l'AI): troppo peso su una sola storia è una scommessa unica."],
+  ["sector", "Singolo settore", "% dell'esposizione effettiva", "Il Nasdaq-100 è già per più di metà tecnologia: il limite segnala quando vai oltre l'indice."],
+  ["country", "Singolo paese", "% dell'esposizione effettiva", "Gli USA pesano circa due terzi delle borse mondiali: il limite lascia spazio a questa preferenza senza arrivare al 100%."],
+  ["levValue", "Prodotti a leva, sul valore", "% del valore", "Un prodotto a leva può perdere gran parte del valore in pochi giorni: deve restare una quota che puoi permetterti di vedere quasi azzerata."],
+  ["levExposure", "Prodotti a leva, sull'esposizione effettiva", "% dell'esposizione effettiva", "L'esposizione effettiva conta 3 volte un prodotto a leva 3x: dice quanto del tuo rischio di mercato passa da questi prodotti."],
+  ["tradeRisk", "Rischio massimo per singola operazione", "% del portafoglio", "Quanto perdi al massimo se scatta lo stop di un'operazione. Con l'1%, dieci stop di fila costano circa il 10%. È usato per calcolare quante azioni comprare nella scheda del titolo."],
+  ["near", "Avviso «vicino al limite»", "% del limite", "Da quale quota del limite compare l'avviso giallo, prima di superarlo."],
+];
+const RULES_INFO = `Pochi limiti, come il mandato di una banca privata, controllati ogni volta che si apre o si aggiorna questa scheda.<br><br>
+  <b>Titoli ed ETF</b>: quota del valore in euro. <b>Tema, settore e paese</b>: quota dell'esposizione effettiva (un prodotto a leva 3x conta 3 volte),
+  come nella tabella di concentrazione qui sotto. <b>Prodotti a leva</b>: giudicati solo dai due limiti sulla leva.<br><br>
+  Sono regole che ti dai tu per disciplina: superarne una non significa dover vendere, ma è un punto da guardare.`;
+const fP1 = v => fNum(v, 1) + "%";
+const ruleLimit = v => fNum(v, v % 1 ? 1 : 0) + "%";
+function renderRules() {
+  const R = pf.data?.rules, el = $("#pfRules");
+  if (!R || !R.checks.length) { el.hidden = true; return; }
+  el.hidden = false;
+  const icon = { over: "🔴", near: "🟡", ok: "🟢" };
+  const line = c => `<li class="${c.status}">${icon[c.status]} <b>${esc(c.label)}</b>: ${fP1(c.value)} ${c.basis}, limite ${ruleLimit(c.limit)}${c.status === "over" ? ` <span class="down">(+${fNum(c.excess, 1)} punti)</span>` : ""}</li>`;
+  const bad = R.checks.filter(c => c.status !== "ok"), good = R.checks.filter(c => c.status === "ok");
+  const head = !R.over && !R.near ? `🟢 <b>Tutto nei limiti</b> (${R.ok} controlli)`
+    : `${R.over ? `🔴 <b>${R.over} ${R.over === 1 ? "limite superato" : "limiti superati"}</b> · ` : ""}${R.near ? `🟡 ${R.near} ${R.near === 1 ? "vicino al limite" : "vicini al limite"} · ` : ""}${R.ok} ${R.ok === 1 ? "controllo" : "controlli"} nei limiti`;
+  el.className = `card pf-rules ${R.over ? "over" : R.near ? "near" : "ok"}`;
+  el.innerHTML = `<div class="card-h"><h2>Rispetto delle regole ${info(RULES_INFO)}</h2><button class="btn" data-rules-open>Modifica regole</button></div>
+    <div class="pf-rules-head">${head}</div>
+    ${R.confirmed ? "" : `<div class="muted small">Regole proposte, non ancora confermate da te: aprile con «Modifica regole» e salva i valori che preferisci.</div>`}
+    ${bad.length ? `<ul class="pf-rules-list">${bad.map(line).join("")}</ul>` : ""}
+    ${good.length ? `<details class="fold"><summary><span class="small">Mostra tutti i controlli</span></summary><ul class="pf-rules-list">${good.map(line).join("")}</ul></details>` : ""}`;
+}
+// "Le mie regole": the page to edit the limits, in the side panel (saved in portafoglio/regole.json on this Mac)
+async function openRules() {
+  if (!pf.data) { try { pf.data = await getJSON("/api/portfolio"); } catch { return; } }
+  const R = pf.data.rules;
+  if (!R) return;
+  state.detail = null; state.macro = null; state.panel = "rules";
+  drawer.classList.remove("full");
+  drawer.innerHTML = `<div class="d-top"><div class="d-head"><div><div class="tt">Le mie regole</div><div class="nm">limiti del portafoglio · salvati in portafoglio/regole.json, solo su questo Mac</div></div>
+      <div class="actions"><button class="icon-btn close-btn" id="dClose" aria-label="Chiudi">×</button></div></div></div>
+    <div class="d-rest rules-d">
+      ${R.confirmed ? "" : `<p class="warn-box">Questi sono i valori di partenza proposti. Diventano le tue regole quando premi <b>Salva</b>.</p>`}
+      <div class="rules-form">${RULE_FIELDS.map(([k, label, unit, why]) => `<label><span>${label} ${info(why)}</span>
+        <span class="rules-in"><input type="number" data-rule="${k}" step="${k === "tradeRisk" ? 0.1 : 1}" min="${k === "tradeRisk" ? 0.1 : k === "near" ? 50 : 1}" max="${k === "tradeRisk" ? 10 : 100}" value="${R.limits[k]}"> ${unit}
+        <span class="muted small">proposto ${ruleLimit(R.defaults[k])}</span></span></label>`).join("")}</div>
+      ${R.etfs.length ? `<div class="d-sec"><h3>Quali dei tuoi ETF sono «ampi» ${info("Un ETF ampio segue un indice largo e diversificato, per esempio il Nasdaq-100, l'S&P 500 o un indice mondiale. Quelli tematici, di settore o su materie prime non lo sono: per loro vale il limite più basso.")}</h3>
+        ${R.etfs.map(e => `<label class="check rules-etf"><input type="checkbox" data-broad="${esc(e.isin)}" ${e.broad ? "checked" : ""}> ${esc(e.name)} <span class="muted small">${esc(e.isin)}</span></label>`).join("")}</div>` : ""}
+      <div class="toolbar" style="margin-top:16px"><button class="btn primary" id="rulesSave">Salva</button><button class="btn" id="rulesReset">Ripristina i valori proposti</button><span id="rulesMsg" class="small"></span></div>
+      <p class="disclaimer">Le regole servono a darti disciplina, non sono un consiglio su come investire. Non è una consulenza finanziaria.</p></div>`;
+  drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); scrim.hidden = false;
+  $("#dClose").onclick = closeDetail;
+  $("#rulesReset").onclick = () => { drawer.querySelectorAll("[data-rule]").forEach(i => { i.value = R.defaults[i.dataset.rule]; }); $("#rulesMsg").textContent = "Valori proposti rimessi nei campi: premi Salva per confermarli."; };
+  $("#rulesSave").onclick = async () => {
+    const limits = {};
+    drawer.querySelectorAll("[data-rule]").forEach(i => { limits[i.dataset.rule] = parseFloat(i.value.replace(",", ".")); });
+    const broad = [...drawer.querySelectorAll("[data-broad]:checked")].map(i => i.dataset.broad);
+    const wrong = RULE_FIELDS.find(([k]) => !isNum(limits[k]) || limits[k] < (k === "tradeRisk" ? 0.1 : k === "near" ? 50 : 1) || limits[k] > (k === "tradeRisk" ? 10 : 100));
+    if (wrong) { $("#rulesMsg").innerHTML = `<span class="down">Controlla «${wrong[1]}»: serve un numero tra ${wrong[0] === "tradeRisk" ? "0,1 e 10" : wrong[0] === "near" ? "50 e 100" : "1 e 100"}.</span>`; return; }
+    try {
+      await pfPost("/api/rules", { body: JSON.stringify({ limits, broad }), headers: { "Content-Type": "application/json" } });
+      await loadPortfolio();
+      closeDetail();
+    } catch (e) { $("#rulesMsg").innerHTML = `<span class="down">Non salvato: ${esc(e.message)}</span>`; }
+  };
+}
+document.addEventListener("click", e => { if (e.target.closest("[data-rules-open]")) { if (state.detail) closeDetail(); openRules(); } });
 // ---- upload of a Fineco export: preview first (new, sold, changed positions), saved only after confirmation.
 // The file goes only to the server on this Mac (portafoglio/, outside Git); older files stay there.
 const pfUp = { busy: false };
@@ -1284,7 +1356,7 @@ let dFull = LS.get("dFull", false);
 let dNews = [];   // headlines of the open stock (from /api/stock)   // detail as side panel (false) or full screen (true), remembered
 
 function openDetail(t) {
-  state.detail = t; state.macro = null; dInfo = null; dDaily = null; dRange = "1D";
+  state.detail = t; state.macro = null; state.panel = null; dInfo = null; dDaily = null; dRange = "1D";
   drawer.innerHTML = `<div class="d-top"></div><div class="d-sum"></div><div class="d-ctrl"></div><div id="dChart" class="chart"></div><div id="dVol" class="chart"></div><div class="d-rest"><div class="loading" style="padding:40px"><div class="spinner"></div></div></div>`;
   drawer.classList.add("open"); drawer.classList.toggle("full", dFull); drawer.setAttribute("aria-hidden", "false"); scrim.hidden = false;
   renderDetailHeader();
@@ -1293,7 +1365,7 @@ function openDetail(t) {
   loadDetailInfo();
 }
 function closeDetail() {
-  state.detail = null; state.macro = null; drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); scrim.hidden = true; hideTip();
+  state.detail = null; state.macro = null; state.panel = null; drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); scrim.hidden = true; hideTip();
 }
 scrim.addEventListener("click", closeDetail);
 
@@ -1454,7 +1526,6 @@ const TA_ATR = { stopMa: 0.5, stopAtr: 2, okMin: 1.5, okMax: 3.5, entry: 0.25, s
 const TA_NEAR = 5, TA_RANGE = 12;      // resistance "near": within 5% below the 52-week high; sideways phase: at most 12% wide
 const dTA = { t: null, ta: null, fx: null, trend: "", sel: {} };
 const fUsd = v => isNum(v) ? fNum(v, 2) + " $" : "—";
-const taNum = (k, d) => { const v = +LS.get(k, d); return isNum(v) && v > 0 ? v : d; };
 const TA_INFO = `Una lettura tecnica del titolo in cinque parti. Solo il <b>verdetto</b> si basa su pattern che hanno superato il test
   della scheda Pattern tecnici; tutto il resto descrive la situazione e aiuta a decidere <b>quanto rischiare</b>, non dice se il prezzo salirà.`;
 const TA_PLAN_INFO = `Questi livelli servono a <b>decidere in anticipo quanto rischi</b>, non a prevedere il prezzo.<br><br>
@@ -1462,7 +1533,7 @@ const TA_PLAN_INFO = `Questi livelli servono a <b>decidere in anticipo quanto ri
   <b>ATR</b>: di quanto si muove in media il titolo in un giorno (ultime 14 sedute).<br>
   <b>Target</b>: convenzionale, a 2 volte il rischio. Non è una previsione.<br>
   <b>Quante azioni</b>: il numero con cui, se scatta lo stop, perdi al massimo la percentuale del portafoglio che hai scelto,
-  senza superare il massimo per posizione. Lo stop non garantisce il prezzo di uscita: con un'apertura in forte ribasso la perdita può essere maggiore.`;
+  senza superare il tuo limite per singolo titolo. Le due percentuali vengono dalle tue regole (scheda Portafoglio → Modifica regole). Lo stop non garantisce il prezzo di uscita: con un'apertura in forte ribasso la perdita può essere maggiore.`;
 const TA_WAIT_INFO = `Un ordine condizionato compra solo se il prezzo supera un livello. Qui il livello è la resistenza più un
   <b>margine di un quarto di ATR</b> (l'ATR è il movimento medio di un giorno): serve a non far scattare l'ordine per un superamento di pochi centesimi.<br><br>
   Lo stop è un ATR sotto il livello rotto: se il prezzo torna sotto, la rottura è fallita.`;
@@ -1505,7 +1576,7 @@ function taPlanHTML(id, entry, entryNote, L, money, breakLevel) {
   const size = !z ? `<span class="muted">inserisci il capitale qui sopra</span>`
     : !z.n ? `<b>0</b> <span class="muted">con questo capitale e questo rischio non si arriva a un'azione intera</span>`
     : `<b>${fNum(z.n, 0)}</b> <span class="muted">valore ${fUsd(z.value)} ≈ ${fEur(z.valueEur, 0)}, ${fNum(z.pct, 1)}% del portafoglio</span>
-      ${z.capped ? `<div class="ta-note">Limitate dal massimo per posizione del ${fNum(money.max, 0)}%: con il solo rischio dell'${fNum(money.risk, 1)}% sarebbero ${fNum(z.byRisk, 0)}, cioè il ${fNum(z.byRiskPct, 0)}% del portafoglio.</div>` : ""}
+      ${z.capped ? `<div class="ta-note">Limitate dal mio limite per singolo titolo (${ruleLimit(money.max)}): con il solo rischio per operazione (${ruleLimit(money.risk)}) sarebbero ${fNum(z.byRisk, 0)}, cioè il ${fNum(z.byRiskPct, 0)}% del portafoglio.</div>` : ""}
       <div class="ta-note">Se scatta lo stop perdi circa ${fUsd(z.loss)} ≈ ${fEur(z.lossEur, 0)} (${fNum(z.lossPct, 1)}% del portafoglio).</div>`;
   return `<div class="ta-plan">
     <div><span>${isNum(breakLevel) ? "Livello di rottura" : "Entrata"}</span><div><b>${fUsd(entry)}</b> <span class="muted">${entryNote}</span></div></div>
@@ -1587,7 +1658,8 @@ function renderTA() {
   const pfOk = pf.data && pf.data.file && !pf.data.error && pf.data.totals?.value > 0;
   const fx = (pfOk && pf.data.fx) || dTA.fx;
   const manual = +LS.get("taCapital", 0) || null;
-  const money = { cap: pfOk ? pf.data.totals.value : manual, fx, risk: taNum("taRisk", 1), max: taNum("taMax", 20) };
+  const lim = pf.data?.rules?.limits || { tradeRisk: 1, stock: 10 };       // my rules (rules.py); the proposed values until they load
+  const money = { cap: pfOk ? pf.data.totals.value : manual, fx, risk: lim.tradeRisk, max: lim.stock };
   const price = s.price, waits = taWaiting(ta, price);
   const capLine = pfOk ? `Portafoglio: <b>${fEur(money.cap, 0)}</b> dalla scheda Portafoglio`
     : `Portafoglio non caricato: capitale <input type="number" id="taCapital" min="0" step="100" value="${manual || ""}" placeholder="es. 20000"> €`;
@@ -1596,8 +1668,8 @@ function renderTA() {
     <div class="ta-part"><h4>2 · Medie e trend</h4>${dTA.trend}</div>
     <div class="ta-part"><h4>3 · Settore e tema</h4>${taGroups(t, ta)}</div>
     <div class="ta-part"><h4>4 · Piano di rischio ${info(TA_PLAN_INFO)}</h4>
-      <div class="ta-money"><label>Rischio massimo <input type="number" id="taRisk" min="0.1" max="10" step="0.1" value="${money.risk}"> % del portafoglio</label>
-        <label>Massimo per posizione <input type="number" id="taMax" min="1" max="100" step="1" value="${money.max}"> %</label>
+      <div class="ta-money"><span>Dalle mie regole: rischio massimo per operazione <b>${ruleLimit(money.risk)}</b> del portafoglio · massimo per singolo titolo <b>${ruleLimit(money.max)}</b>
+          <button class="link-btn" data-rules-open>modifica nelle mie regole</button></span>
         <span>${capLine}${isNum(fx) ? ` · cambio EUR/USD ${fNum(fx, 4)}` : " · cambio EUR/USD non disponibile"}</span></div>
       <p class="muted small">Se comprassi adesso. ATR = ${fUsd(ta.atr)} (${fNum(ta.atr / price * 100, 1)}% del prezzo): quanto si muove in media il titolo in un giorno.</p>
       ${taPlanHTML("now", price, "prezzo attuale", ta, money)}</div>
@@ -1621,9 +1693,9 @@ drawer.addEventListener("click", e => {
   if (m) openDetail(m.dataset.mopen);
 });
 drawer.addEventListener("change", e => {
-  if (!["taRisk", "taMax", "taCapital"].includes(e.target.id)) return;
+  if (e.target.id !== "taCapital") return;
   const v = parseFloat(e.target.value);
-  LS.set(e.target.id, isNum(v) && v > 0 ? v : e.target.id === "taRisk" ? 1 : e.target.id === "taMax" ? 20 : 0);
+  LS.set("taCapital", isNum(v) && v > 0 ? v : 0);
   e.target.blur();
   renderTA();
 });
@@ -2253,7 +2325,7 @@ qEl.addEventListener("blur", () => setTimeout(() => sugg.classList.remove("open"
 sugg.addEventListener("mousedown", e => { const b = e.target.closest("[data-t]"); if (b) { openDetail(b.dataset.t); qEl.value = ""; } });
 document.addEventListener("keydown", e => {
   if (e.key === "/" && document.activeElement.tagName !== "INPUT") { e.preventDefault(); qEl.focus(); }
-  if (e.key === "Escape" && (state.detail || state.macro)) closeDetail();
+  if (e.key === "Escape" && (state.detail || state.macro || state.panel)) closeDetail();
 });
 
 // ------------------------------------------------------------ views, theme, resize
