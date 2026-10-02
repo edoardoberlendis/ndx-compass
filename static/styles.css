@@ -758,3 +758,12 @@ table.pf tr.lev td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 .ta-tag.ok { background: var(--up-bg); color: var(--up); }
 .ta-tag.warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
 .ta-part input[type=number]#taCapital { width: 96px; }
+/* ------------------------------------------------ navigation: four tabs and their sub-tabs */
+.subtabs { flex-basis: 100%; display: flex; align-items: center; gap: 4px; padding: 6px 0 7px; border-top: 1px solid var(--border); flex-wrap: wrap; }
+.subtabs[hidden] { display: none; }
+.sub-ask { color: var(--muted); font-size: 12px; margin-right: 10px; }
+.subtab { border: 1px solid transparent; background: none; color: var(--ink-2); font: inherit; font-size: 12.5px; font-weight: 550; padding: 3px 10px; border-radius: 999px; cursor: pointer; }
+.subtab:hover { color: var(--ink); }
+.subtab.active { background: var(--surface-2); border-color: var(--border); color: var(--ink); }
+#view-rules .rules-d { max-width: 760px; }
+.tabs { flex-wrap: wrap; }

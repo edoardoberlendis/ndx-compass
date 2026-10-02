@@ -11,7 +11,7 @@ const LS = {
 const state = {
   snap: null,
   bySym: new Map(),
-  view: LS.get("view", "overview") === "map" ? "sectors" : LS.get("view", "overview"),   // Mappa is now part of Settori
+  view: "portfolio",      // the tab opened at start (a link like #screener or #metodo overrides it, see boot)
   tf: LS.get("tf", "1D"),
   size: "mcap",   // map tiles sized by market cap
   cvd: false,
@@ -215,6 +215,7 @@ function renderAll() {
   if (state.view === "sectors") renderSectors();
   if (state.view === "ideas" || state.view === "trade") renderIdeas();
   if (state.view === "diary") loadDiary();
+  if (state.view === "rules") loadRulesPage();
   if (state.detail) { renderDetailHeader(); renderTA(); }
 }
 
@@ -567,7 +568,7 @@ const PRESETS = [
 // ⓘ text for every screener quick filter
 const PRESET_INFO = {
   all: "Tutti i titoli del Nasdaq-100, senza filtri.",
-  watch: "Solo i titoli che hai segnato con ★ (gli stessi della scheda I miei titoli).",
+  watch: "Solo i titoli che hai segnato con ★ (gli stessi di Ricerca → In osservazione).",
   gainers: "Titoli saliti più del 2% oggi rispetto alla chiusura precedente.",
   losers: "Titoli scesi più del 2% oggi rispetto alla chiusura precedente.",
   gapup: "Il titolo ha aperto oltre l'1,5% sopra la chiusura di ieri: di solito dopo una notizia uscita a mercato chiuso.",
@@ -1235,16 +1236,13 @@ function renderRules() {
     ${bad.length ? `<ul class="pf-rules-list">${bad.map(line).join("")}</ul>` : ""}
     ${good.length ? `<details class="fold"><summary><span class="small">Mostra tutti i controlli</span></summary><ul class="pf-rules-list">${good.map(line).join("")}</ul></details>` : ""}`;
 }
-// "Le mie regole": the page to edit the limits, in the side panel (saved in portafoglio/regole.json on this Mac)
-async function openRules() {
-  if (!pf.data) { try { pf.data = await getJSON("/api/portfolio"); } catch { return; } }
-  const R = pf.data.rules;
-  if (!R) return;
-  state.detail = null; state.macro = null; state.panel = "rules";
-  drawer.classList.remove("full");
-  drawer.innerHTML = `<div class="d-top"><div class="d-head"><div><div class="tt">Le mie regole</div><div class="nm">limiti del portafoglio · salvati in portafoglio/regole.json, solo su questo Mac</div></div>
-      <div class="actions"><button class="icon-btn close-btn" id="dClose" aria-label="Chiudi">×</button></div></div></div>
-    <div class="d-rest rules-d">
+// "Le mie regole": the page to edit the limits (Metodo → Le mie regole; saved in portafoglio/regole.json on this Mac)
+async function loadRulesPage() {
+  if (!pf.data) { try { pf.data = await getJSON("/api/portfolio"); } catch { $("#rulesBody").innerHTML = `<div class="empty">Regole non disponibili al momento.</div>`; return; } }
+  const el = $("#rulesBody"), R = pf.data.rules;
+  if (!R || el.contains(document.activeElement) && ["INPUT"].includes(document.activeElement.tagName)) return;   // typing: do not redraw
+  el.innerHTML = `<div class="card-h"><h2>Le mie regole ${info(RULES_INFO)}</h2><span class="card-meta">limiti del portafoglio · salvati in portafoglio/regole.json, solo su questo Mac</span></div>
+    <div class="rules-d">
       ${R.confirmed ? "" : `<p class="warn-box">Questi sono i valori di partenza proposti. Diventano le tue regole quando premi <b>Salva</b>.</p>`}
       <div class="rules-form">${RULE_FIELDS.map(([k, label, unit, why]) => `<label><span>${label} ${info(why)}</span>
         <span class="rules-in"><input type="number" data-rule="${k}" step="${k === "tradeRisk" ? 0.1 : 1}" min="${k === "tradeRisk" ? 0.1 : k === "near" ? 50 : 1}" max="${k === "tradeRisk" ? 10 : 100}" value="${R.limits[k]}"> ${unit}
@@ -1252,24 +1250,25 @@ async function openRules() {
       ${R.etfs.length ? `<div class="d-sec"><h3>Quali dei tuoi ETF sono «ampi» ${info("Un ETF ampio segue un indice largo e diversificato, per esempio il Nasdaq-100, l'S&P 500 o un indice mondiale. Quelli tematici, di settore o su materie prime non lo sono: per loro vale il limite più basso.")}</h3>
         ${R.etfs.map(e => `<label class="check rules-etf"><input type="checkbox" data-broad="${esc(e.isin)}" ${e.broad ? "checked" : ""}> ${esc(e.name)} <span class="muted small">${esc(e.isin)}</span></label>`).join("")}</div>` : ""}
       <div class="toolbar" style="margin-top:16px"><button class="btn primary" id="rulesSave">Salva</button><button class="btn" id="rulesReset">Ripristina i valori proposti</button><span id="rulesMsg" class="small"></span></div>
+      <p class="muted small">Il riquadro «Rispetto delle regole» nella scheda Portafoglio mostra quali limiti sono superati. Il rischio per operazione e il limite per singolo titolo sono usati anche nella sezione Decisione della scheda del titolo.</p>
       <p class="disclaimer">Le regole servono a darti disciplina, non sono un consiglio su come investire. Non è una consulenza finanziaria.</p></div>`;
-  drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); scrim.hidden = false;
-  $("#dClose").onclick = closeDetail;
-  $("#rulesReset").onclick = () => { drawer.querySelectorAll("[data-rule]").forEach(i => { i.value = R.defaults[i.dataset.rule]; }); $("#rulesMsg").textContent = "Valori proposti rimessi nei campi: premi Salva per confermarli."; };
+  $("#rulesReset").onclick = () => { el.querySelectorAll("[data-rule]").forEach(i => { i.value = R.defaults[i.dataset.rule]; }); $("#rulesMsg").textContent = "Valori proposti rimessi nei campi: premi Salva per confermarli."; };
   $("#rulesSave").onclick = async () => {
     const limits = {};
-    drawer.querySelectorAll("[data-rule]").forEach(i => { limits[i.dataset.rule] = parseFloat(i.value.replace(",", ".")); });
-    const broad = [...drawer.querySelectorAll("[data-broad]:checked")].map(i => i.dataset.broad);
+    el.querySelectorAll("[data-rule]").forEach(i => { limits[i.dataset.rule] = parseFloat(i.value.replace(",", ".")); });
+    const broad = [...el.querySelectorAll("[data-broad]:checked")].map(i => i.dataset.broad);
     const wrong = RULE_FIELDS.find(([k]) => !isNum(limits[k]) || limits[k] < (k === "tradeRisk" ? 0.1 : k === "near" ? 50 : 1) || limits[k] > (k === "tradeRisk" ? 10 : 100));
     if (wrong) { $("#rulesMsg").innerHTML = `<span class="down">Controlla «${wrong[1]}»: serve un numero tra ${wrong[0] === "tradeRisk" ? "0,1 e 10" : wrong[0] === "near" ? "50 e 100" : "1 e 100"}.</span>`; return; }
     try {
       await pfPost("/api/rules", { body: JSON.stringify({ limits, broad }), headers: { "Content-Type": "application/json" } });
-      await loadPortfolio();
-      closeDetail();
+      pf.data = await getJSON("/api/portfolio");
+      document.activeElement?.blur();
+      await loadRulesPage();
+      $("#rulesMsg").textContent = "✓ Regole salvate";
     } catch (e) { $("#rulesMsg").innerHTML = `<span class="down">Non salvato: ${esc(e.message)}</span>`; }
   };
 }
-document.addEventListener("click", e => { if (e.target.closest("[data-rules-open]")) { if (state.detail) closeDetail(); openRules(); } });
+document.addEventListener("click", e => { if (e.target.closest("[data-rules-open]")) { if (state.detail || state.macro || state.panel) closeDetail(); setView("rules"); } });
 // ---- upload of a Fineco export: preview first (new, sold, changed positions), saved only after confirmation.
 // The file goes only to the server on this Mac (portafoglio/, outside Git); older files stay there.
 const pfUp = { busy: false };
@@ -2593,17 +2592,35 @@ document.addEventListener("keydown", e => {
 });
 
 // ------------------------------------------------------------ views, theme, resize
-const VIEWS = ["overview", "watch", "portfolio", "screener", "sectors", "ideas", "trade", "diary"];
+// Four tabs that follow a manager's work; each groups the older views, whose ids (and saved links) are unchanged.
+const GROUPS = [
+  { id: "mercato", label: "Mercato", ask: "Cosa sta succedendo?", views: [["overview", "Oggi"], ["sectors", "Settori"]] },
+  { id: "portafoglio", label: "Portafoglio", ask: "Cosa devo fare con quello che ho?", views: [["portfolio", "Portafoglio"]] },
+  { id: "ricerca", label: "Ricerca", ask: "Cosa potrei comprare?", views: [["screener", "Screener"], ["watch", "In osservazione"]] },
+  { id: "metodo", label: "Metodo", ask: "Il sistema funziona?", views: [["ideas", "Report"], ["trade", "Pattern tecnici"], ["diary", "Diario dei segnali"], ["rules", "Le mie regole"]] },
+];
+const VIEWS = GROUPS.flatMap(g => g.views.map(v => v[0]));
+const groupOf = v => GROUPS.find(g => g.views.some(x => x[0] === v));
+// "#mercato", "#portafoglio", "#ricerca", "#metodo" open the tab (on the sub-tab used last); "#map" is the old name of Settori
+const viewFromHash = h => h === "map" ? "sectors" : VIEWS.includes(h) ? h : GROUPS.some(g => g.id === h) ? lastSub(GROUPS.find(g => g.id === h)) : null;
+function lastSub(g) { const v = LS.get("sub." + g.id, g.views[0][0]); return g.views.some(x => x[0] === v) ? v : g.views[0][0]; }
 function setView(v) {
-  state.view = v; LS.set("view", v);
+  if (!VIEWS.includes(v)) v = viewFromHash(v) || "portfolio";
+  const g = groupOf(v);
+  state.view = v; LS.set("view", v); LS.set("sub." + g.id, v);
   if (location.hash.slice(1) !== v) history.replaceState(null, "", "#" + v);
-  $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.view === v));
+  $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.main === g.id));
+  const sub = $("#subtabs");
+  sub.hidden = g.views.length < 2;
+  sub.innerHTML = `<span class="sub-ask">${esc(g.ask)}</span>` + g.views.map(([id, label]) => `<button class="subtab ${id === v ? "active" : ""}" data-view="${id}">${esc(label)}</button>`).join("");
   $$(".view").forEach(el => el.hidden = !state.snap || el.id !== "view-" + v);
+  setStickyTop();
   if (state.snap) renderAll();
   window.scrollTo({ top: 0 });
   syncMaHead();
 }
-$$(".tab").forEach(t => t.addEventListener("click", () => setView(t.dataset.view)));
+$$(".tab").forEach(t => t.addEventListener("click", () => setView(lastSub(GROUPS.find(g => g.id === t.dataset.main)))));
+$("#subtabs").addEventListener("click", e => { const b = e.target.closest("[data-view]"); if (b) setView(b.dataset.view); });
 document.addEventListener("click", e => { const b = e.target.closest("[data-goto]"); if (b) setView(b.dataset.goto); });
 
 function applyTheme(th) {
@@ -2639,9 +2656,7 @@ addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { set
   nextAt = Date.now() + refreshMs();
   await loadWatch();
   const h = decodeURIComponent(location.hash.slice(1));
-  if (VIEWS.includes(h)) state.view = h;
-  if (h === "map") state.view = "sectors";
-  setView(state.view);
-  if (h && h !== "map" && !VIEWS.includes(h) && quoteFor(h.toUpperCase())) openDetail(h.toUpperCase());
+  setView(viewFromHash(h) || "portfolio");          // without a link the dashboard opens on Portafoglio
+  if (h && !viewFromHash(h) && quoteFor(h.toUpperCase())) openDetail(h.toUpperCase());
 })();
 })();

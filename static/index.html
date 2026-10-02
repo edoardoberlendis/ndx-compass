@@ -25,17 +25,15 @@
 </header>
 
 <nav class="tabs">
+  <!-- four tabs that follow a manager's work; each one groups the older views (sub-tabs), whose ids and links are unchanged -->
   <div class="tablist" role="tablist">
-    <button class="tab active" data-view="overview">Oggi</button>
-    <button class="tab" data-view="watch">I miei titoli</button>
-    <button class="tab" data-view="portfolio">Portafoglio</button>
-    <button class="tab" data-view="screener">Screener</button>
-    <button class="tab" data-view="sectors">Settori</button>
-    <button class="tab" data-view="ideas">Report</button>
-    <button class="tab" data-view="trade">Pattern tecnici</button>
-    <button class="tab" data-view="diary">Diario</button>
+    <button class="tab" data-main="mercato" title="Cosa sta succedendo?">Mercato</button>
+    <button class="tab" data-main="portafoglio" title="Cosa devo fare con quello che ho?">Portafoglio</button>
+    <button class="tab" data-main="ricerca" title="Cosa potrei comprare?">Ricerca</button>
+    <button class="tab" data-main="metodo" title="Il sistema funziona?">Metodo</button>
   </div>
   <div class="updated"><span class="status" id="status"></span><span class="cal-warn" id="calWarn" hidden>⚠ Festività USA: elenco da aggiornare</span><span id="updated"></span></div>
+  <div class="subtabs" id="subtabs" hidden></div>
 </nav>
 
 <main>
@@ -87,7 +85,7 @@
   <!-- MY STOCKS (watchlist.json) -->
   <section id="view-watch" class="view" hidden>
     <div class="card">
-      <div class="card-h"><h2>I miei titoli</h2><span class="card-meta">clicca ★ su un titolo (Screener o scheda) per aggiungerlo · clicca un'intestazione per ordinare · salvati in watchlist.json</span><span class="count" id="myCount"></span></div>
+      <div class="card-h"><h2>In osservazione</h2><span class="card-meta">clicca ★ su un titolo (Screener o scheda) per aggiungerlo · clicca un'intestazione per ordinare · salvati in watchlist.json</span><span class="count" id="myCount"></span></div>
       <div id="myNewsOpts"></div>
       <div class="table-wrap"><table class="scr my" id="myTbl"></table></div>
     </div>
@@ -165,6 +163,9 @@
     <div class="toolbar"><span class="muted" id="ptMeta"></span><button class="link-btn" data-goto="ideas">Cambia report nella scheda Report →</button></div>
     <div id="ptBody"></div>
   </section>
+
+  <!-- LE MIE REGOLE (limits of the portfolio, rules.py; saved in portafoglio/regole.json) -->
+  <section id="view-rules" class="view" hidden><div class="card" id="rulesBody"></div></section>
 
   <!-- DIARIO DEI SEGNALI (live check of the verdicts, diary.py) -->
   <section id="view-diary" class="view" hidden><div id="diaryBody"></div></section>

@@ -19,6 +19,20 @@ Oppure dal Terminale:
 
 ## Cosa contiene
 
+La dashboard ha **quattro schede**, che seguono il lavoro di un gestore; ognuna raggruppa le pagine descritte sotto.
+All'avvio si apre **Portafoglio**.
+
+| Scheda | Domanda | Cosa c'è dentro |
+|---|---|---|
+| **Mercato** | Cosa sta succedendo? | Oggi (con gli eventi macro USA) · Settori |
+| **Portafoglio** | Cosa devo fare con quello che ho? | Cosa richiede attenzione oggi · Rispetto delle regole · totali · Rischio · Performance · posizioni con tesi e azione · concentrazione |
+| **Ricerca** | Cosa potrei comprare? | Screener · In osservazione (i preferiti ★, prima "I miei titoli"); da qui si apre la scheda del titolo con la sezione Decisione |
+| **Metodo** | Il sistema funziona? | Report · Pattern tecnici (test dei pattern) · Diario dei segnali · Le mie regole |
+
+I vecchi link continuano a funzionare e portano alla pagina giusta: `#overview` e `#sectors` (Mercato), `#portfolio`,
+`#screener` e `#watch` (Ricerca), `#ideas`, `#trade`, `#diary` e `#rules` (Metodo). `#mercato`, `#portafoglio`,
+`#ricerca` e `#metodo` aprono la scheda sull'ultima pagina usata.
+
 - **Oggi**: 4 indicatori (Nasdaq-100, titoli in rialzo/ribasso, % di titoli sopra le medie 20/40/60 e 200, volatilità VIX e VXN con la fascia: calmo/normale/nervosismo/paura),
   mappa del mercato (clic sul nome di un settore per ingrandirlo), grafico intraday del Nasdaq-100, chi si è mosso e perché, trimestrali dei prossimi 7 giorni
   (i miei titoli in cima).
@@ -32,7 +46,7 @@ Oppure dal Terminale:
   non c'è (nessuna fonte gratuita affidabile), il PCE mostra solo la data (i valori richiederebbero una chiave BEA).
   Date ufficiali scritte in `macro_calendar.py` (Fed, BLS, BEA, 2026); ogni giorno la pagina della Fed e il calendario
   BEA vengono riletti per aggiungere le date nuove, con un avviso se il controllo non riesce o se l'elenco sta per finire.
-- **I miei titoli**: i preferiti (★) con prezzo, variazioni, posizione rispetto alle medie, valutazione, analisti, segnale,
+- **In osservazione** (Ricerca; prima "I miei titoli"): i preferiti (★) con prezzo, variazioni, posizione rispetto alle medie, valutazione, analisti, segnale,
   prossima trimestrale e ultima notizia. Salvati in `watchlist.json` nella cartella del progetto.
 - **Le mie regole** (in cima alla scheda Portafoglio): pochi limiti, come il mandato di una banca privata. Riquadro
   **Rispetto delle regole**: verde se tutto è nei limiti, altrimenti l'elenco dei limiti superati con valore, limite e
@@ -40,7 +54,7 @@ Oppure dal Terminale:
   vicini al limite. Limiti: singolo titolo, singolo ETF ampio, altro ETF/ETC (quota del valore); tema, settore, paese
   (quota dell'esposizione effettiva, dove un prodotto a leva 3x conta 3 volte); prodotti a leva (sul valore e
   sull'esposizione effettiva); rischio massimo per singola operazione (usato per il numero di azioni nell'Analisi
-  tecnica, insieme al limite per singolo titolo). **Modifica regole** apre la pagina con i campi, i valori proposti
+  tecnica, insieme al limite per singolo titolo). **Modifica regole** apre la pagina Metodo → Le mie regole con i campi, i valori proposti
   (10 / 35 / 15 / 25 / 50 / 80 / 5 / 15 / 1%, avviso dal 90% del limite) e la spunta "ampio" per i miei ETF. Si salvano
   in `portafoglio/regole.json` (fuori da Git, solo da questo Mac); finché non salvo valgono i valori proposti, indicati
   come "non ancora confermati". Superare un limite non è un ordine di vendita: è un punto da guardare.
