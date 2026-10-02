@@ -712,48 +712,74 @@ const MACRO = {
 };
 const monthIT = ym => ym ? new Date(ym + "-15T12:00:00").toLocaleDateString("it-IT", { month: "long", year: "numeric" }) : "";
 const fS1 = v => isNum(v) ? (v > 0 ? "+" : "") + fNum(v, 1) + "%" : "—";
+const macroFigures = (kind, v) => kind === "cpi"
+  ? `${fS1(v.mom)} sul mese, ${fS1(v.yoy)} sull'anno · core ${fS1(v.coreMom)} sul mese, ${fS1(v.coreYoy)} sull'anno`
+  : `${isNum(v.payrolls) ? (v.payrolls > 0 ? "+" : "") + fNum(v.payrolls, 0) + " mila posti di lavoro" : "—"}, disoccupazione ${isNum(v.unemp) ? fNum(v.unemp, 1) + "%" : "—"}, salari ${fS1(v.wagesMom)} sul mese`;
 function macroValues(e, rate) {
   const v = e.values;
   if (e.kind === "fomc") return rate ? `Tasso attuale della Fed: ${esc(rate.replace("-", "–"))}%` : "";
   if (e.kind === "pce") return `<span class="muted">Valori non disponibili: servirebbe una chiave gratuita della BEA.</span>`;
   if (!v) return `<span class="muted">Valori BLS non disponibili al momento.</span>`;
-  const head = `<b>${v.released ? "Uscito" : "Precedente"}</b> (${esc(monthIT(v.period))}):`;
-  return e.kind === "cpi"
-    ? `${head} ${fS1(v.mom)} sul mese, ${fS1(v.yoy)} sull'anno · core ${fS1(v.coreMom)} sul mese, ${fS1(v.coreYoy)} sull'anno`
-    : `${head} ${isNum(v.payrolls) ? (v.payrolls > 0 ? "+" : "") + fNum(v.payrolls, 0) + " mila posti di lavoro" : "—"}, disoccupazione ${isNum(v.unemp) ? fNum(v.unemp, 1) + "%" : "—"}, salari ${fS1(v.wagesMom)} sul mese`;
+  return `<b>${v.released ? "Uscito" : "Precedente"}</b> (${esc(monthIT(v.period))}): ${macroFigures(e.kind, v)}`;
 }
-function macroItem(e, rate) {
-  const M = MACRO[e.kind], when = new Date(e.ts * 1000);
+function macroWhen(e) {
+  const when = new Date(e.ts * 1000);
   const day = when.toLocaleDateString("it-IT", { timeZone: tz, weekday: "short", day: "numeric", month: "short" });
   const ny = when.toLocaleTimeString("it-IT", { timeZone: tz, hour: "2-digit", minute: "2-digit" });
-  const time = e.kind === "fomc" ? `decisione alle ${ny} di New York (${fLocal(when)} ora locale), conferenza stampa mezz'ora dopo`
-    : `alle ${ny} di New York (${fLocal(when)} ora locale)`;
-  const title = M.title + (e.kind === "fomc" ? (e.sep ? " · con le previsioni economiche" : "") : ` (${monthIT(e.ref)})`);
-  const R = e.relevance;
-  let rel = "";
-  if (R) {
-    const parts = [];
-    if (isNum(R.pfShare)) parts.push(`riguarda circa il <b>${Math.round(R.pfShare)}%</b> del tuo portafoglio`);
-    if (R.watchTotal) parts.push(`${R.watchItems.length} dei tuoi ${R.watchTotal} preferiti`);
-    const list = `${R.pfItems.length ? `<b>Portafoglio:</b> ${esc(R.pfItems.join(", "))}<br>` : ""}${R.watchItems.length ? `<b>Preferiti:</b> ${esc(R.watchItems.join(", "))}` : ""}`;
-    if (parts.length) rel = `<div class="mc-rel">${parts.join(" · ")} ${list ? info(`Titoli nei settori o nei temi più sensibili a questo evento.<br><br>${list}`) : ""}</div>`;
-  }
-  return `<div class="mc-it">
-    <div class="mc-h"><b>${esc(title)}</b> ${info(M.info + SURPRISE_NOTE)}</div>
-    <div class="mc-when">${esc(day)} · ${time}</div>
-    <div class="mc-val">${macroValues(e, rate)}</div>
-    <div class="mc-react"><b>Come reagisce di solito il mercato:</b> ${M.react}</div>
-    <div class="mc-imp"><b>Impatto maggiore su:</b> ${esc(e.impact.sectors.join(", "))} · <span class="muted">temi:</span> ${esc(e.impact.themes.join(", "))}</div>
-    ${rel}</div>`;
+  return { day, ny, local: fLocal(when) };
 }
-let macroAt = 0;
+const macroTitle = e => MACRO[e.kind].title + (e.kind === "fomc" ? (e.sep ? " · con le previsioni economiche" : "") : ` (${monthIT(e.ref)})`);
+// the card stays short (title, date, time, value); everything else is in the side panel (openMacro)
+function macroItem(e, rate, k) {
+  const w = macroWhen(e);
+  return `<div class="mc-it">
+    <div class="mc-h"><button class="mc-open" data-macro="${k}"><b>${esc(macroTitle(e))}</b></button><button class="link-btn" data-macro="${k}">Dettagli →</button></div>
+    <div class="mc-when">${esc(w.day)} · ${w.ny} di New York (${w.local} ora locale)</div>
+    <div class="mc-val">${macroValues(e, rate)}</div></div>`;
+}
+let macroAt = 0, macroData = null;
 async function loadMacro() {
   if (Date.now() - macroAt < 5 * 60_000) return;
   macroAt = Date.now();
   let d;
   try { d = await getJSON("/api/macro"); } catch { macroAt = 0; $("#macro").innerHTML = `<div class="empty">Eventi non disponibili</div>`; return; }
-  $("#macro").innerHTML = (d.events.length ? d.events.map(e => macroItem(e, d.rate)).join("") : `<div class="empty">Nessun evento nei prossimi 7 giorni</div>`)
+  macroData = d;
+  $("#macro").innerHTML = (d.events.length ? d.events.map((e, k) => macroItem(e, d.rate, k)).join("") : `<div class="empty">Nessun evento nei prossimi 7 giorni</div>`)
     + d.warnings.map(w => `<div class="mc-warn">⚠ ${esc(w)}</div>`).join("");
+}
+$("#macro").addEventListener("click", e => { const b = e.target.closest("[data-macro]"); if (b && macroData) openMacro(macroData.events[+b.dataset.macro]); });
+// side panel of a macro event: same drawer as the stocks, texts from MACRO (unchanged), numbers from /api/macro
+function openMacro(e) {
+  if (!e) return;
+  const M = MACRO[e.kind], w = macroWhen(e), v = e.values, R = e.relevance;
+  state.detail = null; state.macro = e;
+  const tk = t => quoteFor(t) ? `<button class="pt-tk ${state.watch.has(t) ? "mine" : ""}" data-mopen="${esc(t)}">${esc(t)}</button>` : `<span class="pt-tk off">${esc(t)}</span>`;
+  const values = e.kind === "cpi" || e.kind === "jobs"
+    ? (v ? `<div class="d-stats one"><div><span>${v.released ? "<b>Uscito</b>" : "Ultimo dato disponibile"} · ${esc(monthIT(v.period))}</span><span>${macroFigures(e.kind, v)}</span></div>
+        ${v.prev ? `<div><span>Mese prima · ${esc(monthIT(v.prev.period))}</span><span>${macroFigures(e.kind, v.prev)}</span></div>` : ""}</div>
+        ${v.released ? "" : `<p class="muted small">Il dato di ${esc(monthIT(e.ref))} non è ancora uscito: compare qui dopo la pubblicazione.</p>`}`
+      : `<p class="muted">Valori BLS non disponibili al momento.</p>`)
+    : `<p>${macroValues(e, macroData?.rate) || `<span class="muted">Tasso della Fed non disponibile al momento.</span>`}</p>`;
+  drawer.classList.remove("full");
+  drawer.innerHTML = `<div class="d-top"><div class="d-head"><div><div class="tt">${esc(M.title)}</div>
+        <div class="nm">${e.kind === "fomc" ? (e.sep ? "con le previsioni economiche" : "evento macro USA") : `dato di ${esc(monthIT(e.ref))}`}</div></div>
+      <div class="actions"><button class="icon-btn close-btn" id="dClose" aria-label="Chiudi">×</button></div></div></div>
+    <div class="d-rest macro-d">
+      <div class="d-sec"><h3>Quando</h3><p><b>${esc(w.day)}</b> · ${w.ny} ora di New York · <b>${w.local} ora italiana</b>${e.kind === "fomc" ? "<br>La conferenza stampa inizia mezz'ora dopo la decisione." : ""}</p></div>
+      <div class="d-sec"><h3>Valori</h3>${values}</div>
+      <div class="d-sec"><h3>Spiegazione</h3><p>${M.info}${SURPRISE_NOTE}</p></div>
+      <div class="d-sec"><h3>Come reagisce di solito il mercato</h3><p>${M.react.charAt(0).toUpperCase() + M.react.slice(1)}</p></div>
+      <div class="d-sec"><h3>Settori e temi coinvolti</h3><p><b>Settori:</b> ${esc(e.impact.sectors.join(", "))}<br><b>Temi:</b> ${esc(e.impact.themes.join(", "))}</p>
+        <p class="muted small">Sono i settori e i temi di solito più sensibili a questo evento.</p></div>
+      ${R ? `<div class="d-sec"><h3>Il tuo portafoglio</h3>${isNum(R.pfShare)
+          ? `<p>Riguarda circa il <b>${Math.round(R.pfShare)}%</b> del valore del tuo portafoglio (${R.pfItems.length} ${R.pfItems.length === 1 ? "posizione" : "posizioni"}).</p><div class="pt-stocks">${R.pfItems.map(tk).join("")}</div>`
+          : `<p class="muted">Portafoglio non caricato.</p>`}</div>
+        <div class="d-sec"><h3>I tuoi preferiti</h3>${R.watchTotal
+          ? `<p>${R.watchItems.length} dei tuoi ${R.watchTotal} preferiti sono nei settori o nei temi coinvolti.</p><div class="pt-stocks">${R.watchItems.map(tk).join("")}</div>`
+          : `<p class="muted">Nessun preferito.</p>`}</div>` : ""}
+      <p class="disclaimer">Le reazioni descritte sono quelle più frequenti, non una previsione. Non è una consulenza finanziaria.</p></div>`;
+  drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); scrim.hidden = false;
+  $("#dClose").onclick = closeDetail;
 }
 
 // ------------------------------------------------------------ why they move (rule-based, from /api/movers-why)
@@ -912,7 +938,7 @@ function renderPortfolio() {
   $("#pfEmpty").hidden = !empty; $("#pfBody").hidden = empty;
   if (empty) {
     $("#pfEmpty").innerHTML = D?.error ? esc(D.error)
-      : `Nessun file nella cartella <code>portafoglio/</code>. Esporta le posizioni da Fineco in Excel e mettile lì: la dashboard legge da sola il file più recente.`;
+      : `Nessun file del portafoglio. Esporta le posizioni da Fineco in Excel (.xls) e caricale con il pulsante <b>Carica file Fineco</b> qui sopra, oppure trascina il file su questa pagina.`;
     return;
   }
   const T = D.totals;
@@ -970,6 +996,57 @@ function renderConcentration() {
   };
   $("#pfConcNote").innerHTML = `${notes[pf.dim]} Barra chiara = valore investito, barra scura = esposizione effettiva.`;
 }
+// ---- upload of a Fineco export: preview first (new, sold, changed positions), saved only after confirmation.
+// The file goes only to the server on this Mac (portafoglio/, outside Git); older files stay there.
+const pfUp = { busy: false };
+const pfPost = (url, opts = {}) => fetch(url, { method: "POST", ...opts, headers: { "X-Requested-With": "ndx-dashboard", ...(opts.headers || {}) } })
+  .then(async r => { const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || r.statusText); return d; });
+function pfUpShow(html) { const b = $("#pfUpBox"); b.hidden = !html; b.innerHTML = html || ""; }
+async function pfUpload(file) {
+  if (!file || pfUp.busy) return;
+  pfUp.busy = true;
+  pfUpShow(`<div class="muted">Leggo ${esc(file.name)}…</div>`);
+  try {
+    const d = await pfPost("/api/portfolio/upload", { body: file, headers: { "X-Filename": encodeURIComponent(file.name), "Content-Type": "application/octet-stream" } });
+    const q = v => fNum(v, v % 1 ? 2 : 0);
+    const grp = (title, list, row) => `<div class="pf-up-g"><b>${title} (${list.length})</b>${list.length
+      ? `<ul>${list.map(x => `<li>${esc(x.name)} <span class="muted">${esc(x.isin)}</span> · ${row(x)}</li>`).join("")}</ul>` : ` <span class="muted">nessuna</span>`}</div>`;
+    pfUpShow(`<div class="card-h"><h2>Anteprima: ${esc(d.file)}</h2><span class="card-meta">${d.count} posizioni · ${d.current ? `confronto con ${esc(d.current)}` : "nessun file attuale"}</span></div>
+      ${grp("Nuove", d.new, x => `quantità ${q(x.qty)}`)}${grp("Vendute", d.sold, x => `erano ${q(x.qty)}`)}
+      ${grp("Quantità cambiata", d.changed, x => `da ${q(x.from)} a ${q(x.qty)}`)}
+      <div class="pf-up-g"><b>Invariate</b> ${d.same}</div>
+      <p class="muted small">Il file attuale non viene cancellato: resta nella cartella <code>portafoglio/</code>. La dashboard userà il nuovo file.</p>
+      <div class="toolbar"><button class="btn" id="pfUpCancel">Annulla</button><button class="btn primary" id="pfUpOk" data-token="${esc(d.token)}">Conferma e usa questo file</button></div>`);
+  } catch (e) {
+    pfUpShow(`<div class="pf-up-err">⚠ File non caricato. ${esc(e.message)}</div><div class="toolbar"><button class="btn" id="pfUpCancel">Chiudi</button></div>`);
+  }
+  pfUp.busy = false;
+  $("#pfUpFile").value = "";
+}
+$("#pfUpBtn").addEventListener("click", () => $("#pfUpFile").click());
+$("#pfUpFile").addEventListener("change", e => pfUpload(e.target.files[0]));
+$("#pfUpBox").addEventListener("click", async e => {
+  if (e.target.id === "pfUpCancel") { pfUpShow(""); pfPost("/api/portfolio/upload/cancel").catch(() => {}); }
+  if (e.target.id === "pfUpOk") {
+    e.target.disabled = true;
+    try {
+      const d = await pfPost("/api/portfolio/upload/confirm", { body: JSON.stringify({ token: e.target.dataset.token }), headers: { "Content-Type": "application/json" } });
+      pfUpShow(`<div class="muted">✓ Salvato come <code>portafoglio/${esc(d.file)}</code>. Aggiorno le posizioni…</div>`);
+      await loadPortfolio();
+      setTimeout(() => pfUpShow(""), 6000);
+    } catch (err) { pfUpShow(`<div class="pf-up-err">⚠ ${esc(err.message)}</div><div class="toolbar"><button class="btn" id="pfUpCancel">Chiudi</button></div>`); }
+  }
+});
+// drag and drop, only while the Portafoglio tab is open (elsewhere the browser keeps its normal behaviour)
+const pfDragging = e => state.view === "portfolio" && [...(e.dataTransfer?.types || [])].includes("Files");
+addEventListener("dragover", e => { if (pfDragging(e)) { e.preventDefault(); $("#view-portfolio").classList.add("drop"); } });
+addEventListener("dragleave", e => { if (!e.relatedTarget) $("#view-portfolio").classList.remove("drop"); });
+addEventListener("drop", e => {
+  if (!pfDragging(e)) return;
+  e.preventDefault();
+  $("#view-portfolio").classList.remove("drop");
+  pfUpload(e.dataTransfer.files[0]);
+});
 $("#pfColSeg").addEventListener("click", e => { const b = e.target.closest("[data-cols]"); if (b) { pf.cols = b.dataset.cols; LS.set("pfCols", pf.cols); renderPortfolio(); } });
 $("#pfDimSeg").addEventListener("click", e => { const b = e.target.closest("[data-dim]"); if (b) { pf.dim = b.dataset.dim; LS.set("pfDim", pf.dim); renderConcentration(); } });
 $("#pfTbl").addEventListener("click", e => {
@@ -1207,7 +1284,7 @@ let dFull = LS.get("dFull", false);
 let dNews = [];   // headlines of the open stock (from /api/stock)   // detail as side panel (false) or full screen (true), remembered
 
 function openDetail(t) {
-  state.detail = t; dInfo = null; dDaily = null; dRange = "1D";
+  state.detail = t; state.macro = null; dInfo = null; dDaily = null; dRange = "1D";
   drawer.innerHTML = `<div class="d-top"></div><div class="d-sum"></div><div class="d-ctrl"></div><div id="dChart" class="chart"></div><div id="dVol" class="chart"></div><div class="d-rest"><div class="loading" style="padding:40px"><div class="spinner"></div></div></div>`;
   drawer.classList.add("open"); drawer.classList.toggle("full", dFull); drawer.setAttribute("aria-hidden", "false"); scrim.hidden = false;
   renderDetailHeader();
@@ -1216,7 +1293,7 @@ function openDetail(t) {
   loadDetailInfo();
 }
 function closeDetail() {
-  state.detail = null; drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); scrim.hidden = true; hideTip();
+  state.detail = null; state.macro = null; drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); scrim.hidden = true; hideTip();
 }
 scrim.addEventListener("click", closeDetail);
 
@@ -1539,7 +1616,9 @@ drawer.addEventListener("click", e => {
   const o = e.target.closest("[data-ta-stop]");
   if (o) { const [id, v] = o.dataset.taStop.split(":"); dTA.sel[id] = v; return renderTA(); }
   const g = e.target.closest("[data-ta-goto]");
-  if (g) { closeDetail(); setView(g.dataset.taGoto); }
+  if (g) { closeDetail(); return setView(g.dataset.taGoto); }
+  const m = e.target.closest("[data-mopen]");          // a stock listed in a macro event's panel
+  if (m) openDetail(m.dataset.mopen);
 });
 drawer.addEventListener("change", e => {
   if (!["taRisk", "taMax", "taCapital"].includes(e.target.id)) return;
@@ -2174,7 +2253,7 @@ qEl.addEventListener("blur", () => setTimeout(() => sugg.classList.remove("open"
 sugg.addEventListener("mousedown", e => { const b = e.target.closest("[data-t]"); if (b) { openDetail(b.dataset.t); qEl.value = ""; } });
 document.addEventListener("keydown", e => {
   if (e.key === "/" && document.activeElement.tagName !== "INPUT") { e.preventDefault(); qEl.focus(); }
-  if (e.key === "Escape" && state.detail) closeDetail();
+  if (e.key === "Escape" && (state.detail || state.macro)) closeDetail();
 });
 
 // ------------------------------------------------------------ views, theme, resize

@@ -268,7 +268,8 @@ def _pct(series, p, back=1):
 
 
 def bls_values(kind, ref):
-    """{"period", "released", figures...}: the event's own month if already out, otherwise the latest (previous) one."""
+    """{"period", "released", figures..., "prev": the month before}: the event's own month if already out, otherwise
+    the latest (previous) one."""
     D = _bls["data"]
     if not D or kind not in ("cpi", "jobs"):
         return None
@@ -278,12 +279,15 @@ def bls_values(kind, ref):
         return None
     released = bool(ref and ref in D[key])
     p = ref if released else months[-1]
-    if kind == "cpi":
-        return {"period": p, "released": released, "mom": _pct(D["cpi"], p), "yoy": _pct(D["cpiNsa"], p, 12),
-                "coreMom": _pct(D["core"], p), "coreYoy": _pct(D["coreNsa"], p, 12)}
-    pay, prev = D["payrolls"].get(p), D["payrolls"].get(_prev_month(p))
-    return {"period": p, "released": released, "payrolls": round(pay - prev) if pay and prev else None,
-            "unemp": D["unemp"].get(p), "wagesMom": _pct(D["wages"], p)}
+
+    def figures(p):
+        if kind == "cpi":
+            return {"period": p, "mom": _pct(D["cpi"], p), "yoy": _pct(D["cpiNsa"], p, 12),
+                    "coreMom": _pct(D["core"], p), "coreYoy": _pct(D["coreNsa"], p, 12)}
+        pay, prev = D["payrolls"].get(p), D["payrolls"].get(_prev_month(p))
+        return {"period": p, "payrolls": round(pay - prev) if pay and prev else None,
+                "unemp": D["unemp"].get(p), "wagesMom": _pct(D["wages"], p)}
+    return {**figures(p), "released": released, "prev": figures(_prev_month(p))}
 
 
 # ---------------------------------------------------------------- for the page

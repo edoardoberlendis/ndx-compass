@@ -16,6 +16,7 @@ import os
 import re
 import threading
 import time
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 import yfinance as yf
@@ -101,6 +102,75 @@ def read_export(path):
             p[k] = float(p[k] or 0)
         out.append(p)
     return out
+
+
+# ---------------------------------------------------------------- upload from the dashboard (preview, then confirm)
+# The uploaded file waits in a hidden temporary file inside portafoglio/ (latest_file() skips it) until the user
+# confirms. Older exports are never deleted: each confirmed file gets its date in the name, so they can later be
+# read as the history of the portfolio.
+
+UPLOAD_TMP = os.path.join(PORTFOLIO_DIR, ".caricamento.xls")
+MAX_UPLOAD = 5 * 1024 * 1024
+_upload = {"token": None}
+
+
+def cancel_upload():
+    _upload["token"] = None
+    if os.path.exists(UPLOAD_TMP):
+        os.remove(UPLOAD_TMP)
+
+
+def preview_upload(data, filename):
+    """Check that the file is a Fineco export and compare it with the positions in use (by ISIN). Nothing is replaced yet.
+    Raises ValueError with an Italian message when the file is not acceptable."""
+    cancel_upload()
+    if not filename.lower().endswith(".xls"):
+        raise ValueError("Il file deve essere l'export di Fineco in formato Excel .xls (Portafoglio → Sintesi → esporta).")
+    if not data or len(data) > MAX_UPLOAD:
+        raise ValueError("Il file è vuoto oppure troppo grande (massimo 5 MB).")
+    os.makedirs(PORTFOLIO_DIR, exist_ok=True)
+    with open(UPLOAD_TMP, "wb") as f:
+        f.write(data)
+    try:
+        new = read_export(UPLOAD_TMP)
+    except Exception as e:
+        cancel_upload()
+        why = str(e) if isinstance(e, ValueError) else "non è un file Excel leggibile"
+        raise ValueError(f"Non sembra un export Fineco «Portafoglio sintesi»: {why}.")
+    if not new:
+        cancel_upload()
+        raise ValueError("Non sembra un export Fineco «Portafoglio sintesi»: non contiene posizioni.")
+    with _lock:
+        old, current = list(_state["positions"]), _state["path"]
+
+    def by_isin(positions):
+        out = {}
+        for p in positions:
+            x = out.setdefault(p["isin"], {"name": p["name"], "isin": p["isin"], "qty": 0.0})
+            x["qty"] += p["qty"]
+        return out
+    a, b = by_isin(old), by_isin(new)
+    _upload["token"] = os.urandom(8).hex()
+    return {
+        "token": _upload["token"], "file": os.path.basename(filename), "count": len(new),
+        "current": os.path.basename(current) if current else None,
+        "new": [b[k] for k in b if k not in a],
+        "sold": [a[k] for k in a if k not in b],
+        "changed": [{**b[k], "from": a[k]["qty"]} for k in b if k in a and abs(a[k]["qty"] - b[k]["qty"]) > 1e-9],
+        "same": sum(1 for k in b if k in a and abs(a[k]["qty"] - b[k]["qty"]) <= 1e-9),
+    }
+
+
+def confirm_upload(token):
+    """Move the previewed file into portafoglio/ under a dated name (it becomes the newest one) and read it."""
+    if not token or token != _upload["token"] or not os.path.exists(UPLOAD_TMP):
+        raise ValueError("Anteprima scaduta: carica di nuovo il file.")
+    dest = os.path.join(PORTFOLIO_DIR, f"portafoglio-{datetime.now():%Y-%m-%d_%H%M%S}.xls")
+    os.replace(UPLOAD_TMP, dest)
+    os.utime(dest, None)
+    _upload["token"] = None
+    refresh()
+    return os.path.basename(dest)
 
 
 # ---------------------------------------------------------------- Fineco symbol -> Yahoo ticker

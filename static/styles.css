@@ -680,11 +680,25 @@ table.pf tr.lev td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 .mc-it { padding: 8px 0; border-top: 1px solid var(--grid); display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; line-height: 1.45; }
 .mc-it:first-child { border-top: 0; padding-top: 0; }
 .mc-when { color: var(--ink-2); font-weight: 550; }
-.mc-react, .mc-imp { color: var(--ink-2); }
-.mc-rel { color: var(--accent); font-weight: 550; }
+.mc-h { display: flex; align-items: baseline; gap: 8px; }
+.mc-open { border: 0; background: none; padding: 0; margin-right: auto; font: inherit; color: var(--ink); text-align: left; cursor: pointer; }
+.mc-open:hover { color: var(--accent); }
+.macro-d p { margin: 0 0 6px; line-height: 1.55; }
+.d-stats.one { grid-template-columns: 1fr; }
+.d-stats.one div { gap: 16px; }
+.d-stats.one span:last-child { text-align: right; }
+.pt-tk.off { cursor: default; opacity: .75; }
+/* ------------------------------------------------ portfolio: upload of the Fineco export */
+.pf-up { margin-bottom: 12px; }
+.pf-up-g { margin: 8px 0; line-height: 1.5; }
+.pf-up-g ul { margin: 4px 0 0; padding-left: 18px; }
+.pf-up-err { color: var(--down); font-weight: 600; margin-bottom: 8px; }
+#view-portfolio.drop { outline: 2px dashed var(--accent); outline-offset: 6px; border-radius: var(--radius); }
 .mc-warn { color: var(--warn); font-size: 12px; margin-top: 6px; }
 @media (min-width: 1281px) {
   .macro-card { flex: 0 1 auto; min-height: 0; max-height: 55%; display: flex; flex-direction: column; }
   .macro-card #macro { overflow-y: auto; min-height: 0; }
   .earn-card { min-height: 140px; }
 }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { filter: brightness(1.08); background: var(--accent); }

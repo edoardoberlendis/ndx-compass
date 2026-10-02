@@ -1074,6 +1074,46 @@ def api_portfolio():
     return app.response_class(json.dumps(portfolio.snapshot(snap, infos), default=clean), mimetype="application/json")
 
 
+def local_request():
+    """True only for a request made on this Mac by the dashboard's own page. The server already listens on 127.0.0.1
+    only; the Host/Origin check and the custom header also stop another site open in the browser from posting here."""
+    host = (request.host or "").rsplit(":", 1)[0]
+    origin = request.headers.get("Origin")
+    return (request.remote_addr in ("127.0.0.1", "::1") and host in ("localhost", "127.0.0.1")
+            and (origin is None or re.fullmatch(r"http://(localhost|127\.0\.0\.1)(:\d+)?", origin) is not None)
+            and request.headers.get("X-Requested-With") == "ndx-dashboard")
+
+
+@app.route("/api/portfolio/upload", methods=["POST"])
+def api_portfolio_upload():
+    """Step 1: receive a Fineco export and return the preview (new, sold, changed positions). Nothing is replaced."""
+    if not local_request():
+        return jsonify(error="Il caricamento funziona solo dalla dashboard aperta su questo Mac."), 403
+    if (request.content_length or 0) > portfolio.MAX_UPLOAD:
+        return jsonify(error="Il file è troppo grande (massimo 5 MB)."), 413
+    try:
+        name = requests.utils.unquote(request.headers.get("X-Filename", ""))
+        return jsonify(portfolio.preview_upload(request.get_data(cache=False), name))
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+
+
+@app.route("/api/portfolio/upload/<step>", methods=["POST"])
+def api_portfolio_upload_step(step):
+    """Step 2: "confirm" saves the previewed file in portafoglio/ (older files stay there), "cancel" discards it."""
+    if not local_request():
+        return jsonify(error="Il caricamento funziona solo dalla dashboard aperta su questo Mac."), 403
+    if step == "cancel":
+        portfolio.cancel_upload()
+        return jsonify(ok=True)
+    if step != "confirm":
+        return jsonify(error="not found"), 404
+    try:
+        return jsonify(ok=True, file=portfolio.confirm_upload((request.get_json(silent=True) or {}).get("token")))
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+
+
 @app.route("/api/macro")
 def api_macro():
     """US macro events of the next 7 days, with how much of my portfolio and favourites each one touches."""
