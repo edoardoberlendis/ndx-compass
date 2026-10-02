@@ -214,6 +214,7 @@ function renderAll() {
   if (state.view === "screener") renderScreener();
   if (state.view === "sectors") renderSectors();
   if (state.view === "ideas" || state.view === "trade") renderIdeas();
+  if (state.view === "diary") loadDiary();
   if (state.detail) { renderDetailHeader(); renderTA(); }
 }
 
@@ -2520,6 +2521,47 @@ $("#runBtn").addEventListener("click", async () => {
   renderIdeas();
 });
 
+// ------------------------------------------------------------ Diario dei segnali (diary.py): live check of the verdicts
+const DIARY_INFO = `Analisti, valutazione e notizie non hanno uno storico gratuito, quindi i verdetti della sezione Decisione non si possono provare sul passato.
+  Il diario li verifica <b>da oggi in avanti</b>: dopo ogni chiusura salva il verdetto di ogni titolo del Nasdaq-100 e delle tue posizioni, e dopo 1, 3 e 6 mesi misura com'è andata
+  ogni categoria rispetto a QQQ e a tutti i titoli dello stesso giorno. <b>Il diario non si modifica mai a posteriori.</b>`;
+const diary = { data: null, hz: "1M", at: 0 };
+async function loadDiary() {
+  if (!diary.data || Date.now() - diary.at > 5 * 60_000) {
+    diary.at = Date.now();
+    try { diary.data = await getJSON("/api/diary"); } catch { diary.data = null; }
+  }
+  renderDiary();
+}
+function renderDiary() {
+  const el = $("#diaryBody"), D = diary.data;
+  if (!D) { el.innerHTML = `<div class="card empty">Diario non disponibile al momento.</div>`; return; }
+  const hzLab = { "1M": "1 mese", "3M": "3 mesi", "6M": "6 mesi" };
+  const intro = `<p class="warn-box"><b>Verifica dal vivo, non un backtest.</b> ${D.days ? `Il diario ha ${D.days} ${D.days === 1 ? "giorno" : "giorni"} (dal ${dayIT(D.first)} al ${dayIT(D.last)}).` : "Il diario è ancora vuoto: il primo salvataggio avviene dopo la prossima chiusura della borsa, con la dashboard accesa."}
+    Finché una categoria ha meno di ${D.minCases} casi o meno di ${D.minDays} giorni diversi, i numeri possono essere solo caso e <b>non vanno usati per decidere</b>. Non è una consulenza finanziaria.</p>`;
+  const today = D.today.length ? `<div class="card"><div class="card-h"><h2>Verdetti dell'ultimo giorno salvato</h2><span class="card-meta">${dayIT(D.last)} · titoli del Nasdaq-100 e mie posizioni</span></div>
+    <div class="pt-stocks">${D.today.map(x => `<span class="act ${VERDICT_CLS[x.category] || "hold"}">${esc(x.category)} · ${x.n}</span>`).join("")}</div></div>` : "";
+  const H = D.horizons[diary.hz], rows = H?.rows || [];
+  const pc = v => `<span class="${sign(v)}">${fPct(v, 2)}</span>`, pp = v => `<span class="${sign(v)}">${ptPts(v)}</span>`;
+  const wait = D.pending[diary.hz];
+  const table = rows.length ? `<div class="table-wrap"><table class="scr"><thead><tr><th class="l">Verdetto</th><th>Casi</th><th>Giorni</th><th>Rendimento medio</th><th>Mediano</th><th>Extra vs QQQ (media)</th><th>Extra vs QQQ (mediana)</th>
+      <th>% volte meglio di QQQ</th><th>Extra vs tutti i titoli (media)</th><th>(mediana)</th><th class="l">Affidabilità</th></tr></thead>
+    <tbody>${rows.map(r => `<tr class="${r.enough ? "" : "muted"}"><td class="l"><span class="act ${VERDICT_CLS[r.category] || "hold"}">${esc(r.category)}</span></td><td>${fNum(r.n, 0)}</td><td>${r.days}</td>
+      <td>${pc(r.ret)}</td><td>${pc(r.retMedian)}</td><td>${pp(r.excess)}</td><td>${pp(r.excessMedian)}</td><td>${fNum(r.beat, 1)}%</td><td><b>${pp(r.vsAll)}</b></td><td>${pp(r.vsAllMedian)}</td>
+      <td class="l">${r.enough ? "casi sufficienti" : `<b>troppo pochi casi</b>`}</td></tr>`).join("")}</tbody></table></div>
+    ${rows.some(r => !r.enough) ? `<p class="small"><b>Attenzione:</b> le righe in grigio hanno ancora troppo pochi casi (servono almeno ${D.minCases} casi in almeno ${D.minDays} giorni diversi): non se ne possono trarre conclusioni.</p>` : ""}`
+    : `<div class="empty">${D.days ? `Nessun risultato a ${hzLab[diary.hz]} ancora: servono ${H?.sessions} sedute di borsa dal primo giorno del diario${isNum(wait) && wait > 0 ? ` (ne mancano circa ${wait})` : ""}.` : "Nessun giorno salvato."}</div>`;
+  el.innerHTML = `${intro}${today}
+    <div class="card"><div class="card-h"><h2>Com'è andata ogni categoria di verdetto ${info(DIARY_INFO)}</h2>
+      <div class="seg small">${Object.keys(hzLab).map(h => `<button data-dz="${h}" class="${h === diary.hz ? "on" : ""}">${hzLab[h]}</button>`).join("")}</div>
+      <span class="card-meta">${H ? `${H.days} giorni misurati` : ""}</span></div>
+      ${table}
+      <p class="muted small">Rendimento del titolo dalla chiusura del giorno del verdetto a ${H?.sessions || ""} sedute dopo; «extra vs tutti» = rendimento meno la media di tutti i titoli del Nasdaq-100 salvati lo stesso giorno, come nel test dei pattern.</p>
+      <h4 class="bt-h">Limiti: leggili prima di fidarti dei numeri</h4><ul class="why bt-lim">${D.limits.map(l => `<li><b>${esc(l.title)}.</b> ${esc(l.text)}</li>`).join("")}</ul>
+      <p class="muted small">Dati salvati in <code>portafoglio/diario/</code>, un file per seduta, solo su questo Mac. Ogni giorno contiene, per ogni titolo: prezzo, verdetto, livelli del piano e regole soddisfatte o no.</p></div>`;
+}
+document.addEventListener("click", e => { const b = e.target.closest("[data-dz]"); if (b) { diary.hz = b.dataset.dz; renderDiary(); } });
+
 // ------------------------------------------------------------ search
 const qEl = $("#q"), sugg = $("#sugg");
 let suggSel = 0, suggList = [];
@@ -2551,7 +2593,7 @@ document.addEventListener("keydown", e => {
 });
 
 // ------------------------------------------------------------ views, theme, resize
-const VIEWS = ["overview", "watch", "portfolio", "screener", "sectors", "ideas", "trade"];
+const VIEWS = ["overview", "watch", "portfolio", "screener", "sectors", "ideas", "trade", "diary"];
 function setView(v) {
   state.view = v; LS.set("view", v);
   if (location.hash.slice(1) !== v) history.replaceState(null, "", "#" + v);

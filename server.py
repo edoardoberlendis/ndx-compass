@@ -731,6 +731,40 @@ def intraday_breadth(rows, intra):
 store = Store()
 
 
+def save_signal_diary():
+    """After the close (and until the next open, if the dashboard was off): the day's verdicts in portafoglio/diario/
+    (diary.py). A day is written once and never rewritten; nothing here may stop the price refresh."""
+    try:
+        import diary
+        if market_status() in ("open", "pre"):
+            return
+        with store.lock:
+            snap, bench = store.snapshot, store.daily.get(SIGNAL_BENCH)
+        if not snap or bench is None or not len(bench):
+            return
+        now = datetime.now(ET)
+        day = str(bench["Close"].dropna().index[-1].date())             # the last session in the daily history
+        if day == str(now.date()) and now.hour * 60 + now.minute < market_calendar.close_minute(now) + 20:
+            return                                                       # today's bar is not final yet
+        if diary.exists(day) or not store.ta:
+            return
+        pf = portfolio_view()
+        if pf.get("resolving"):
+            return                                                       # my positions are still being matched: next round
+        mine = {p["ticker"]: p for p in pf.get("positions") or [] if p.get("ticker")}
+        entries = []
+        for r in snap["stocks"]:
+            d = stock_decision(r["ticker"], pf)
+            if d:
+                entries.append(diary.entry(d, mine.get(r["ticker"])))
+        index = {e["ticker"] for e in entries}
+        entries += [diary.entry(position=p) for p in pf.get("positions") or [] if (p.get("ticker") or p["isin"]) not in index and p.get("action")]
+        if diary.save(day, entries):
+            log.info("signal diary: %d verdicts saved for %s", len(entries), day)
+    except Exception:
+        log.exception("signal diary not saved")
+
+
 def save_portfolio_history():
     """Today's picture of my portfolio in portafoglio/storico/ (history.py); never stops the price refresh."""
     try:
@@ -780,6 +814,7 @@ def worker():
             store.refresh_intraday()
             store.build()
             portfolio.refresh()
+            save_signal_diary()
             macro_calendar.refresh()                             # does real work at most once a day (more on release days)
         except Exception:
             log.exception("refresh failed")
@@ -1172,6 +1207,20 @@ def api_thesis():
     except ValueError as e:
         return jsonify(error=str(e)), 400
     return jsonify(ok=True)
+
+
+@app.route("/api/diary")
+def api_diary():
+    """Signal diary: how each kind of verdict did after 1, 3 and 6 months (diary.py). Personal data, local only."""
+    import diary
+    with store.lock:
+        daily = store.daily
+    bench = daily.get(SIGNAL_BENCH)
+    if bench is None:
+        return jsonify(error="dati non pronti"), 503
+    tickers = [c["ticker"] for c in store.constituents]
+    closes = {t: daily[t]["Close"].dropna() for t in tickers if t in daily}
+    return app.response_class(json.dumps(diary.results(closes, bench["Close"].dropna()), default=clean), mimetype="application/json")
 
 
 @app.route("/api/portfolio/history")

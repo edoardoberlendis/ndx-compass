@@ -137,6 +137,15 @@ Oppure dal Terminale:
   del test (✅/❌ per le 6 condizioni, con i numeri veri passando sopra), una spiegazione semplice, i dettagli a 1, 3 e 6
   mesi e anno per anno, e i titoli che lo presentano nel report scelto in Report (per i pattern di tipo evento: quelli
   in cui è scattato nelle ultime 5 sedute, con la data). **Nessun pattern è mostrato come "favorevole"**: vedi sotto.
+- **Diario dei segnali** (verifica dal vivo): analisti, valutazione e notizie non si possono provare sul passato, quindi
+  i verdetti della sezione Decisione si verificano da oggi in avanti. Dopo ogni chiusura (o al primo avvio prima
+  dell'apertura successiva) la dashboard salva in `portafoglio/diario/AAAA-MM-GG.json` il verdetto di ogni titolo del
+  Nasdaq-100 e delle mie posizioni: data, prezzo, verdetto, livelli del piano e regole soddisfatte o no. Dopo 1, 3 e
+  6 mesi (21, 63 e 126 sedute) la pagina **Diario** misura ogni categoria di verdetto contro QQQ e contro tutti i
+  titoli dello stesso giorno: casi, giorni, rendimento medio e mediano, extra-rendimento, % di volte meglio. Finché
+  una categoria ha meno di 100 casi o meno di 20 giorni diversi la pagina scrive "troppo pochi casi". Il diario non si
+  modifica mai a posteriori: un giorno si scrive una volta sola, anche se poi le regole cambiano. Le posizioni fuori
+  dal Nasdaq-100 sono salvate ma non entrano nelle statistiche.
 - **Scheda titolo**: grafico 1G–MAX, confronto con NDX, fondamentali, target degli analisti, notizie, più:
   - **Decisione** (solo titoli del Nasdaq-100; assorbe la vecchia "Analisi tecnica"): la scheda che un analista
     porterebbe al comitato d'investimento, in cinque blocchi letti in ordine (`decision.py`).
@@ -313,6 +322,7 @@ residuo (favorisce i pattern di forza), test multipli, casi sovrapposti, nessun 
 | `history.py` | Storico giornaliero del portafoglio e rendimento ponderato per il tempo contro QQQ e VWCE |
 | `risk.py` | Rischio del portafoglio: volatilità, beta, scenario, massima perdita, contributo al rischio, correlazione |
 | `rules.py` | Le mie regole di investimento (limiti) e il controllo sul portafoglio |
+| `diary.py` | Diario dei segnali: salva ogni giorno i verdetti e misura com'è andata ogni categoria dopo 1, 3 e 6 mesi |
 | `decision.py` | Sezione Decisione della scheda titolo: cinque blocchi, verdetto e piani operativi con regole esplicite |
 | `technical.py` | Numeri della sezione Analisi tecnica nella scheda del titolo (ATR, livelli, pattern, settore e tema) |
 | `portfolio.py` | Portafoglio: lettura dell'export Fineco, ticker Yahoo, valori in euro |

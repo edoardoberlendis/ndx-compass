@@ -33,6 +33,7 @@
     <button class="tab" data-view="sectors">Settori</button>
     <button class="tab" data-view="ideas">Report</button>
     <button class="tab" data-view="trade">Pattern tecnici</button>
+    <button class="tab" data-view="diary">Diario</button>
   </div>
   <div class="updated"><span class="status" id="status"></span><span class="cal-warn" id="calWarn" hidden>⚠ Festività USA: elenco da aggiornare</span><span id="updated"></span></div>
 </nav>
@@ -164,6 +165,9 @@
     <div class="toolbar"><span class="muted" id="ptMeta"></span><button class="link-btn" data-goto="ideas">Cambia report nella scheda Report →</button></div>
     <div id="ptBody"></div>
   </section>
+
+  <!-- DIARIO DEI SEGNALI (live check of the verdicts, diary.py) -->
+  <section id="view-diary" class="view" hidden><div id="diaryBody"></div></section>
 
   <!-- REPORT (twice-daily trend report; view id "ideas" kept for saved links) -->
   <section id="view-ideas" class="view" hidden>
