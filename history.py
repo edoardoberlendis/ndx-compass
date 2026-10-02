@@ -173,6 +173,16 @@ def record(pf, today=None):
     return True
 
 
+def first_seen():
+    """{isin: first day the position appears in the history} (the Fineco export has no purchase dates)."""
+    out = {}
+    with _lock:
+        for d in _days():
+            for p in _read(d)["positions"]:
+                out.setdefault(p["isin"], d)
+    return out
+
+
 # ---------------------------------------------------------------- performance
 
 def _bench_series(start):

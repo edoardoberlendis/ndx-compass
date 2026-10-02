@@ -921,6 +921,8 @@ const PF_DASH = () => [
   { k: "name", l: "Titolo", cls: "l", sort: x => x.name, html: pfName },
   { k: "value", l: "Valore", sort: x => x.value, html: x => fEur(x.value) },
   { k: "weight", l: "Peso", sort: x => x.weight, html: x => isNum(x.weight) ? fNum(x.weight, 1) + "%" : "—" },
+  { k: "action", l: "Azione", cls: "l", i: "Azione proposta dalle regole (clicca per la tesi e i motivi). Regole di disciplina, non verificate da backtest.", sort: x => ({ "Riduci": 3, "Rivedi la tesi": 2, "Accumula": 1 }[x.action?.action] || 0),
+    html: x => x.action ? `<button class="act-btn" data-pos="${esc(x.isin)}" title="${esc(x.action.reasons.join(" · ") || "Nessuna regola scattata")}">${actBadge(x.action)}${x.action.silenced ? ` <span class="muted small">rivista</span>` : ""}${x.thesis ? "" : ` <span class="muted small">senza tesi</span>`}</button>` : "—" },
   { ...ndxCol("trend", "Trend"), cls: "" }, { ...ndxCol("signal", "Segnale"), cls: "l" }, { ...ndxCol("valLabel", "Valutazione"), cls: "l" },
   { ...ndxCol("upside", "Potenziale analisti"), cls: "" }, { ...ndxCol("earnings", "Prossima trimestrale"), cls: "l" },
 ];
@@ -935,12 +937,15 @@ const PF_COLS = [
   { k: "fxEffect", l: "Di cui cambio", i: FX_INFO, sort: x => x.fxEffect, html: x => x.currency === "EUR" ? `<span class="muted">—</span>` : `<span class="${sign(x.fxEffect)}">${fEurS(x.fxEffect)}</span>` },
   { k: "today", l: "Oggi", i: "Variazione di oggi in euro, dovuta al prezzo (rispetto alla chiusura precedente della sua borsa).", sort: x => x.today, html: x => `<span class="${sign(x.today)}">${fEurS(x.today)}</span>` },
   { k: "weight", l: "Peso", i: "Quota del valore totale del portafoglio.", sort: x => x.weight, html: x => isNum(x.weight) ? fNum(x.weight, 1) + "%" : "—" },
+  { k: "action", l: "Azione", cls: "l", i: "Azione proposta dalle regole (clicca per la tesi e i motivi). Regole di disciplina, non verificate da backtest.", sort: x => ({ "Riduci": 3, "Rivedi la tesi": 2, "Accumula": 1 }[x.action?.action] || 0),
+    html: x => x.action ? `<button class="act-btn" data-pos="${esc(x.isin)}" title="${esc(x.action.reasons.join(" · ") || "Nessuna regola scattata")}">${actBadge(x.action)}${x.action.silenced ? ` <span class="muted small">rivista</span>` : ""}${x.thesis ? "" : ` <span class="muted small">senza tesi</span>`}</button>` : "—" },
 ];
 function renderPortfolio() {
   const D = pf.data;
   const empty = !D || !D.file || D.error;
   $("#pfEmpty").hidden = !empty; $("#pfBody").hidden = empty;
   renderRules();
+  renderAttention();
   if (empty) {
     $("#pfEmpty").innerHTML = D?.error ? esc(D.error)
       : `Nessun file del portafoglio. Esporta le posizioni da Fineco in Excel (.xls) e caricale con il pulsante <b>Carica file Fineco</b> qui sopra, oppure trascina il file su questa pagina.`;
@@ -1001,6 +1006,85 @@ function renderConcentration() {
   };
   $("#pfConcNote").innerHTML = `${notes[pf.dim]} Barra chiara = valore investito, barra scura = esposizione effettiva.`;
 }
+// ---- thesis and proposed action of each position (actions.py, portafoglio/tesi.json)
+const ACT_CLS = { "Riduci": "red", "Rivedi la tesi": "rev", "Accumula": "acc", "Mantieni": "hold" };
+const actBadge = a => `<span class="act ${ACT_CLS[a.action] || "hold"}">${esc(a.label || a.action)}</span>`;   // label: "Rivedi · target raggiunto"
+const TAX_NOTE = "Stima indicativa, non è una consulenza fiscale: non conta commissioni, minusvalenze che hai già, né casi particolari.";
+const actTax = a => a.tax ? `<span class="act-tax">Effetto fiscale stimato: ${esc(a.tax.text)}. ${info(`<b>Effetto fiscale stimato.</b> Guadagno o perdita in euro sulla parte da vendere, in proporzione al «Valore di carico» di Fineco, con l'imposta indicativa del 26%.<br><br>
+  <b>Azioni ed ETC/ETN</b>: guadagni e perdite sono «redditi diversi» e si compensano tra loro (le perdite valgono per i 4 anni successivi).<br>
+  <b>ETF UCITS</b>: i guadagni sono «redditi di capitale», tassati al 26% senza poterli compensare con le perdite; le perdite sono «redditi diversi».<br><br>${TAX_NOTE}`)}</span>` : "";
+const ACT_INFO = `Per ogni posizione la dashboard propone <b>Mantieni</b>, <b>Accumula</b>, <b>Riduci</b> o <b>Rivedi la tesi</b> con regole esplicite: accanto vedi quali sono scattate e con quali numeri.
+  Vince la più grave: Riduci, poi Rivedi la tesi, poi Accumula.<br><br>Sono <b>regole di disciplina scelte da te, non verificate da un backtest</b>: servono a non dimenticare le cose da controllare,
+  non dicono cosa farà il prezzo. «Accumula» scatta solo se hai scritto un peso obiettivo nella tesi.`;
+function renderAttention() {
+  const el = $("#pfAttention"), D = pf.data, S = D?.actions;
+  if (!S || !D.positions?.length) { el.hidden = true; return; }
+  el.hidden = false;
+  const rank = { "Riduci": 0, "Rivedi la tesi": 1, "Accumula": 2 };
+  const list = D.positions.filter(p => p.action && p.action.action !== "Mantieni").sort((a, b) => rank[a.action.action] - rank[b.action.action] || b.value - a.value);
+  el.innerHTML = `<div class="card-h"><h2>Cosa richiede attenzione oggi ${info(ACT_INFO)}</h2><span class="card-meta">${list.length} ${list.length === 1 ? "posizione" : "posizioni"} su ${D.positions.length}</span></div>
+    ${list.length ? `<div class="att-list">${list.map(p => `<button class="att-it" data-pos="${esc(p.isin)}">${actBadge(p.action)}<b>${esc(p.ticker || p.name)}</b>
+        <span class="att-why">${p.action.reasons.map(esc).join(" · ")}${actTax(p.action)}</span></button>`).join("")}</div>`
+      : `<div class="pf-rules-head">🟢 Nessuna posizione richiede attenzione oggi.</div>`}
+    <div class="muted small">${S.silenced ? `${S.silenced} ${S.silenced === 1 ? "posizione rivista" : "posizioni riviste"} negli ultimi 30 giorni (silenziate finché non scatta un motivo nuovo) · ` : ""}${S.noThesis ? `${S.noThesis} ${S.noThesis === 1 ? "posizione" : "posizioni"} senza tesi (clicca l'azione di una posizione nella tabella per scriverla) · ` : ""}regole di disciplina, non verificate da backtest · non è una consulenza finanziaria</div>`;
+}
+// panel of one position: thesis to write or edit, proposed action and the full list of rules
+function openPosition(isin) {
+  const p = pf.data?.positions?.find(x => x.isin === isin);
+  if (!p || !p.action) return;
+  const th = p.thesis || {}, A = p.action;
+  state.detail = null; state.macro = null; state.panel = "position"; pf.openPos = isin;
+  const icon = { on: "✅", off: "—", na: "·" };
+  const num = (k, label, hint) => `<label><span>${label}</span><input type="number" step="any" min="0" data-th="${k}" value="${isNum(th[k]) ? th[k] : ""}" placeholder="facoltativo"><span class="muted small">${hint}</span></label>`;
+  const txt = (k, label, ph) => `<label class="th-txt"><span>${label}</span><textarea data-th="${k}" rows="3" maxlength="2000" placeholder="${ph}">${esc(th[k] || "")}</textarea></label>`;
+  const groups = ["Riduci", "Rivedi la tesi", "Accumula"];
+  drawer.classList.remove("full");
+  drawer.innerHTML = `<div class="d-top"><div class="d-head"><div><div class="tt">${esc(p.ticker || p.symbol || p.name)}</div><div class="nm">${esc(p.name)} · ${fNum(p.weight, 1)}% del portafoglio</div></div>
+      <div class="actions"><button class="icon-btn close-btn" id="dClose" aria-label="Chiudi">×</button></div></div></div>
+    <div class="d-rest pos-d">
+      <div class="d-sec"><h3>Azione proposta ${info(ACT_INFO)}</h3><p>${actBadge(A)}</p>
+        ${A.reasons.length ? `<ul class="why">${A.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : `<p class="muted">${A.silenced ? "Motivi già rivisti da te (vedi sotto)." : "Nessuna regola scattata."}</p>`}
+        ${A.tax ? `<p class="small">${actTax(A)}<br><span class="muted">${TAX_NOTE}</span></p>` : ""}
+        ${A.silenced ? `<div class="rev-box"><b>Tesi rivista il ${dayIT(A.silenced.date)}</b>: «${esc(A.silenced.note)}»<br><span class="muted small">Motivi silenziati ancora per ${A.silenced.until} ${A.silenced.until === 1 ? "giorno" : "giorni"}, a meno che non ne scatti uno nuovo: ${A.silenced.rules.map(esc).join(" · ")}.</span></div>` : ""}
+        ${A.canReview ? `<div class="rev-box"><label><b>Ho rivisto la tesi</b> <span class="muted small">scrivi in una riga perché la tieni (o cosa hai deciso): i motivi «Rivedi» scattati restano silenziati per 30 giorni, a meno che non ne scatti uno nuovo.</span>
+          <input type="text" id="revNote" maxlength="300" placeholder="Per esempio: il calo dipende dal settore, i conti restano solidi"></label>
+          <div class="toolbar"><button class="btn" id="revSave">Ho rivisto la tesi</button><span id="revMsg" class="small"></span></div></div>` : ""}
+        ${A.notes.length ? `<p class="muted small">${A.notes.map(esc).join("<br>")}</p>` : ""}</div>
+      <div class="d-sec"><h3>La mia tesi</h3>
+        <div class="th-form">${txt("why", "Perché la possiedo", "In una o due frasi")}${txt("expect", "Cosa mi aspetto", "Per esempio: crescita dei ricavi, nuovo prodotto, recupero dei margini…")}
+          ${txt("sell", "Cosa mi farebbe vendere", "Per esempio: se i ricavi rallentano, se perde il contratto X, se scende sotto…")}
+          <div class="th-nums">${num("stop", "Stop", `prezzo in ${esc(p.currency)} · ora ${fPrice(p.price)}`)}${num("target", "Target", `prezzo in ${esc(p.currency)}`)}${num("weight", "Peso obiettivo", `% del portafoglio · ora ${fNum(p.weight, 1)}%`)}</div></div>
+        <div class="toolbar" style="margin-top:10px"><button class="btn primary" id="thSave">Salva la tesi</button><span id="thMsg" class="small muted">${th.updated ? `ultima modifica ${dayIT(th.updated)}` : "non ancora scritta"}</span></div></div>
+      <div class="d-sec"><h3>Tutte le regole</h3>
+        ${groups.map(g => `<h4 class="bt-h">${g}${g === "Accumula" ? " (devono valere tutte)" : ""}</h4><ul class="rule-list">${A.rules.filter(r => r.group === g).map(r =>
+          `<li class="${r.state}"><span class="ri">${icon[r.state]}</span><span><b>${r.id}</b> ${esc(r.text)}<span class="muted small"> ${r.state === "na" ? "non valutabile: " : ""}${esc(r.detail)}</span></span></li>`).join("")}</ul>`).join("")}
+        <p class="muted small">✅ scattata (per Accumula: soddisfatta) · — non scattata · “non valutabile” quando manca il dato. Regole di disciplina, non verificate da backtest.</p></div>
+      ${p.ticker && state.bySym.has(p.ticker) ? `<button class="link-btn" data-mopen="${esc(p.ticker)}">Apri la scheda del titolo →</button>` : ""}
+      <p class="disclaimer">Non è una consulenza finanziaria.</p></div>`;
+  drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); scrim.hidden = false;
+  $("#dClose").onclick = closeDetail;
+  if ($("#revSave")) $("#revSave").onclick = async () => {
+    const note = $("#revNote").value.trim();
+    if (note.length < 3) { $("#revMsg").innerHTML = `<span class="down">Scrivi una riga di motivazione.</span>`; return; }
+    try {
+      await pfPost("/api/thesis/review", { body: JSON.stringify({ isin, note }), headers: { "Content-Type": "application/json" } });
+      await loadPortfolio();
+      openPosition(isin);
+    } catch (e) { $("#revMsg").innerHTML = `<span class="down">Non salvato: ${esc(e.message)}</span>`; }
+  };
+  $("#thSave").onclick = async () => {
+    const body = { isin };
+    drawer.querySelectorAll("[data-th]").forEach(i => { const k = i.dataset.th; body[k] = i.tagName === "TEXTAREA" ? i.value : (i.value.trim() === "" ? null : parseFloat(i.value.replace(",", "."))); });
+    if (["stop", "target", "weight"].some(k => body[k] !== null && !(body[k] > 0)) || body.weight > 100) { $("#thMsg").innerHTML = `<span class="down">Stop, target e peso obiettivo devono essere numeri positivi (il peso al massimo 100).</span>`; return; }
+    try {
+      await pfPost("/api/thesis", { body: JSON.stringify(body), headers: { "Content-Type": "application/json" } });
+      await loadPortfolio();
+      openPosition(isin);
+      $("#thMsg").textContent = "✓ Tesi salvata";
+    } catch (e) { $("#thMsg").innerHTML = `<span class="down">Non salvata: ${esc(e.message)}</span>`; }
+  };
+}
+document.addEventListener("click", e => { const b = e.target.closest("[data-pos]"); if (b) { e.stopPropagation(); openPosition(b.dataset.pos); } }, true);
 // ---- history and performance (history.py): daily pictures in portafoglio/storico/, time-weighted return vs references
 const PERF_INFO = `<b>Rendimento ponderato per il tempo.</b> Se oggi il portafoglio vale 30.000 € e domani aggiungi 5.000 €, il valore sale a 35.000 € ma non hai guadagnato nulla.
   Per questo ogni giorno il rendimento è calcolato <b>solo sui soldi che c'erano già</b> (valore di fine giornata meno i soldi aggiunti, diviso il valore del giorno prima),

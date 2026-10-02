@@ -1078,15 +1078,63 @@ def api_watchlist():
                               mimetype="application/json")
 
 
-@app.route("/api/portfolio")
-def api_portfolio():
-    """My positions from the newest export in portafoglio/ (personal data: served only to this Mac, never cached)."""
-    import rules  # local import: keeps the personal-data modules together
+def portfolio_view():
+    """My positions with rules, theses and proposed actions (personal data: only served to this Mac, never cached)."""
+    import actions
+    import analysts
+    import history
+    import risk
+    import rules  # local imports: keep the personal-data modules together
     with store.lock:
         snap, infos = store.snapshot, dict(store.infos)
     pf = portfolio.snapshot(snap, infos)
     pf["rules"] = rules.evaluate(pf)          # my limits and whether the portfolio respects them
-    return app.response_class(json.dumps(pf, default=clean), mimetype="application/json")
+    tickers = [p["ticker"] for p in pf.get("positions") or [] if p.get("ticker")]
+    if tickers:
+        risk.history(tickers)                 # starts the daily download of 2 years of prices if needed (for the 200-day average)
+    rows = {r["ticker"]: r for r in snap["stocks"]} if snap else {}
+    pf["actions"] = actions.evaluate(pf, pf["rules"], {       # thesis and proposed action of every position (actions.py)
+        "rows": rows, "sma200": risk.sma200(), "firstSeen": history.first_seen(),
+        "analysts": {t: analysts.analyst_summary(store.analysts.get(t)) for t in tickers if store.analysts.get(t)}})
+    return pf
+
+
+@app.route("/api/portfolio")
+def api_portfolio():
+    """My positions from the newest export in portafoglio/."""
+    return app.response_class(json.dumps(portfolio_view(), default=clean), mimetype="application/json")
+
+
+@app.route("/api/thesis/review", methods=["POST"])
+def api_thesis_review():
+    """"Ho rivisto la tesi": save my reason; the review rules that fired stay silent for 30 days unless a new one fires."""
+    import actions
+    if not local_request():
+        return jsonify(error="La tesi si modifica solo dalla dashboard aperta su questo Mac."), 403
+    body = request.get_json(silent=True) or {}
+    p = next((x for x in portfolio_view().get("positions") or [] if x["isin"] == body.get("isin")), None)
+    if not p:
+        return jsonify(error="Posizione non trovata."), 404
+    fired = [r["id"] for r in p["action"]["rules"] if r["group"] == "Rivedi la tesi" and r["state"] == "on"]
+    try:
+        actions.review(p["isin"], body.get("note"), fired)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(ok=True)
+
+
+@app.route("/api/thesis", methods=["POST"])
+def api_thesis():
+    """Save the thesis of one position in portafoglio/tesi.json (only from the dashboard open on this Mac)."""
+    import actions
+    if not local_request():
+        return jsonify(error="La tesi si modifica solo dalla dashboard aperta su questo Mac."), 403
+    body = request.get_json(silent=True) or {}
+    try:
+        actions.save(body.get("isin"), body)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(ok=True)
 
 
 @app.route("/api/portfolio/history")

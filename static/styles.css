@@ -721,3 +721,26 @@ table.pf tr.lev td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 /* ------------------------------------------------ portfolio: history and performance */
 #pfPerf .perf-flow { font-size: 10px; }
 #pfPerf .series-key { margin-bottom: 4px; }
+/* ------------------------------------------------ portfolio: thesis and proposed actions */
+.act { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px; white-space: nowrap; background: var(--surface-2); color: var(--ink-2); }
+.act.red { background: var(--down-bg); color: var(--down); }
+.act.rev { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.act.acc { background: var(--up-bg); color: var(--up); }
+.act-btn { border: 0; background: none; padding: 0; font: inherit; cursor: pointer; text-align: left; }
+.pf-att { border-left: 4px solid var(--accent); }
+.att-list { display: flex; flex-direction: column; margin-bottom: 6px; }
+.att-it { display: grid; grid-template-columns: 110px 90px minmax(0, 1fr); gap: 10px; align-items: baseline; text-align: left; border: 0; border-top: 1px solid var(--grid); background: none; padding: 7px 0; font: inherit; color: var(--ink); cursor: pointer; }
+.att-it:first-child { border-top: 0; }
+.att-it:hover b { color: var(--accent); }
+.att-why { color: var(--ink-2); font-size: 12.5px; line-height: 1.45; }
+@media (max-width: 700px) { .att-it { grid-template-columns: 1fr; gap: 2px; } }
+.th-form label { display: block; margin-bottom: 10px; }
+.th-form label > span:first-child { display: block; font-weight: 600; font-size: 12.5px; margin-bottom: 3px; }
+.th-form textarea, .th-form input { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--ink); font: inherit; }
+.th-nums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.rule-list { list-style: none; margin: 4px 0 10px; padding: 0; }
+.rule-list li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--grid); line-height: 1.45; }
+.rule-list li.na, .rule-list li.off { color: var(--ink-2); }
+.act-tax { display: block; margin-top: 3px; color: var(--ink-2); font-size: 12px; }
+.rev-box { margin-top: 10px; padding: 10px 12px; border-radius: 6px; background: var(--surface-2); line-height: 1.5; }
+.rev-box input { display: block; width: 100%; box-sizing: border-box; margin: 6px 0 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--ink); font: inherit; }

@@ -77,6 +77,13 @@ def history(tickers):
     return None
 
 
+def sma200():
+    """{ticker: 200-day average of the closes} from the prices already in memory (empty until they are downloaded)."""
+    with _lock:
+        closes = dict(_hist["closes"])
+    return {t: float(c.iloc[-200:].mean()) for t, c in closes.items() if len(c) >= 200}
+
+
 # ---------------------------------------------------------------- the numbers
 
 def _eur(close, currency, fx):

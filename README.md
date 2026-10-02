@@ -68,6 +68,30 @@ Oppure dal Terminale:
   di caricamento del file, non ci sono liquidità né dividendi incassati, sotto i 3 mesi lo storico è troppo corto per
   trarre conclusioni. Lo storico parte dal 2 ottobre 2026; dal solo file attuale il passato non si può ricostruire
   (mancano date e prezzi dei singoli acquisti).
+- **Tesi e azioni sulle posizioni** (scheda Portafoglio): per ogni posizione posso scrivere una tesi breve (perché la
+  possiedo, cosa mi aspetto, cosa mi farebbe vendere) con stop, target e peso obiettivo facoltativi, salvata in
+  `portafoglio/tesi.json` (solo su questo Mac). La dashboard propone **Mantieni / Accumula / Riduci / Rivedi la tesi**
+  con regole esplicite (`actions.py`); vince la più grave e accanto compaiono i motivi con i numeri.
+  **Riduci**: R1 peso sopra il mio limite (titolo, ETF ampio, altro ETF), R2 prodotto a leva con i limiti sulla leva
+  superati. **Rivedi la tesi**: V1 stop rotto, V2 target raggiunto (valuta una presa di profitto), V3 prezzo sotto la
+  media 200, V4 stime di utile tagliate di oltre il 3% in 30 giorni, V5 più downgrade che upgrade in 30 giorni,
+  V6 perdita oltre il 25% dal prezzo di carico, V7 prodotto a leva nello storico da più di 30 giorni, V8 tesi più
+  vecchia di 6 mesi. **Accumula** solo se: A1 peso sotto l'80% del mio peso obiettivo, A2 nessuna regola Riduci o
+  Rivedi scattata, A3 arrivare all'obiettivo non supera nessun mio limite, A4 non è un prodotto a leva, A5 nessuna
+  trimestrale entro 5 giorni (altrimenti Mantieni con la nota "accumula dopo la trimestrale del …"). Il target
+  raggiunto compare con l'etichetta **"Rivedi · target raggiunto"**. Il motivo della V6 non suggerisce di vendere
+  ("la tesi è ancora valida? Decidi in base alle prospettive, non al prezzo pagato"). Pulsante **Ho rivisto la tesi**
+  nel pannello: scrivo una riga di motivazione, salvata in `tesi.json` con la data, e i motivi "Rivedi" scattati
+  restano silenziati per 30 giorni, a meno che non ne scatti uno nuovo; nel riquadro le posizioni silenziate sono solo
+  un conteggio. Accanto a "Riduci" e a "Rivedi · target raggiunto" c'è l'**effetto fiscale stimato**: plusvalenza o
+  minusvalenza sulla quota da vendere (sull'intera posizione per il target) e imposta indicativa al 26%; azioni ed
+  ETC/ETN: redditi diversi, plus e minus compensabili; ETF UCITS: i guadagni sono redditi di capitale (non compensano
+  le minusvalenze), le perdite redditi diversi. È una stima indicativa, non una consulenza fiscale. Note senza
+  azione: tesi mancante, trimestrale entro 5 giorni, tema/settore/paese sopra il limite, segnale e Trend ("non
+  verificati"). In cima alla scheda il riquadro **Cosa richiede attenzione oggi** elenca solo le posizioni con azione
+  diversa da Mantieni; la colonna "Azione" della tabella apre il pannello della posizione (tesi, azione, tutte le
+  regole con ✅ / — / non valutabile). Sono regole di disciplina, **non verificate da un backtest**: V4 e V5 valgono
+  solo per i titoli del Nasdaq-100.
 - **Portafoglio**: le mie posizioni reali, dall'export Excel di Fineco ("Portafoglio sintesi") messo nella cartella
   `portafoglio/` (la dashboard legge da sola il file più recente). Il file si carica dalla scheda con il pulsante
   **Carica file Fineco** o trascinandolo sulla pagina: prima compare un'anteprima (posizioni nuove, vendute, con
@@ -275,6 +299,7 @@ residuo (favorisce i pattern di forza), test multipli, casi sovrapposti, nessun 
 |---|---|
 | `server.py` | Server: scarica i dati e li serve alla pagina web |
 | `signals.py` | Report tecnico due volte al giorno (schede Report e Pattern tecnici) |
+| `actions.py` | Tesi delle posizioni e azione proposta (Mantieni / Accumula / Riduci / Rivedi la tesi) con le sue regole |
 | `analysts.py` | Dati degli analisti e valutazione (scaricati una volta al giorno) |
 | `score.py` | Segnale finale (analisti + valutazione + notizie) e Trend a parte |
 | `backtest.py` | Backtest del Trend e, con `--patterns`, test dei pattern tecnici (a mano) |
