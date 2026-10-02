@@ -1719,85 +1719,78 @@ async function loadDetailChart() {
   }
 }
 
-// ------------------------------------------------------------ detail: Analisi tecnica (index stocks only)
-// Raw levels come from the server (technical.py, closed sessions); entry is the live price and the plan is computed here,
-// so it follows the risk percentage chosen in the section. Rule of the dashboard: only patterns that passed the test
-// (reports/patterns.json) can appear in the verdict, and never as "favorevole". Texts are fixed, numbers come from the data.
-const TA_ATR = { stopMa: 0.5, stopAtr: 2, okMin: 1.5, okMax: 3.5, entry: 0.25, stopLevel: 1 };   // multiples of the ATR
-const TA_NEAR = 5, TA_RANGE = 12;      // resistance "near": within 5% below the 52-week high; sideways phase: at most 12% wide
-const dTA = { t: null, ta: null, fx: null, trend: "", sel: {} };
+// ------------------------------------------------------------ detail: Decisione (index stocks only)
+// The sheet an analyst would bring to the investment committee, in five blocks read in order (decision.py computes
+// everything, also for the signal diary; this code only shows it). Rules of the dashboard: every indication shows the
+// rules that produced it; only patterns that passed the test can be called "verificato"; nothing is a recommendation.
+const dTA = { t: null, ta: null, D: null, fx: null, trend: "", sel: {} };
 const fUsd = v => isNum(v) ? fNum(v, 2) + " $" : "—";
-const TA_INFO = `Una lettura tecnica del titolo in cinque parti. Solo il <b>verdetto</b> si basa su pattern che hanno superato il test
-  della scheda Pattern tecnici; tutto il resto descrive la situazione e aiuta a decidere <b>quanto rischiare</b>, non dice se il prezzo salirà.`;
+const DEC_INFO = `La scheda che un analista porta al comitato d'investimento, in cinque blocchi da leggere in ordine.
+  <b>L'azienda e la valutazione decidono SE comprare, il tempismo tecnico decide QUANDO e A CHE PREZZO, il portafoglio decide QUANTO.</b><br><br>
+  Il verdetto finale esce da regole esplicite, elencate sotto con ✅ e ❌. Queste regole <b>non sono verificate da un backtest</b>
+  (analisti e fondamentali non hanno uno storico gratuito): il Diario dei segnali le misura da oggi in avanti. Non è una consulenza finanziaria.`;
 const TA_PLAN_INFO = `Questi livelli servono a <b>decidere in anticipo quanto rischi</b>, non a prevedere il prezzo.<br><br>
   <b>Stop</b>: il prezzo sotto il quale esci. Si appoggia a un livello oggettivo (media a 50 giorni, ultimo minimo) oppure alla volatilità.<br>
   <b>ATR</b>: di quanto si muove in media il titolo in un giorno (ultime 14 sedute).<br>
   <b>Target</b>: convenzionale, a 2 volte il rischio. Non è una previsione.<br>
-  <b>Quante azioni</b>: il numero con cui, se scatta lo stop, perdi al massimo la percentuale del portafoglio che hai scelto,
-  senza superare il tuo limite per singolo titolo. Le due percentuali vengono dalle tue regole (scheda Portafoglio → Modifica regole). Lo stop non garantisce il prezzo di uscita: con un'apertura in forte ribasso la perdita può essere maggiore.`;
+  <b>Quante azioni</b>: il numero con cui, se scatta lo stop, perdi al massimo il rischio per operazione delle tue regole, senza superare lo spazio che le tue regole lasciano
+  (titolo, tema, settore, paese). Lo stop non garantisce il prezzo di uscita: con un'apertura in forte ribasso la perdita può essere maggiore.`;
 const TA_WAIT_INFO = `Un ordine condizionato compra solo se il prezzo supera un livello. Qui il livello è la resistenza più un
   <b>margine di un quarto di ATR</b> (l'ATR è il movimento medio di un giorno): serve a non far scattare l'ordine per un superamento di pochi centesimi.<br><br>
   Lo stop è un ATR sotto il livello rotto: se il prezzo torna sotto, la rottura è fallita.`;
+const VERDICT_CLS = { "Entra ora": "acc", "Entra su ritracciamento": "wait", "Entra su rottura": "wait", "Attendi": "hold", "Evita": "red",
+  "Riduci": "red", "Rivedi la tesi": "rev", "Accumula": "acc", "Mantieni": "hold" };
+const verdictBadge = v => `<span class="act big ${VERDICT_CLS[v.category] || "hold"}">${esc(v.label)}</span>`;
 
-function taStops(entry, L, breakLevel) {
-  const a = L.atr, opts = [];
-  if (isNum(breakLevel)) opts.push({ id: "level", v: breakLevel - TA_ATR.stopLevel * a, label: `un ATR sotto il livello rotto (${fUsd(breakLevel)})` });
-  else if (isNum(L.sma50)) opts.push({ id: "sma50", v: L.sma50 - TA_ATR.stopMa * a, label: `sotto la media 50 (${fUsd(L.sma50)}) meno mezzo ATR` });
-  opts.push({ id: "low", v: L.low.v - TA_ATR.stopMa * a, label: `sotto l'ultimo minimo (${fUsd(L.low.v)} del ${dayShort(L.low.date)}) meno mezzo ATR` });
-  if (!isNum(breakLevel)) opts.push({ id: "atr", v: entry - TA_ATR.stopAtr * a, label: `${TA_ATR.stopAtr} × ATR sotto l'entrata` });
-  const ok = opts.filter(o => o.v < entry).map(o => ({ ...o, atrs: (entry - o.v) / a }));
-  let def, why;
-  if (isNum(breakLevel)) { def = ok[0]; why = "se il prezzo torna sotto il livello appena superato, la rottura è fallita."; }
-  else {
-    def = ok.filter(o => o.id !== "atr" && o.atrs >= TA_ATR.okMin && o.atrs <= TA_ATR.okMax).sort((x, y) => x.atrs - y.atrs)[0];
-    why = def ? `è il livello oggettivo più vicino a una distanza ragionevole (tra ${fNum(TA_ATR.okMin, 1)} e ${fNum(TA_ATR.okMax, 1)} ATR).`
-      : `media 50 e ultimo minimo sono troppo vicini o troppo lontani dal prezzo (fuori da ${fNum(TA_ATR.okMin, 1)}–${fNum(TA_ATR.okMax, 1)} ATR): uso la volatilità.`;
-    def = def || ok.find(o => o.id === "atr");
-  }
-  return { opts: ok, def, why };
-}
-function taSize(entry, stop, cap, fx, riskPct, maxPct) {
-  if (!isNum(cap) || !(cap > 0) || !isNum(fx)) return null;
-  const risk = entry - stop;
-  const byRisk = Math.floor(cap * riskPct / 100 * fx / risk), byCap = Math.floor(cap * maxPct / 100 * fx / entry);
-  const n = Math.max(0, Math.min(byRisk, byCap));
-  return { n, byRisk, capped: byCap < byRisk, value: n * entry, valueEur: n * entry / fx, pct: n * entry / fx / cap * 100,
-    byRiskPct: byRisk * entry / fx / cap * 100, loss: n * risk, lossEur: n * risk / fx, lossPct: n * risk / fx / cap * 100 };
-}
-// one plan (buy now, or a waiting level): entry, stop with its options, target and size
-function taPlanHTML(id, entry, entryNote, L, money, breakLevel) {
-  const { opts, def, why } = taStops(entry, L, breakLevel);
-  if (!def) return `<p class="muted small">Livelli non calcolabili per questo titolo.</p>`;
-  const st = opts.find(o => o.id === dTA.sel[id]) || def, risk = entry - st.v, target = entry + 2 * risk;
+// one operating plan computed by the server (entry, stop options, money); the stop can be switched here
+function taPlanHTML(id, p) {
+  if (!p) return `<p class="muted small">Livelli non calcolabili per questo titolo.</p>`;
+  const entry = p.entry, st = p.opts.find(o => o.id === dTA.sel[id]) || p.opts.find(o => o.id === p.def), risk = entry - st.v, target = entry + 2 * risk;
   const pct = v => fPct((v / entry - 1) * 100, 1);
-  const res = !isNum(breakLevel) && L.high52.v > entry && L.high52.v < target
-    ? `<div class="ta-note">⚠ Prima del target c'è il massimo a 52 settimane a ${fUsd(L.high52.v)} (${pct(L.high52.v)}): fino a lì il rapporto è solo ${fNum((L.high52.v - entry) / risk, 1)} : 1.</div>` : "";
-  const others = opts.filter(o => o.id !== st.id);
-  const z = taSize(entry, st.v, money.cap, money.fx, money.risk, money.max);
-  const size = !z ? `<span class="muted">inserisci il capitale qui sopra</span>`
-    : !z.n ? `<b>0</b> <span class="muted">con questo capitale e questo rischio non si arriva a un'azione intera</span>`
-    : `<b>${fNum(z.n, 0)}</b> <span class="muted">valore ${fUsd(z.value)} ≈ ${fEur(z.valueEur, 0)}, ${fNum(z.pct, 1)}% del portafoglio</span>
-      ${z.capped ? `<div class="ta-note">Limitate dal mio limite per singolo titolo (${ruleLimit(money.max)}): con il solo rischio per operazione (${ruleLimit(money.risk)}) sarebbero ${fNum(z.byRisk, 0)}, cioè il ${fNum(z.byRiskPct, 0)}% del portafoglio.</div>` : ""}
-      <div class="ta-note">Se scatta lo stop perdi circa ${fUsd(z.loss)} ≈ ${fEur(z.lossEur, 0)} (${fNum(z.lossPct, 1)}% del portafoglio).</div>`;
+  const res = p.resistance && p.resistance.v < target ? `<div class="ta-note">⚠ Prima del target c'è il massimo a 52 settimane a ${fUsd(p.resistance.v)} (${pct(p.resistance.v)}): fino a lì il rapporto è solo ${fNum((p.resistance.v - entry) / risk, 1)} : 1.</div>` : "";
+  const others = p.opts.filter(o => o.id !== st.id);
+  let size;
+  if (!isNum(p.budgetUsd)) size = `<span class="muted">${isNum(p.fx) ? "inserisci il capitale nel blocco 4" : "cambio EUR/USD non disponibile"}</span>`;
+  else {
+    const byRisk = Math.floor(p.budgetUsd / risk), byCap = Math.floor(Math.max(0, p.capUsd) / entry), n = Math.max(0, Math.min(byRisk, byCap));
+    const eur = v => fEur(v / p.fx, 0), share = v => fNum(v / p.fx / p.capital * 100, 1);
+    size = !n ? `<b>0</b> <span class="muted">${byCap < 1 ? `le tue regole non lasciano spazio per comprarne (${esc(p.capWhy)})` : "con questo capitale e questo rischio non si arriva a un'azione intera"}</span>`
+      : `<b>${fNum(n, 0)}</b> <span class="muted">valore ${fUsd(n * entry)} ≈ ${eur(n * entry)}, ${share(n * entry)}% del portafoglio</span>
+        ${byCap < byRisk ? `<div class="ta-note">Limitate dallo ${esc(p.capWhy)}: con il solo rischio per operazione (${ruleLimit(p.riskPct)}) sarebbero ${fNum(byRisk, 0)}.</div>` : ""}
+        <div class="ta-note">Se scatta lo stop perdi circa ${fUsd(n * risk)} ≈ ${eur(n * risk)} (${share(n * risk)}% del portafoglio; il tuo limite per operazione è ${ruleLimit(p.riskPct)}).</div>`;
+  }
   return `<div class="ta-plan">
-    <div><span>${isNum(breakLevel) ? "Livello di rottura" : "Entrata"}</span><div><b>${fUsd(entry)}</b> <span class="muted">${entryNote}</span></div></div>
-    <div><span>Stop</span><div><b>${fUsd(st.v)}</b> <span class="down">${pct(st.v)}</span> <span class="muted">${st.label} · ${fNum(st.atrs, 1)} ATR</span>
-      ${st.id === def.id ? `<div class="ta-note">Perché: ${why}</div>` : `<div class="ta-note">Scelto da te al posto di quello proposto.</div>`}
-      ${others.length ? `<div class="ta-note">Altre opzioni: ${others.map(o => `<button class="ta-opt" data-ta-stop="${id}:${o.id}">${fUsd(o.v)} (${pct(o.v)}) ${o.label}${o.id === def.id ? " · proposto" : ""}</button>`).join(" ")}</div>` : ""}</div></div>
+    <div><span>${p.kind === "breakout" ? "Livello di rottura" : p.kind === "pullback" ? "Ordine limite" : "Entrata"}</span><div><b>${fUsd(entry)}</b> <span class="muted">${esc(p.entryNote)}${p.kind === "pullback" ? ` · ${fPct((entry / dTA.D.price - 1) * 100, 1)} dal prezzo attuale` : ""}</span></div></div>
+    <div><span>Stop</span><div><b>${fUsd(st.v)}</b> <span class="down">${pct(st.v)}</span> <span class="muted">${esc(st.label)} · ${fNum(st.atrs, 1)} ATR</span>
+      ${st.id === p.def ? `<div class="ta-note">Perché: ${esc(p.why)}</div>` : `<div class="ta-note">Scelto da te al posto di quello proposto.</div>`}
+      ${others.length ? `<div class="ta-note">Altre opzioni: ${others.map(o => `<button class="ta-opt" data-ta-stop="${id}:${o.id}">${fUsd(o.v)} (${pct(o.v)}) ${esc(o.label)}${o.id === p.def ? " · proposto" : ""}</button>`).join(" ")}</div>` : ""}</div></div>
     <div><span>Target</span><div><b>${fUsd(target)}</b> <span class="up">${pct(target)}</span> <span class="muted">convenzionale: 2 volte il rischio → rapporto rischio/rendimento 2,0 : 1</span>${res}</div></div>
     <div><span>Quante azioni</span><div>${size}</div></div></div>`;
 }
-function taVerdict(ta) {
-  const P = pt.data;
-  if (!P) return `<p class="muted">Test dei pattern non disponibile: dal Terminale <code>.venv/bin/python backtest.py --patterns</code>. Senza test non c'è nessun segnale verificato.</p>`;
-  const mine = ta.patterns.map(x => ({ ...x, p: P.patterns.find(p => p.key === x.key) })).filter(x => x.p);
-  const when = x => x.date ? `, scattato il ${dayShort(x.date)}` : "";
-  const ok = mine.filter(x => x.p.favorable), no = mine.filter(x => !x.p.favorable);
-  return `${ok.length ? ok.map(x => `<div class="ta-ok"><b>${esc(x.p.name)}</b>${when(x)} ${info(PT_INFO[x.key] || "")}
-        <span class="pt-badge edge">${ptEdge(x.p) ? "Test superato di misura" : "Test superato"}</span><div>${ptSay(x.p, P)} È un'informazione, non un'indicazione di acquisto.</div></div>`).join("")
-      : `<p class="ta-none"><b>Nessun segnale tecnico verificato oggi.</b></p>`}
+function taBreakoutHTML(k, p) {
+  const P = pt.data, t = P?.patterns.find(x => x.key === p.pattern), h = t?.horizons["3M"], price = dTA.D.price;
+  const test = !t ? `<b>Pattern non verificato</b>: il test dei pattern non è disponibile.`
+    : `<b>${t.favorable ? "Pattern che ha superato il test, con i suoi limiti" : "Pattern non verificato: in passato, in media, non ha dato un vantaggio"}.</b>
+      «${esc(t.name)}»: ${fNum(t.n, 0)} casi; a 3 mesi, rispetto agli altri titoli nello stesso giorno, media ${ptPts(h.vsAll)} punti e mediana ${ptPts(h.vsAllMedian)};
+      ha battuto QQQ nel ${pctR(h.beat)} dei casi (tutti i titoli: ${pctR(P.all.horizons["3M"].beat)}). Condizioni del test rispettate: ${t.checks.filter(Boolean).length} su 6.
+      <b>Non è un consiglio di acquisto.</b>`;
+  return `<div class="ta-wait"><p class="warn-box">${test}</p>
+    <p>Resistenza: ${esc(p.what)} a <b>${fUsd(p.level)}</b>, ${fPct((p.level / price - 1) * 100, 1)} dal prezzo.<br>
+      <b>Livello di rottura: ordine di acquisto condizionato sopra ${fUsd(p.entry)}</b> <span class="muted">(resistenza + un quarto di ATR) ${info(TA_WAIT_INFO)}</span></p>
+    ${taPlanHTML("b" + k, p)}
+    <p class="muted small">Nota: l'ordine condizionato scatta solo sul prezzo, mentre il pattern richiede anche volumi alti (almeno 1,5 volte la media a 50 giorni) e una chiusura sopra il livello.
+      Dopo l'attivazione conviene controllare i volumi.</p></div>`;
+}
+function taPatterns(D) {
+  const T = D.timing;
+  if (!T.testAvailable) return `<p class="muted">Test dei pattern non disponibile: dal Terminale <code>.venv/bin/python backtest.py --patterns</code>. Senza test nessun pattern è verificato.</p>`;
+  const P = pt.data, when = x => x.date ? `, scattato il ${dayShort(x.date)}` : "";
+  const ok = T.patterns.filter(x => x.verified), no = T.patterns.filter(x => !x.verified);
+  const say = x => { const p = P?.patterns.find(q => q.key === x.key); return p ? ptSay(p, P) : ""; };
+  return `${ok.length ? ok.map(x => `<div class="ta-ok"><b>${esc(x.name)}</b>${when(x)} ${info(PT_INFO[x.key] || "")} <span class="ta-tag ok">verificato</span>
+        <div>${say(x)} È un'informazione, non un'indicazione di acquisto.</div></div>`).join("") : `<p><b>Nessun pattern verificato oggi.</b></p>`}
     ${no.length ? `<div class="muted small">Pattern presenti ma non verificati (non hanno superato il test):</div>
-      <ul class="ta-list">${no.map(x => `<li>${esc(x.p.name)}${when(x)} ${info(PT_INFO[x.key] || "")} <span class="ta-tag">non verificato</span></li>`).join("")}</ul>` : ""}
+      <ul class="ta-list">${no.map(x => `<li>${esc(x.name)}${when(x)} ${info(PT_INFO[x.key] || "")} <span class="ta-tag">non verificato</span></li>`).join("")}</ul>` : ""}
     <button class="link-btn" data-ta-goto="trade">Vedi i risultati del test nella scheda Pattern tecnici →</button>`;
 }
 // fixed phrases chosen from the numbers: stock vs group at 1 and 3 months, and the group's rotation phase vs the Nasdaq-100
@@ -1816,70 +1809,91 @@ function taGroupSay(t, g) {
     Weakening: "è più forte del Nasdaq-100 a 1 mese ma sta perdendo terreno", Lagging: "è più debole del Nasdaq-100 e continua a perdere terreno" }[g.quadrant];
   return `${esc(t)} è ${stock}; il ${g.kind === "sector" ? "settore" : "tema"} ${phase}.`;
 }
-function taGroups(t, ta) {
-  if (!ta.groups.length) return `<p class="muted">Settore e tema non disponibili.</p>`;
+function taGroups(t, groups) {
+  if (!groups.length) return `<p class="muted">Settore e tema non disponibili.</p>`;
   const pp = v => `<span class="${sign(v)}">${fChg(v)}</span>`;
   return `<div class="table-wrap"><table class="scr ta-grp"><thead><tr><th class="l">Gruppo</th><th class="l">Fase ${info(`Fase di rotazione rispetto a QQQ, come nella mappa della scheda Report:
       <b>Leader</b> = più forte a 1 mese e a 1 settimana; <b>In indebolimento</b> = più forte a 1 mese ma non nell'ultima settimana;
       <b>In miglioramento</b> = più debole a 1 mese ma in recupero nell'ultima settimana; <b>In ritardo</b> = più debole su entrambe.`)}</th>
       <th>Gruppo vs QQQ 1 sett.</th><th>Gruppo vs QQQ 1 mese</th><th>${esc(t)} vs gruppo 1 mese</th><th>${esc(t)} vs gruppo 3 mesi</th></tr></thead>
-    <tbody>${ta.groups.map(g => `<tr><td class="l"><b>${esc(g.name)}</b><div class="muted small">${g.kind === "sector" ? "settore" : "tema"} · ${g.n} titoli</div></td>
+    <tbody>${groups.map(g => `<tr><td class="l"><b>${esc(g.name)}</b><div class="muted small">${g.kind === "sector" ? "settore" : "tema"} · ${g.n} titoli</div></td>
       <td class="l"><span class="q ${g.quadrant}">${QLAB[g.quadrant]}</span></td><td>${pp(g.rs1w)}</td><td>${pp(g.rs1m)}</td><td>${pp(g.vs1m)}</td><td>${pp(g.vs3m)}</td></tr>`).join("")}</tbody></table></div>
-    <p class="ta-say"><b>In sintesi.</b> ${ta.groups.map(g => taGroupSay(t, g)).join(" ")}</p>
-    <p class="muted small">Valori in punti percentuali: media dei titoli del gruppo meno QQQ, e titolo meno la media del gruppo.</p>`;
+    <p class="ta-say"><b>In sintesi.</b> ${groups.map(g => taGroupSay(t, g)).join(" ")}</p>`;
 }
-// waiting levels: resistances the price has not broken yet, each tied to a tested (and failed) pattern
-function taWaiting(ta, price) {
-  const out = [], h = ta.high52, r = ta.range;
-  if (price <= h.v && price >= h.v * (1 - TA_NEAR / 100))
-    out.push({ id: "high52", level: h.v, what: `massimo a 52 settimane (chiusura più alta dell'ultimo anno, ${dayShort(h.date)})` });
-  if (r.width <= TA_RANGE && price <= r.hi && Math.abs(r.hi / h.v - 1) > 0.001)
-    out.push({ id: "range_break", level: r.hi, what: `massimo della fase laterale delle ultime ${r.days} sedute (ampiezza ${fNum(r.width, 1)}%)` });
-  return out.sort((a, b) => a.level - b.level);
+function decCompany(C) {
+  const cls = { solida: "acc", "nella media": "hold", debole: "red", "dati insufficienti": "hold" }[C.summary];
+  const pts = p => p == null ? `<span class="muted">—</span>` : `<span class="${p > 0 ? "up" : p < 0 ? "down" : "muted"}">${p > 0 ? "+1" : p < 0 ? "−1" : "0"}</span>`;
+  return `<p><span class="act big ${cls}">${esc(C.summary)}</span> <span class="muted">${C.score > 0 ? "+" : ""}${C.score} punti su ${C.known} criteri disponibili</span></p>
+    <div class="table-wrap"><table class="scr dec-crit"><tbody>${C.criteria.map(c => `<tr><td class="l">${esc(c.label)}</td><td class="l">${esc(c.text)}</td><td>${pts(c.points)}</td></tr>`).join("")}</tbody></table></div>
+    <p class="muted small">${esc(C.rule)} Soglie: crescita oltre il 10% (+1) o negativa (−1); margine netto oltre il 15% o sotto il 5%; cassa generata oltre il 10% dei ricavi o negativa;
+      debito netto ripagabile in meno di 2 anni di cassa o in più di 5; valutazione Economica o Cara; stime riviste di oltre +2% o −3%; più upgrade o più downgrade.
+      Sintesi meccanica di dati pubblici, non verificata da backtest. Il dettaglio di valutazione e analisti è più sotto nella scheda.</p>`;
 }
-function taWaitHTML(w, ta, price, money) {
-  const P = pt.data, p = P?.patterns.find(x => x.key === w.id), h = p?.horizons["3M"];
-  const x = w.level + TA_ATR.entry * ta.atr;
-  const test = !p ? `<b>Pattern non verificato</b>: il test dei pattern non è disponibile.`
-    : `<b>${p.favorable ? "Pattern che ha superato il test, con i suoi limiti" : "Pattern non verificato: in passato, in media, non ha dato un vantaggio"}.</b>
-      «${esc(p.name)}»: ${fNum(p.n, 0)} casi; a 3 mesi, rispetto agli altri titoli nello stesso giorno, media ${ptPts(h.vsAll)} punti e mediana ${ptPts(h.vsAllMedian)};
-      ha battuto QQQ nel ${pctR(h.beat)} dei casi (tutti i titoli: ${pctR(P.all.horizons["3M"].beat)}). Condizioni del test rispettate: ${p.checks.filter(Boolean).length} su 6.
-      <b>Non è un consiglio di acquisto.</b>`;
-  return `<div class="ta-wait"><p class="warn-box">${test}</p>
-    <p>Resistenza: ${w.what} a <b>${fUsd(w.level)}</b>, ${fPct((w.level / price - 1) * 100, 1)} dal prezzo.<br>
-      <b>Livello di rottura: ordine di acquisto condizionato sopra ${fUsd(x)}</b> <span class="muted">(resistenza + un quarto di ATR)</span></p>
-    ${taPlanHTML(w.id, x, "se l'ordine scatta", ta, money, w.level)}
-    <p class="muted small">Nota: l'ordine condizionato scatta solo sul prezzo${w.id === "high52" || w.id === "range_break" ? ", mentre il pattern richiede anche volumi alti (almeno 1,5 volte la media a 50 giorni) e una chiusura sopra il livello" : ""}.
-      Dopo l'attivazione conviene controllare i volumi.</p></div>`;
+function decContext(t, X) {
+  const ev = X.events.map(e => `<button class="link-btn" data-dec-macro="${esc(e.kind)}|${esc(e.date)}">${esc(MACRO[e.kind]?.title || e.kind)} · ${dayShort(e.date)}</button>`);
+  const earn = X.earningsDays == null ? "data della prossima trimestrale non nota" : X.earningsDays === 0 ? "<b>trimestrale oggi</b>" : `prossima trimestrale il ${esc(X.earningsDay)} (tra ${X.earningsDays} ${X.earningsDays === 1 ? "giorno" : "giorni"})`;
+  return `${taGroups(t, X.groups)}
+    <p><b>Trimestrale:</b> ${earn}${X.earningsDays != null && X.earningsDays <= 5 ? ` <span class="ta-tag warn">entro 5 giorni</span>` : ""}<br>
+      <b>Eventi macro dei prossimi 7 giorni:</b> ${ev.length ? ev.join(" · ") : `<span class="muted">nessuno</span>`}</p>`;
+}
+function decPlace(D) {
+  const P = D.place, L = P.limits;
+  if (!P.loaded) {
+    const manual = +LS.get("taCapital", 0) || "";
+    return `<p class="muted">Portafoglio non caricato: non posso dire se lo possiedi né quanto spazio lasciano le tue regole.</p>
+      <p>Per calcolare le quantità inserisci il capitale: <input type="number" id="taCapital" min="0" step="100" value="${manual}" placeholder="es. 20000"> €
+        <span class="muted small">(resta solo nel browser) · rischio per operazione ${ruleLimit(L.tradeRisk)}, limite per singolo titolo ${ruleLimit(L.stock)}</span></p>`;
+  }
+  const o = P.etfOverlap;
+  return `<p>${P.owned ? `<b>Lo possiedi già</b>: ${fEur(P.value, 0)}, ${fNum(P.weight, 1)}% del portafoglio.` : "<b>Non lo possiedi</b> direttamente."}
+      ${o ? `<br><b>Sovrapposizione con i tuoi ETF sul Nasdaq-100:</b> ne possiedi già circa ${fEur(o.eur, 0)} in modo indiretto (pesa il ${fNum(o.indexWeight, 2)}% dell'indice; ${o.etfs.map(esc).join(", ")}; conta la leva).`
+        : `<br><span class="muted">Nessuna sovrapposizione calcolabile: la dashboard conosce la composizione solo degli ETF sul Nasdaq-100.</span>`}</p>
+    <div class="table-wrap"><table class="scr dec-crit"><thead><tr><th class="l">La mia regola</th><th>Ora</th><th>Limite</th><th>Spazio per comprare</th></tr></thead>
+      <tbody>${P.rooms.map(r => `<tr><td class="l">${esc(r.what.split(" (limite")[0])}</td><td>${fNum(r.now, 1)}%</td><td>${ruleLimit(r.limit)}</td><td class="${r.eur <= 0 ? "down" : ""}">${r.eur > 0 ? "circa " + fEur(r.eur, 0) : "nessuno: limite già raggiunto"}</td></tr>`).join("")}</tbody></table></div>
+    <p><b>Posso comprarne al massimo circa ${fEur(P.maxBuyEur, 0)}</b> <span class="muted">(vincolo più stretto: ${esc(P.tight)})</span>
+      <button class="link-btn" data-rules-open>modifica le mie regole</button></p>
+    <p class="muted small">Titolo: quota del valore; tema, settore e paese: quota dell'esposizione effettiva, come nel riquadro «Rispetto delle regole».</p>`;
+}
+function decPlan(D) {
+  const V = D.verdict, pl = D.plans, icon = { true: "✅", false: "❌", null: "·" };
+  const brk = pl.breakouts || [];
+  const main = V.plan === "now" ? `<h5>Piano: entra ora ${info(TA_PLAN_INFO)}</h5>${taPlanHTML("now", pl.now)}`
+    : V.plan === "pullback" ? `<h5>Piano: ordine limite su ritracciamento ${info(TA_PLAN_INFO)}</h5>${taPlanHTML("pullback", pl.pullback)}
+        <p class="muted small">L'ordine limite compra solo se il prezzo scende fino a quel livello. Se il prezzo non ci arriva, non compri: è il costo di aspettare un prezzo migliore.</p>`
+    : V.plan === "breakout" ? `<h5>Piano: ordine condizionato sulla rottura</h5>${brk.filter(p => p.pattern === (V.pattern || p.pattern)).slice(0, 1).map((p, k) => taBreakoutHTML(brk.indexOf(p), p)).join("")}` : "";
+  const others = [
+    V.plan !== "now" && pl.now ? `<h5>Se comprassi adesso ${info(TA_PLAN_INFO)}</h5>${taPlanHTML("now", pl.now)}` : "",
+    V.plan !== "pullback" && pl.pullback ? `<h5>Ordine limite su ritracciamento (vicino alla media ${pl.pullback.ma})</h5>${taPlanHTML("pullback", pl.pullback)}` : "",
+    ...brk.map((p, k) => V.plan === "breakout" && p.pattern === V.pattern ? "" : `<h5>Ordine condizionato sulla rottura</h5>${taBreakoutHTML(k, p)}`),
+  ].filter(Boolean);
+  return `<div class="dec-verdict"><div>${verdictBadge(V)}</div>
+      <ul class="why">${V.why.map(w => `<li>${esc(w)}</li>`).join("")}</ul>
+      ${V.change ? `<p><b>Cosa deve cambiare:</b> ${esc(V.change)}.</p>` : ""}
+      ${V.owned ? `<p class="small">Lo possiedi: il verdetto è l'azione proposta dalle regole sulle posizioni. <button class="link-btn" data-pos="${esc(V.isin)}">Apri tesi e regole della posizione →</button></p>` : ""}</div>
+    ${main}
+    <h5>Regole del verdetto ${V.owned ? `<span class="muted">(per un nuovo acquisto; per le posizioni che hai valgono le regole della posizione)</span>` : `<span class="muted">(decide la prima non soddisfatta, in ordine)</span>`}</h5>
+    <ul class="rule-list">${D.checks.map(c => `<li class="${c.ok === false ? "bad" : c.ok ? "on" : "na"}"><span class="ri">${icon[c.ok]}</span><span><b>${c.id}</b> ${esc(c.text)}<span class="muted small"> ${c.ok == null ? "non valutabile" : ""} ${esc(c.detail)}</span></span></li>`).join("")}</ul>
+    <p class="muted small">${esc(D.principle)} Se sono tutte soddisfatte: «Entra ora». D5 non soddisfatta: «Entra su ritracciamento». D6: «Entra su rottura». D7: «Entra su ritracciamento». D1 debole: «Evita». Le altre: «Attendi».</p>
+    ${others.length ? `<details class="fold"><summary><span class="small">Altri piani possibili (${others.length}), con i loro limiti</span></summary>${others.join("")}</details>` : ""}`;
 }
 function renderTA() {
-  const el = $("#dTA"), t = state.detail, ta = dTA.ta, s = state.bySym.get(t);
-  if (!el || dTA.t !== t || !ta || !s) return;
+  const el = $("#dTA"), t = state.detail, D = dTA.D, s = state.bySym.get(t);
+  if (!el || dTA.t !== t || !D || !s) return;
   if (el.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;   // typing: do not redraw
-  const pfOk = pf.data && pf.data.file && !pf.data.error && pf.data.totals?.value > 0;
-  const fx = (pfOk && pf.data.fx) || dTA.fx;
-  const manual = +LS.get("taCapital", 0) || null;
-  const lim = pf.data?.rules?.limits || { tradeRisk: 1, stock: 10 };       // my rules (rules.py); the proposed values until they load
-  const money = { cap: pfOk ? pf.data.totals.value : manual, fx, risk: lim.tradeRisk, max: lim.stock };
-  const price = s.price, waits = taWaiting(ta, price);
-  const capLine = pfOk ? `Portafoglio: <b>${fEur(money.cap, 0)}</b> dalla scheda Portafoglio`
-    : `Portafoglio non caricato: capitale <input type="number" id="taCapital" min="0" step="100" value="${manual || ""}" placeholder="es. 20000"> €`;
-  el.innerHTML = `<h3>Analisi tecnica ${info(TA_INFO)} <span class="muted small ta-asof">livelli alla chiusura del ${dayIT(ta.asOf)} · prezzo attuale ${fUsd(price)}</span></h3>
-    <div class="ta-part"><h4>1 · Verdetto</h4>${taVerdict(ta)}</div>
-    <div class="ta-part"><h4>2 · Medie e trend</h4>${dTA.trend}</div>
-    <div class="ta-part"><h4>3 · Settore e tema</h4>${taGroups(t, ta)}</div>
-    <div class="ta-part"><h4>4 · Piano di rischio ${info(TA_PLAN_INFO)}</h4>
-      <div class="ta-money"><span>Dalle mie regole: rischio massimo per operazione <b>${ruleLimit(money.risk)}</b> del portafoglio · massimo per singolo titolo <b>${ruleLimit(money.max)}</b>
-          <button class="link-btn" data-rules-open>modifica nelle mie regole</button></span>
-        <span>${capLine}${isNum(fx) ? ` · cambio EUR/USD ${fNum(fx, 4)}` : " · cambio EUR/USD non disponibile"}</span></div>
-      <p class="muted small">Se comprassi adesso. ATR = ${fUsd(ta.atr)} (${fNum(ta.atr / price * 100, 1)}% del prezzo): quanto si muove in media il titolo in un giorno.</p>
-      ${taPlanHTML("now", price, "prezzo attuale", ta, money)}</div>
-    <div class="ta-part"><h4>5 · Livelli di attesa (ordine condizionato) ${info(TA_WAIT_INFO)}</h4>
-      ${waits.length ? waits.map(w => taWaitHTML(w, ta, price, money)).join("")
-        : `<p class="muted">Nessun livello di attesa: il prezzo non è entro il ${TA_NEAR}% sotto il massimo a 52 settimane (${fUsd(ta.high52.v)}${price > ta.high52.v ? ", già superato" : ""}) né dentro una fase laterale stretta.</p>`}</div>
-    <p class="disclaimer">Screening meccanico a scopo di studio: i livelli non sono previsioni né consigli. Non è una consulenza finanziaria.</p>`;
+  const T = D.timing, lv = T.levels;
+  el.innerHTML = `<h3>Decisione ${info(DEC_INFO)} <span class="muted small ta-asof">${dTA.ta ? `livelli alla chiusura del ${dayIT(dTA.ta.asOf)} · ` : ""}prezzo ${fUsd(D.price)}</span></h3>
+    <div class="dec-top">Verdetto: ${verdictBadge(D.verdict)} <span class="muted small">i motivi e le regole sono nel blocco 5</span></div>
+    <div class="ta-part"><h4>1 · Azienda e valutazione <span class="muted">decide se comprare</span></h4>${decCompany(D.company)}</div>
+    <div class="ta-part"><h4>2 · Contesto</h4>${decContext(t, D.context)}</div>
+    <div class="ta-part"><h4>3 · Tempismo tecnico <span class="muted">decide quando e a che prezzo</span></h4>${dTA.trend}
+      ${lv ? `<p><b>Livelli chiave:</b> massimo a 52 settimane ${fUsd(lv.high52.v)} (${dayShort(lv.high52.date)}) · media 20 ${fUsd(lv.sma20)} · media 50 ${fUsd(lv.sma50)} · media 200 ${fUsd(lv.sma200)} ·
+        ultimo minimo ${fUsd(lv.low.v)} (${dayShort(lv.low.date)}) · ATR ${fUsd(lv.atr)} (${fNum(lv.atr / D.price * 100, 1)}% del prezzo)</p>` : ""}
+      <h5>Pattern presenti ed esito del test</h5>${taPatterns(D)}</div>
+    <div class="ta-part"><h4>4 · Posto nel mio portafoglio <span class="muted">decide quanto</span></h4>${decPlace(D)}</div>
+    <div class="ta-part"><h4>5 · Piano operativo</h4>${decPlan(D)}</div>
+    <p class="disclaimer">Screening meccanico a scopo di studio: verdetto e livelli non sono previsioni né consigli, e le regole non sono verificate da backtest. Non è una consulenza finanziaria.</p>`;
 }
-async function taEnsure() {      // the pattern test and the portfolio value, loaded once
+async function taEnsure() {      // the pattern test and the portfolio (for the position panel), loaded once
   const jobs = [];
   if (!pt.data) jobs.push(getJSON("/api/patterns").then(d => { pt.data = d; }).catch(() => {}));
   if (!pf.data) jobs.push(getJSON("/api/portfolio").then(d => { pf.data = d; }).catch(() => {}));
@@ -1890,6 +1904,12 @@ drawer.addEventListener("click", e => {
   if (o) { const [id, v] = o.dataset.taStop.split(":"); dTA.sel[id] = v; return renderTA(); }
   const g = e.target.closest("[data-ta-goto]");
   if (g) { closeDetail(); return setView(g.dataset.taGoto); }
+  const k = e.target.closest("[data-dec-macro]");        // a macro event listed in the context block
+  if (k) {
+    const [kind, day] = k.dataset.decMacro.split("|");
+    (macroData ? Promise.resolve() : getJSON("/api/macro").then(d => { macroData = d; })).then(() => openMacro(macroData.events.find(x => x.kind === kind && x.date === day))).catch(() => {});
+    return;
+  }
   const m = e.target.closest("[data-mopen]");          // a stock listed in a macro event's panel
   if (m) openDetail(m.dataset.mopen);
 });
@@ -1898,13 +1918,14 @@ drawer.addEventListener("change", e => {
   const v = parseFloat(e.target.value);
   LS.set("taCapital", isNum(v) && v > 0 ? v : 0);
   e.target.blur();
-  renderTA();
+  loadDetailInfo();               // the quantities are computed by the server with this capital
 });
 
 async function loadDetailInfo() {
   const t = state.detail;
   let data = { info: {}, news: [] };
-  try { data = await getJSON(`/api/stock/${encodeURIComponent(t)}`); } catch { /* show what we have */ }
+  const cap = +LS.get("taCapital", 0);        // manual capital for the position size when the portfolio is not loaded
+  try { data = await getJSON(`/api/stock/${encodeURIComponent(t)}${cap > 0 ? `?capital=${cap}` : ""}`); } catch { /* show what we have */ }
   if (state.detail !== t) return;
   dInfo = data.info || {};
   renderDetailHeader();
@@ -1950,9 +1971,9 @@ async function loadDetailInfo() {
       ${stat("Utile per azione (12 mesi)", fNum(i.trailingEps, 2))}${stat("Utile per azione atteso", fNum(i.forwardEps, 2))}
       ${stat("Ricavi (12 mesi)", "$" + fBig(i.totalRevenue))}${stat("Rendimento dividendo", isNum(i.dividendYield) && i.dividendYield > 0 ? fNum(i.dividendYield, 2) + "%" : "—")}
     </div>`;
-  // index stocks: the Trend block lives inside "Analisi tecnica" (part 2), not twice
-  const hasTA = !!(s.ticker && data.ta);
-  Object.assign(dTA, { t, ta: hasTA ? data.ta : null, fx: data.fx, trend: trend.replace('<div class="d-sec"><h3>Trend</h3>', '<div>'), sel: {} });
+  // index stocks: the Trend block lives inside "Decisione" (block 3), not twice
+  const hasTA = !!(s.ticker && data.decision);
+  Object.assign(dTA, { t, ta: data.ta || null, D: hasTA ? data.decision : null, fx: data.fx, trend: trend.replace('<div class="d-sec"><h3>Trend</h3>', '<div>'), sel: {} });
   drawer.querySelector(".d-rest").innerHTML = `${hasTA ? `<div class="d-sec ta" id="dTA"></div>` : ""}<div class="d-cols">
       <div class="d-col">${hasTA ? "" : trend}${s.ticker ? valuationHTML(data.valuation, fundamentals) : ""}</div>
       <div class="d-col">${s.ticker ? analystsHTML(data.analysts, s, tgt) : ""}${newsSec}</div></div>${company}`;

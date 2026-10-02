@@ -1033,7 +1033,44 @@ def api_stock(ticker):
         # raw numbers of the "Analisi tecnica" section (index stocks only) and the EUR/USD rate for the position size
         "ta": store.ta.get(ticker),
         "fx": cached(("fx",), 900, eurusd) if ticker in store.ta else None,
+        "decision": stock_decision(ticker, capital=request.args.get("capital", type=float)),
     }, default=clean, allow_nan=False), mimetype="application/json")
+
+
+_ptest = {"mtime": None, "data": None}
+
+
+def patterns_test():
+    """reports/patterns.json (the phase 11 test), reloaded when the file changes; None if it was never run."""
+    path = os.path.join(REPORT_DIR, "patterns.json")
+    try:
+        m = os.path.getmtime(path)
+        if _ptest["mtime"] != m:
+            with open(path) as f:
+                _ptest.update(mtime=m, data=json.load(f))
+        return _ptest["data"]
+    except Exception:
+        return None
+
+
+def stock_decision(ticker, pf=None, capital=None):
+    """The "Decisione" sheet of one Nasdaq-100 stock (decision.py), or None for anything else."""
+    import analysts
+    import decision
+    with store.lock:
+        snap = store.snapshot
+    row = next((r for r in snap["stocks"] if r["ticker"] == ticker), None) if snap else None
+    if not row or not row.get("price"):
+        return None
+    try:
+        pf = pf if pf is not None else portfolio_view()
+        a = store.analysts.get(ticker)
+        return decision.decide(ticker, row, store.infos.get(ticker), store.valuations.get(ticker), analysts.analyst_summary(a) if a else None,
+                               store.ta.get(ticker), patterns_test(), macro_calendar.upcoming(7)["events"], pf,
+                               pf.get("fx") or cached(("fx",), 900, eurusd), capital)
+    except Exception:
+        log.exception("decision failed for %s", ticker)
+        return None
 
 
 def eurusd():

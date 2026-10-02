@@ -138,21 +138,28 @@ Oppure dal Terminale:
   mesi e anno per anno, e i titoli che lo presentano nel report scelto in Report (per i pattern di tipo evento: quelli
   in cui è scattato nelle ultime 5 sedute, con la data). **Nessun pattern è mostrato come "favorevole"**: vedi sotto.
 - **Scheda titolo**: grafico 1G–MAX, confronto con NDX, fondamentali, target degli analisti, notizie, più:
-  - **Analisi tecnica** (solo titoli del Nasdaq-100), in cinque parti: **verdetto** (solo i pattern che hanno superato
-    il test della Fase 11, mostrati come informazione e mai come "favorevoli"; altrimenti "Nessun segnale tecnico
-    verificato oggi"; i pattern presenti ma bocciati hanno l'etichetta "non verificato"), **medie e trend**,
-    **settore e tema** (fase di rotazione e titolo contro il gruppo a 1 e 3 mesi), **piano di rischio** e
-    **livelli di attesa**. Piano di rischio: entrata al prezzo attuale; stop sotto la media 50 o sotto l'ultimo minimo
-    (20 sedute), meno mezzo ATR, scegliendo il più vicino tra 1,5 e 3,5 ATR, altrimenti 2 × ATR (le altre opzioni si
-    possono cliccare); target convenzionale a 2 volte il rischio, con avviso se prima c'è il massimo a 52 settimane;
-    numero di azioni per rischiare al massimo una percentuale del portafoglio senza superare un massimo
-    per posizione, entrambi presi dalle mie regole (rischio per operazione e limite per singolo titolo), con il valore
-    in euro dalla scheda Portafoglio e il cambio EUR/USD (se il portafoglio non è caricato si inserisce il capitale a
-    mano, che resta solo nel browser). Livelli di
-    attesa: se il prezzo è entro il 5% sotto il massimo a 52 settimane o dentro una fase laterale (30 sedute, ampiezza
-    ≤ 12%), ordine condizionato sopra la resistenza + un quarto di ATR, stop un ATR sotto il livello rotto, sempre con
-    la scritta "pattern non verificato" e i numeri del test. I livelli servono a decidere il rischio in anticipo, non a
-    prevedere il prezzo. Numeri grezzi da `technical.py` (sedute chiuse), piano calcolato nella pagina.
+  - **Decisione** (solo titoli del Nasdaq-100; assorbe la vecchia "Analisi tecnica"): la scheda che un analista
+    porterebbe al comitato d'investimento, in cinque blocchi letti in ordine (`decision.py`).
+    **1. Azienda e valutazione** (decide SE comprare): otto criteri da +1 / 0 / −1 (crescita di ricavi e utili oltre il
+    10% o negativa, margine netto oltre il 15% o sotto il 5%, cassa generata oltre il 10% dei ricavi o negativa, debito
+    netto ripagabile in meno di 2 o più di 5 anni di cassa, valutazione Economica o Cara, stime riviste di oltre +2% o
+    −3%, più upgrade o più downgrade) e la sintesi: solida (da +3), debole (da −1 in giù), nella media.
+    **2. Contesto**: settore e tema (fase di rotazione, titolo contro il gruppo), eventi macro dei prossimi 7 giorni,
+    giorni alla trimestrale. **3. Tempismo tecnico** (decide QUANDO e A CHE PREZZO): medie e trend, livelli chiave,
+    pattern presenti con l'etichetta "verificato" o "non verificato" dal test della Fase 11.
+    **4. Posto nel mio portafoglio** (decide QUANTO): se lo possiedo e quanto pesa, spazio lasciato da ogni mia regola
+    (titolo, tema, settore, paese), sovrapposizione con i miei ETF sul Nasdaq-100, massimo acquistabile.
+    **5. Piano operativo** con il verdetto e, sotto, l'elenco delle regole soddisfatte (✅) e non (❌); decide la prima
+    non soddisfatta: D1 azienda debole → **Evita**; D2 trimestrale entro 5 giorni → **Attendi: trimestrale il …**;
+    D3 l'acquisto supererebbe un mio limite → **Attendi**; D4 prezzo sotto la media 200 → **Attendi**; D5 tirato
+    (oltre l'8% sopra la media 20 o RSI oltre 75) → **Entra su ritracciamento** (ordine limite vicino alla media 20 o
+    50); D6 entro il 3% sotto il massimo a 52 settimane → **Entra su rottura** (ordine condizionato, con la nota che la
+    rottura NON ha superato il test); D7 azienda nella media e prezzo oltre il 2% sopra la media 20 → **Entra su
+    ritracciamento**; tutte soddisfatte → **Entra ora**. Per i titoli che possiedo il verdetto è l'azione della Fase 17.
+    Ogni piano ha entrata, stop (sotto la media 50 o l'ultimo minimo meno mezzo ATR se tra 1,5 e 3,5 ATR, altrimenti
+    2 × ATR; le altre opzioni si possono cliccare), target a 2 volte il rischio e quantità calcolata dal rischio per
+    operazione e dallo spazio lasciato dalle mie regole. Regole non verificate da backtest (lo dice la sezione): le
+    misura il Diario dei segnali.
   - **Valutazione** (Economica / In linea / Cara): P/E atteso, P/S ed EV/EBITDA contro la mediana dei titoli dello
     stesso settore nel Nasdaq-100 (saltato se il settore ha meno di 3 titoli) e P/E / P/S di oggi contro la mediana
     alle ultime ~4 chiusure di bilancio, più il PEG. Lo storico usa gli utili realizzati (Yahoo non ha lo storico del
@@ -306,6 +313,7 @@ residuo (favorisce i pattern di forza), test multipli, casi sovrapposti, nessun 
 | `history.py` | Storico giornaliero del portafoglio e rendimento ponderato per il tempo contro QQQ e VWCE |
 | `risk.py` | Rischio del portafoglio: volatilità, beta, scenario, massima perdita, contributo al rischio, correlazione |
 | `rules.py` | Le mie regole di investimento (limiti) e il controllo sul portafoglio |
+| `decision.py` | Sezione Decisione della scheda titolo: cinque blocchi, verdetto e piani operativi con regole esplicite |
 | `technical.py` | Numeri della sezione Analisi tecnica nella scheda del titolo (ATR, livelli, pattern, settore e tema) |
 | `portfolio.py` | Portafoglio: lettura dell'export Fineco, ticker Yahoo, valori in euro |
 | `macro_calendar.py` | Eventi macro USA: date ufficiali, controllo automatico, valori BLS (da aggiornare ogni anno per CPI e occupazione) |

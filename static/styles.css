@@ -744,3 +744,17 @@ table.pf tr.lev td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 .act-tax { display: block; margin-top: 3px; color: var(--ink-2); font-size: 12px; }
 .rev-box { margin-top: 10px; padding: 10px 12px; border-radius: 6px; background: var(--surface-2); line-height: 1.5; }
 .rev-box input { display: block; width: 100%; box-sizing: border-box; margin: 6px 0 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--ink); font: inherit; }
+/* ------------------------------------------------ detail: Decisione */
+.act.big { font-size: 13px; padding: 4px 11px; }
+.act.wait { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+.dec-top { margin: 2px 0 6px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ta-part h4 .muted { font-weight: 500; font-size: 12px; margin-left: 4px; }
+.ta-part h5 { margin: 14px 0 6px; font-size: 12.5px; }
+.ta-part h5 .muted { font-weight: 500; }
+.scr.dec-crit td, .scr.dec-crit th { padding: 5px 8px; white-space: normal; }
+.dec-verdict { background: var(--surface-2); border-radius: 6px; padding: 10px 12px; }
+.dec-verdict .why { margin-top: 8px; }
+.rule-list li.bad { color: var(--ink); }
+.ta-tag.ok { background: var(--up-bg); color: var(--up); }
+.ta-tag.warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.ta-part input[type=number]#taCapital { width: 96px; }
