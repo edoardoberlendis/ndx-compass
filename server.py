@@ -869,7 +869,7 @@ def save_signal_diary():
         mine = {p["ticker"]: p for p in pf.get("positions") or [] if p.get("ticker")}
         entries = []
         for r in snap["stocks"]:
-            d = stock_decision(r["ticker"], pf)
+            d = stock_decision(r["ticker"], pf, details=False)
             if d:
                 entries.append(diary.entry(d, mine.get(r["ticker"])))
         index = {e["ticker"] for e in entries}
@@ -1203,10 +1203,13 @@ def patterns_test():
         return None
 
 
-def stock_decision(ticker, pf=None, capital=None):
-    """The "Decisione" sheet of one Nasdaq-100 stock (decision.py), or None for anything else."""
+def stock_decision(ticker, pf=None, capital=None, details=True):
+    """The "Decisione" sheet of one Nasdaq-100 stock (decision.py), or None for anything else.
+    details=False (signal diary, 100 stocks at once): no Yahoo request for the last earnings report."""
     import analysts
     import decision
+    import diary
+    import earnings
     with store.lock:
         snap = store.snapshot
     row = next((r for r in snap["stocks"] if r["ticker"] == ticker), None) if snap else None
@@ -1215,9 +1218,26 @@ def stock_decision(ticker, pf=None, capital=None):
     try:
         pf = pf if pf is not None else portfolio_view()
         a = store.analysts.get(ticker)
-        return decision.decide(ticker, row, store.infos.get(ticker), store.valuations.get(ticker), analysts.analyst_summary(a) if a else None,
-                               store.ta.get(ticker), patterns_test(), macro_calendar.upcoming(7)["events"], pf,
-                               pf.get("fx") or cached(("fx",), 900, eurusd), capital)
+        info = store.infos.get(ticker) or {}
+        extra = {"recTrend": ((a or {}).get("recTrend") or [None])[0], "target": info.get("targetMeanPrice"),
+                 "targetN": info.get("numberOfAnalystOpinions")}
+        if details:
+            reps = earnings.reports([ticker]).get(ticker) or []
+            daily = store.daily.get(ticker)
+            extra.update(reports=reps, usualMove=earnings.usual_move(reps, daily["Close"] if daily is not None else None))
+        d = decision.decide(ticker, row, info, store.valuations.get(ticker), analysts.analyst_summary(a) if a else None,
+                            store.ta.get(ticker), patterns_test(), macro_calendar.upcoming(7)["events"], pf,
+                            pf.get("fx") or cached(("fx",), 900, eurusd), capital, extra)
+        if details and d.get("analysis"):                 # since when the verdict is the same, from the signal diary
+            ds = [x for x in diary.days() if x not in diary.excluded()]
+            sig = d["analysis"]["signal"]
+            sig["since"] = diary.since(d["verdict"]["label"], row["price"], datetime.now(ET).date().isoformat(),
+                                       diary.verdict_history(ticker), ds[0] if ds else None)
+            sig["sinceChg"] = (row["price"] / sig["since"]["price"] - 1) * 100 if sig["since"]["price"] else None
+            sig["diaryDays"] = len(ds)
+            prev = next((lab for day, lab, _ in diary.verdict_history(ticker) if lab != d["verdict"]["label"]), None)
+            sig["prevLabel"] = prev if sig["since"]["today"] else None
+        return d
     except Exception:
         log.exception("decision failed for %s", ticker)
         return None
@@ -1378,8 +1398,12 @@ def api_rules():
     import rules
     if not local_request():
         return jsonify(error="Si modifica solo dalla dashboard aperta su questo Mac."), 403
+    body = request.get_json(silent=True) or {}
     try:
-        rules.save_trade_risk((request.get_json(silent=True) or {}).get("tradeRisk"))
+        if "settle" in body:
+            rules.save_settle(body.get("settle"))           # "regolo in EUR / USD" (phase 22)
+        else:
+            rules.save_trade_risk(body.get("tradeRisk"))
     except ValueError as e:
         return jsonify(error=str(e)), 400
     return jsonify(ok=True)

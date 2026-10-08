@@ -77,15 +77,25 @@ def test_owned_stock_takes_the_position_action():
     assert d["verdict"]["owned"] and d["verdict"]["label"] == "Mantieni" and d["verdict"]["decidedBy"] == "posizione"
 
 
-def test_quantity_from_risk_only():
-    # 10,000 EUR, 1% risk = 100 EUR = 110 USD; entry 100, stop 95 -> 5 USD per share -> 22 shares, no cap
-    assert decision.quantity(110, 100, 95) == 22
-    assert decision.quantity(110, 100, 100) == 0          # no risk: no quantity
-    assert decision.quantity(10_000, 100, 99.9) == 100_000  # a very tight stop gives a huge quantity: there is no cap any more
+def test_quantity_without_spread_settling_in_dollars():
+    # 10,000 EUR x 1% = 100 EUR; entry 100 $, stop 95 $, fx 1.10 -> 5 $ = 4.545 EUR per share -> 22 shares
+    q = decision.quantity_eur(100, 100, 95, 1.10, 0.0)
+    assert q["qty"] == 22 and abs(q["perShareEur"] - 5 / 1.10) < 1e-9
+    assert decision.quantity_eur(100, 100, 100, 1.10)["qty"] == 0          # no risk: no quantity
+    assert decision.quantity_eur(10_000, 100, 99.9, 1.10)["qty"] > 100_000  # a very tight stop: huge quantity, no cap any more
 
 
-def test_plan_quantity_uses_trade_risk():
+def test_quantity_with_fineco_exchange_spread():
+    # settling in euro: bought at fx - 0.0033, sold at fx + 0.0033 -> a bigger loss per share, fewer shares
+    q = decision.quantity_eur(500, 352.07, 323.27, 1.1202, 0.0033)
+    per = 352.07 / (1.1202 - 0.0033) - 323.27 / (1.1202 + 0.0033)
+    assert abs(q["perShareEur"] - per) < 1e-9 and q["qty"] == int(500 // per) == 18
+    assert decision.quantity_eur(500, 352.07, 323.27, 1.1202, 0.0)["qty"] == 19
+    assert q["lossEur"] <= 500
+
+
+def test_plan_quantity_uses_trade_risk_and_spread():
     d = verdict(row())
     p = d["plans"]["now"]
-    budget = 10000 * 1.0 / 100 * 1.10
-    assert p["qty"] == decision.quantity(budget, p["entry"], p["stop"])
+    st = next(o for o in p["opts"] if o["id"] == p["def"])
+    assert p["qty"] == st["qty"] == decision.quantity_eur(10000 * 1.0 / 100, p["entry"], p["stop"], 1.10, 0.0033)["qty"]

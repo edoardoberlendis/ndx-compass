@@ -64,7 +64,7 @@ ridosso del massimo"); gli avvisi di calendario dentro le card (ora una piccola 
   NYSE, Fed, CPI, PCE, occupazione), controlli automatici delle date non riusciti, sedute senza diario o senza report
   della sera. La spiegazione compare passando il mouse.
 - **Rischio per operazione** (unica regola rimasta): quanta parte del portafoglio perdo al massimo se scatta lo stop di
-  un'operazione (proposto 1%). Si modifica nella sezione Decisione della scheda del titolo e si salva in
+  un'operazione (proposto 1%), con accanto la valuta con cui regolo i titoli USA (EUR con lo spread di cambio di Fineco, o USD). Si modifica nella sezione Decisione della scheda del titolo e si salva in
   `portafoglio/regole.json`. Le quantità vengono solo da questo rischio e dalla distanza tra entrata e stop: non ci
   sono più limiti di peso.
 - **Rischio del portafoglio** (Portafoglio → Rischio), con una frase iniziale ("quali posizioni fanno oscillare il
@@ -165,6 +165,25 @@ ridosso del massimo"); gli avvisi di calendario dentro le card (ora una piccola 
   con i prezzi del 2 ottobre; il file resta com'è ma è escluso dalle statistiche con `portafoglio/diario/esclusi.json`).
   Le sedute senza diario compaiono nella ⚠ in alto e nella pagina.
 - **Scheda titolo**: grafico 1G–MAX, confronto con NDX, fondamentali, target degli analisti, notizie, più:
+  - **Analisi** (Fase 22, in cima alla sezione Decisione, in stile pagina "Analisi" di Fineco; riusa i calcoli esistenti e
+    non cambia le regole del verdetto). In vista: **segnale** (il verdetto di oggi, "dalla data" = primo giorno della serie
+    consecutiva di giorni del diario con lo stesso verdetto, al prezzo di quel giorno e con la variazione da allora; se il
+    diario ha pochi giorni lo dice; poi entrata, stop, target e rapporto rischio/rendimento), **tendenza** a 1 settimana,
+    1 mese e 3 mesi (▲ oltre +1% / +2% / +4%, ▼ sotto le stesse soglie, = in mezzo) e **commento** automatico da frasi
+    fisse approvate (tendenze, medie, supporto e resistenza più vicini, oscillazione, volumi, trimestrale entro 30 giorni
+    con il movimento tipico, verdetto e motivo, una frase "per chi possiede il titolo" e una "per chi non lo possiede").
+    In sezioni chiuse: **supporti e resistenze** (massimi e minimi significativi delle ultime 120 sedute, massimo e minimo
+    a 52 settimane, medie 50 e 200; livelli a meno dell'1% uniti in zone; due sopra e due sotto) e **punti pivot** del
+    giorno (formula classica sui prezzi di ieri); **oscillazione normale a 5 giorni** (deviazione standard dei rendimenti
+    giornalieri delle ultime 63 sedute × √5: fasce del 68% e del 90%, con l'avviso se lo stop cade dentro la fascia del
+    68%); **dati sintetici** (volumi medi 5 e 21 giorni e rapporto, variazioni a 1, 5, 21 giorni, volatilità a 5, 10, 21
+    giorni); **consenso degli analisti** (Strong Buy … Strong Sell, voto medio 1–5 calcolato dalla distribuzione, prezzo
+    obiettivo medio e potenziale, ultima trimestrale con sorpresa e nota se oltre il 100%); **piano pronto per Fineco**
+    (tipo di ordine e prezzo, stop loss e take profit autoescludenti, scadenza giornaliera per "Entra ora" e 30 giorni per
+    gli ordini limite e condizionati, quantità dal rischio per operazione, note su after hours e AutoFX, pulsante "Copia
+    riepilogo ordine"). Le quantità includono lo **spread di cambio di Fineco** (0,0033 sul EUR/USD all'acquisto e
+    all'uscita) se regolo in euro; l'impostazione "Regolo i titoli USA in EUR / USD" sta accanto al rischio per
+    operazione e si salva in `portafoglio/regole.json`. Niente pattern a candela: andrebbero prima testati come nella Fase 11.
   - **Decisione** (solo titoli del Nasdaq-100; assorbe la vecchia "Analisi tecnica"): la scheda che un analista
     porterebbe al comitato d'investimento, in cinque blocchi letti in ordine (`decision.py`).
     **1. Azienda e valutazione** (decide SE comprare): otto criteri da +1 / 0 / −1 (crescita di ricavi e utili oltre il
@@ -358,7 +377,8 @@ residuo (favorisce i pattern di forza), test multipli, casi sovrapposti, nessun 
 
 I test (`tests/`) usano solo dati finti e una cartella temporanea al posto di `portafoglio/`, mai i dati reali:
 verdetto (`decision.py`), azioni sulle posizioni (`actions.py`), stima fiscale con e senza zainetto, rendimento
-ponderato per il tempo (`history.py`) e quantità da comprare.
+ponderato per il tempo (`history.py`), quantità da comprare con e senza spread di cambio, tendenze, oscillazione a 5
+giorni, supporti e resistenze, punti pivot, "dalla data" del diario e il riquadro Analisi.
 
 ## File del progetto
 

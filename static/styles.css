@@ -786,3 +786,22 @@ table.pf tr.lev td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 .earn-det > div { display: flex; gap: 8px; flex-wrap: wrap; padding: 2px 0; }
 .earn-det > div > span:first-child { color: var(--ink-2); min-width: 210px; }
 @media (max-width: 700px) { .earn-row { grid-template-columns: 60px minmax(0, 1fr) auto; } .earn-row .r.muted, .earn-row .r:last-child { display: none; } .earn-det { padding-left: 0; } }
+/* ------------------------------------------------ detail: Analisi box (phase 22) */
+.an-box { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; margin: 6px 0 4px; background: var(--surface); }
+.an-box h4 { margin: 0 0 8px; font-size: 13px; }
+.an-box h4 .muted { font-weight: 500; margin-left: 4px; }
+.an-sig { line-height: 1.6; }
+.an-sig > span { margin-left: 6px; }
+.an-plan { margin-top: 4px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.an-trend { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; margin: 10px 0 6px; padding-top: 8px; border-top: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+.an-trend .an-l { font-weight: 600; font-size: 12.5px; }
+.an-tr b { font-size: 14px; margin: 0 2px; }
+.an-comment p { margin: 5px 0; line-height: 1.55; }
+.an-box details.fold { border-top: 1px solid var(--grid); margin-top: 6px; padding-top: 2px; }
+.an-box details p { margin: 6px 0; line-height: 1.6; font-variant-numeric: tabular-nums; }
+.an-order { margin: 8px 0 12px; }
+.an-order h5 { margin: 6px 0 4px; font-size: 12.5px; }
+.an-order.info h5 { color: var(--ink-2); }
+.an-grid { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 3px 12px; font-size: 12.5px; font-variant-numeric: tabular-nums; margin-bottom: 4px; }
+.an-grid > span { color: var(--ink-2); }
+.ta-risk select { padding: 2px 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--ink); font: inherit; }

@@ -76,6 +76,46 @@ def missing(last_session):
     return out
 
 
+_index = {"key": None, "data": {}}
+
+
+def verdict_history(ticker):
+    """[(day, verdict label, price)] of one stock in the saved days, newest first, without the excluded days.
+    The files are only read (an index is kept in memory and rebuilt when a day is added)."""
+    ds, skip = days(), excluded()
+    key = (tuple(ds), tuple(sorted(skip)))
+    if _index["key"] != key:
+        data = {}
+        for d in ds:
+            if d in skip:
+                continue
+            try:
+                with open(_path(d)) as f:
+                    for e in json.load(f)["entries"]:
+                        data.setdefault(e["ticker"], []).append((d, e["verdict"], e["price"]))
+            except Exception:
+                continue
+        for v in data.values():
+            v.sort(reverse=True)
+        _index.update(key=key, data=data)
+    return _index["data"].get(ticker, [])
+
+
+def since(label, price, today, history, first_day):
+    """Since when the verdict is the same: the first day of the run of consecutive saved days with this label, going
+    back from today (today's live verdict counts even if not saved yet). history: [(day, label, price)] newest first.
+    Returns {"date", "price", "today": the run starts today, "atLeast": the run reaches the first day of the diary}."""
+    start = (today, price)
+    for d, lab, p in history:
+        if d > today:
+            continue
+        if lab != label:
+            break
+        start = (d, p)
+    return {"date": start[0], "price": start[1], "today": start[0] == today,
+            "atLeast": bool(first_day) and start[0] == first_day and start[0] != today}
+
+
 def decided_by(e):
     """The rule that decided a saved verdict: the first one not satisfied, in order (also for days saved before
     phase 21, from the rules stored that day; the files are only read)."""

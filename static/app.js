@@ -1735,14 +1735,14 @@ function taPlanHTML(id, p) {
   const pct = v => fPct((v / entry - 1) * 100, 1);
   const res = p.resistance && p.resistance.v < target ? `<div class="ta-note">⚠ Prima del target c'è il massimo a 52 settimane a ${fUsd(p.resistance.v)} (${pct(p.resistance.v)}): fino a lì il rapporto è solo ${fNum((p.resistance.v - entry) / risk, 1)} : 1.</div>` : "";
   const others = p.opts.filter(o => o.id !== st.id);
-  let size;
-  if (!isNum(p.budgetUsd)) size = `<span class="muted">${isNum(p.fx) ? "inserisci il capitale nel blocco 4" : "cambio EUR/USD non disponibile"}</span>`;
+  let size;              // quantities computed by the server for every stop option, with Fineco's exchange spread (decision.quantity_eur)
+  if (!isNum(p.budgetEur)) size = `<span class="muted">inserisci il capitale nel blocco 4</span>`;
+  else if (!isNum(st.qty)) size = `<span class="muted">cambio EUR/USD non disponibile</span>`;
   else {
-    const n = Math.max(0, Math.floor(p.budgetUsd / risk));     // only the risk per trade decides (no weight limits since phase 21)
-    const eur = v => fEur(v / p.fx, 0), share = v => fNum(v / p.fx / p.capital * 100, 1);
+    const n = st.qty, share = v => fNum(v / p.capital * 100, 1);
     size = !n ? `<b>0</b> <span class="muted">con questo capitale e questo rischio non si arriva a un'azione intera</span>`
-      : `<b>${fNum(n, 0)}</b> <span class="muted">valore ${fUsd(n * entry)} ≈ ${eur(n * entry)}, ${share(n * entry)}% del portafoglio</span>
-        <div class="ta-note">Se scatta lo stop perdi circa ${fUsd(n * risk)} ≈ ${eur(n * risk)} (${share(n * risk)}% del portafoglio; il tuo rischio per operazione è ${ruleLimit(p.riskPct)}).</div>`;
+      : `<b>${fNum(n, 0)}</b> <span class="muted">valore ${fUsd(n * entry)} ≈ ${fEur(st.valueEur, 0)}, ${share(st.valueEur)}% del portafoglio</span>
+        <div class="ta-note">Se scatta lo stop perdi circa ${fEur(st.lossEur, 0)} (${share(st.lossEur)}% del portafoglio; il tuo rischio per operazione è ${ruleLimit(p.riskPct)})${p.spread ? ", compreso lo spread di cambio di Fineco" : ""}.</div>`;
   }
   return `<div class="ta-plan">
     <div><span>${p.kind === "breakout" ? "Livello di rottura" : p.kind === "pullback" ? "Ordine limite" : "Entrata"}</span><div><b>${fUsd(entry)}</b> <span class="muted">${esc(p.entryNote)}${p.kind === "pullback" ? ` · ${fPct((entry / dTA.D.price - 1) * 100, 1)} dal prezzo attuale` : ""}</span></div></div>
@@ -1827,7 +1827,8 @@ const RISK_FIELD_INFO = `Quanto del portafoglio perdi al massimo se scatta lo st
 function decPlace(D) {
   const P = D.place;
   const field = `<p class="ta-risk"><label>Rischio massimo per operazione <input type="number" id="taRisk" min="0.1" max="10" step="0.1" value="${P.riskPct}"> % del portafoglio</label>
-    ${info(RISK_FIELD_INFO)} <span id="taRiskMsg" class="small muted"></span></p>`;
+    ${info(RISK_FIELD_INFO)} · <label>Regolo i titoli USA in <select id="taSettle"><option ${P.settle === "EUR" ? "selected" : ""}>EUR</option><option ${P.settle === "USD" ? "selected" : ""}>USD</option></select></label>
+    ${info(AN_SETTLE_INFO)} <span id="taRiskMsg" class="small muted"></span></p>`;
   if (!P.loaded) {
     const manual = +LS.get("taCapital", 0) || "";
     return `<p class="muted">Portafoglio non caricato: non posso dire se lo possiedi.</p>${field}
@@ -1864,13 +1865,100 @@ function decPlan(D) {
       (la rottura del massimo non ha superato il test dei pattern). La regola D3 sui limiti di peso è stata tolta.</p>
     ${others.length ? `<details class="fold"><summary><span class="small">Altri piani possibili (${others.length}), con i loro limiti</span></summary>${others.join("")}</details>` : ""}`;
 }
+// ---- "Analisi" box on top of Decisione (phase 22, in the style of Fineco's Analisi page). Only signal, trend and comment
+// are visible; everything else is in sections closed by default. All numbers come from decision.analysis_box.
+const AN_TREND_INFO = r => `Rendimento del titolo su 5 sedute (breve, circa 1 settimana), 21 (medio, 1 mese) e 63 (lungo, 3 mesi).
+  <b>▲</b> se supera +${fNum(r.trend["5"], 0)}% / +${fNum(r.trend["21"], 0)}% / +${fNum(r.trend["63"], 0)}%, <b>▼</b> se scende sotto le stesse soglie in negativo, <b>=</b> altrimenti.
+  Descrive l'andamento, non è un voto né una previsione.`;
+const AN_BAND_INFO = `Quanto si muove di solito il titolo in una settimana (5 sedute): la fascia è il prezzo ± la deviazione standard dei rendimenti giornalieri
+  delle ultime 63 sedute × √5. Circa 2 settimane su 3 il prezzo resta nella fascia del 68%, circa 9 su 10 in quella del 90%.
+  <b>Non sono obiettivi</b>: servono a capire se uno stop è troppo vicino e rischia di scattare per il normale «rumore» del mercato.`;
+const AN_LEVELS_INFO = r => `Livelli considerati: massimi e minimi significativi delle ultime ${r.swing[0]} sedute (il prezzo più alto o più basso delle ${r.swing[1]} sedute prima e dopo),
+  massimo e minimo a 52 settimane, medie a 50 e 200 giorni. Livelli a meno dell'${fNum(r.zone, 0)}% l'uno dall'altro diventano una zona. Sono mostrati i due più vicini sopra e sotto il prezzo.`;
+const AN_CONS_INFO = `Distribuzione dei giudizi degli analisti nel mese (dati Yahoo). <b>Voto medio</b> da 1 a 5: Strong Buy vale 1, Buy 2, Hold 3, Sell 4, Strong Sell 5;
+  si moltiplica ogni giudizio per il suo valore, si somma e si divide per il numero di analisti. 1 = acquistare, 5 = vendere.`;
+const AN_SETTLE_INFO = `Valuta con cui regoli su Fineco i titoli americani. <b>EUR</b>: Fineco converte al cambio con uno spread di 0,0033 sul EUR/USD sia quando compri sia quando vendi,
+  quindi il rischio in euro è un po' più alto e le quantità un po' più basse. <b>USD</b>: hai già dollari sul conto, niente spread.`;
+const an = { copy: [] };
+function anBox(D) {
+  const A = D.analysis;
+  if (!A) return "";
+  const S = A.signal, sp = S.plan, pr = D.price, pct = v => fPct((v / pr - 1) * 100, 1);
+  const since = S.since ? (S.since.today ? `da oggi (${dayShort(S.since.date)})`
+      : `${S.since.atLeast ? "almeno dal" : "dal"} ${dayIT(S.since.date)} a ${fUsd(S.since.price)} <span class="${sign(S.sinceChg)}">(${fPct(S.sinceChg, 1)} da allora)</span>`) : "";
+  const sinceNote = !S.since ? "" : S.diaryDays < 5 ? `Il diario ha solo ${S.diaryDays} ${S.diaryDays === 1 ? "giorno" : "giorni"}: la data può essere più vecchia.`
+    : S.since.atLeast ? "La serie arriva al primo giorno del diario: il verdetto può essere più vecchio." : S.prevLabel ? `Prima il verdetto era «${esc(S.prevLabel)}».` : "";
+  const plan = sp ? `<div class="an-plan">${sp.info ? "<b>Livello di rottura</b> (solo informazione, pattern non verificato): " : ""}Entrata <b>${fUsd(sp.entry)}</b> · Stop <b>${fUsd(sp.stop)}</b> <span class="down">${pct(sp.stop)}</span>
+      · Target <b>${fUsd(sp.target)}</b> <span class="up">${pct(sp.target)}</span> · Rischio/rendimento <b>2,0 : 1</b>${isNum(sp.rrResistance) ? ` <span class="muted">(fino al massimo a 52 settimane, ${fUsd(sp.resistance)}: ${fNum(sp.rrResistance, 1)} : 1)</span>` : ""}</div>`
+    : `<div class="an-plan muted">Nessun piano di acquisto con questo verdetto: ${esc(D.verdict.why[0] || "")}.</div>`;
+  const lab = { 5: "breve (1 settimana)", 21: "medio (1 mese)", 63: "lungo (3 mesi)" };
+  const tr = A.trends.map(t => `<span class="an-tr"><span class="muted">${lab[t.days]}</span> <b class="${t.arrow === "▲" ? "up" : t.arrow === "▼" ? "down" : ""}">${t.arrow || "—"}</b> ${isNum(t.pct) ? fPct(t.pct, 1) : ""}</span>`).join("");
+  const z = A.zones, zone = x => `<b>${Math.abs(x.hi - x.lo) < 0.005 ? fUsd(x.lo) : `${fNum(x.lo, 2)}–${fNum(x.hi, 2)} $`}</b> ${esc(x.names.join(" / "))} <span class="${sign(x.pct)}">(${fPct(x.pct, 1)})</span>`;
+  const P = A.pivots, B = A.band, Dt = A.data, C = A.consensus, L = C.last;
+  const big = v => isNum(v) ? (v >= 1e6 ? fNum(v / 1e6, 1) + " mln" : fNum(v, 0)) : "—";
+  an.copy = A.orders.map(o => [`${D.ticker} – ${o.type}${o.info ? " (pattern non verificato)" : ""}`, `Prezzo: ${fNum(o.price, 2)} $`, `Quantità: ${o.qty ?? "—"}`,
+    `Stop loss: ${fNum(o.stopLoss, 2)} $`, `Take profit: ${fNum(o.takeProfit, 2)} $`, `Scadenza: ${o.expiry} (${o.expiryNote})`,
+    `Regolo in: ${A.settle}`, "Stop loss e take profit autoescludenti; non attivi nell'after hours.", "Screening automatico, non è una consulenza finanziaria."].join("\n"));
+  const orderLab = { now: "Entra ora", pullback: "Ordine limite su ritracciamento", breakout: "Ordine condizionato sulla rottura (pattern non verificato)" };
+  const orders = A.orders.map((o, k) => `<div class="an-order${o.info ? " info" : ""}"><h5>${orderLab[o.kind]}</h5>
+    <div class="an-grid">
+      <span>Tipo di ordine</span><b>${o.type} a ${fUsd(o.price)}</b>
+      <span>Stop loss</span><b>${fUsd(o.stopLoss)}</b>
+      <span>Take profit</span><b>${fUsd(o.takeProfit)}</b>
+      <span>Scadenza</span><b>${o.expiry} <span class="muted">(${o.expiryNote})</span></b>
+      <span>Quantità</span><b>${isNum(o.qty) ? `${fNum(o.qty, 0)} azioni ≈ ${fEur(o.valueEur, 0)}` : "—"}</b>
+    </div>
+    ${isNum(o.qty) ? `<p class="ta-note">Se scatta lo stop perdi circa ${fEur(o.lossEur, 0)} (${fNum(A.riskPct, 1)}% del portafoglio)${A.spread ? `, compreso lo spread di cambio di Fineco (${fNum(A.spread, 4)} sul EUR/USD): senza spread sarebbero ${o.noSpreadQty}` : ", regolando in dollari (niente spread)"}.</p>` : ""}
+    <button class="btn" data-an-copy="${k}">Copia riepilogo ordine</button> <span class="small muted" data-an-copied="${k}"></span></div>`).join("");
+  return `<div class="an-box">
+    <h4>Analisi <span class="muted">${esc(D.ticker)} · ${fUsd(pr)}</span></h4>
+    <div class="an-sig">${verdictBadge(D.verdict)} <span>${since}</span>${sinceNote ? `<div class="muted small">${sinceNote}</div>` : ""}${plan}</div>
+    <div class="an-trend"><span class="an-l">Tendenza ${info(AN_TREND_INFO(A.rules))}</span>${tr}</div>
+    <div class="an-comment"><p>${esc(A.comment.text)}</p><p>${esc(A.comment.owner)}</p><p>${esc(A.comment.notOwner)}</p><p class="muted small">${esc(A.comment.end)}</p></div>
+    <details class="fold"><summary><span class="small">Supporti e resistenze ${info(AN_LEVELS_INFO(A.rules))}</span></summary>
+      <p><span class="muted">Resistenze:</span> ${z.above.length ? z.above.slice().reverse().map(zone).join(" · ") : "nessun livello sopra il prezzo tra quelli considerati"}<br>
+        <span class="muted">Supporti:</span> ${z.below.length ? z.below.map(zone).join(" · ") : "nessun livello sotto il prezzo tra quelli considerati"}</p>
+      <p><span class="muted">Punti pivot del giorno (livelli di brevissimo periodo, cambiano ogni giorno; formula classica sui prezzi di ieri):</span><br>
+        S2 ${fNum(P.S2, 2)} · S1 ${fNum(P.S1, 2)} · <b>Pivot ${fNum(P.P, 2)}</b> · R1 ${fNum(P.R1, 2)} · R2 ${fNum(P.R2, 2)}</p></details>
+    <details class="fold"><summary><span class="small">Oscillazione normale a 5 giorni ${info(AN_BAND_INFO)}</span></summary>
+      <p>68% delle settimane: <b>${fUsd(B.p68[0])} – ${fUsd(B.p68[1])}</b> (±${fNum(B.sd, 1)}%) · 90%: <b>${fUsd(B.p90[0])} – ${fUsd(B.p90[1])}</b> (±${fNum(B.sd * 1.645, 1)}%)</p>
+      ${isNum(B.stop) ? (B.stopInside ? `<p class="warn-box">⚠ Stop dentro l'oscillazione normale: rischia di scattare per rumore (stop ${fUsd(B.stop)}).</p>`
+        : `<p class="muted small">Lo stop proposto (${fUsd(B.stop)}) è fuori dalla fascia del 68%.</p>`) : ""}</details>
+    <details class="fold"><summary><span class="small">Dati sintetici</span></summary>
+      <p>Volumi medi 5 g <b>${big(Dt.vol5)}</b> · 21 g <b>${big(Dt.vol21)}</b> (${fNum(Dt.volRatio, 2)}×) · Variazione 1 g <b class="${sign(Dt.chg1)}">${fPct(Dt.chg1, 1)}</b> · 5 g <b class="${sign(Dt.chg5)}">${fPct(Dt.chg5, 1)}</b> · 21 g <b class="${sign(Dt.chg21)}">${fPct(Dt.chg21, 1)}</b><br>
+        Volatilità annua 5 g <b>${fNum(Dt.vola5, 1)}%</b> · 10 g <b>${fNum(Dt.vola10, 1)}%</b> · 21 g <b>${fNum(Dt.vola21, 1)}%</b></p></details>
+    <details class="fold"><summary><span class="small">Consenso degli analisti ${info(AN_CONS_INFO)}</span></summary>
+      ${C.n ? `<p>Strong Buy ${C.counts[0]} · Buy ${C.counts[1]} · Hold ${C.counts[2]} · Sell ${C.counts[3]} · Strong Sell ${C.counts[4]} (${C.n} analisti)<br>
+        Voto medio <b>${fNum(C.mean, 2)}</b> su 5 <span class="muted">(1 = acquistare, 5 = vendere)</span></p>` : `<p class="muted">Giudizi degli analisti non disponibili.</p>`}
+      <p>${isNum(C.target) ? `Prezzo obiettivo medio <b>${fUsd(C.target)}</b>${C.targetN ? ` (${C.targetN} analisti)` : ""}, potenziale <b class="${sign(C.upside)}">${fPct(C.upside, 1)}</b>` : `<span class="muted">Prezzo obiettivo non disponibile.</span>`}<br>
+        ${L && isNum(L.reported) ? `Ultima trimestrale (${dayShort(L.ts.slice(0, 10))}): EPS atteso ${isNum(L.eps) ? fNum(L.eps, 2) + " $" : "—"}, effettivo ${fNum(L.reported, 2)} $${isNum(L.surprise) ? `, sorpresa <b class="${sign(L.surprise)}">${fPct(L.surprise, 1)}</b>` : ""}` : `<span class="muted">Ultima trimestrale non disponibile.</span>`}</p>
+      ${C.surpriseHigh ? `<p class="small muted">Sorpresa molto alta: spesso dipende da voci straordinarie (plusvalenze, rivalutazioni), non da un aumento stabile degli utili.</p>` : ""}</details>
+    <details class="fold"><summary><span class="small">Piano pronto per Fineco</span></summary>
+      ${orders || `<p class="muted">Nessun piano calcolabile.</p>`}
+      <ul class="why small">
+        <li>Su Fineco <b>stop loss e take profit sono autoescludenti</b>: quando scatta uno, l'altro si cancella.</li>
+        <li><b>Stop loss e take profit non sono attivi nell'after hours.</b></li>
+        <li>Su Fineco stop loss e take profit sono esclusi da AutoFX: la prima volta verifica nel book in che valuta vengono regolati sui titoli USA.</li>
+        <li>Quantità dal tuo rischio per operazione (${fNum(A.riskPct, 1)}%), regolando in ${A.settle}${A.spread ? ` con lo spread di cambio di Fineco (${fNum(A.spread, 4)} sul EUR/USD) all'acquisto e all'uscita` : " (niente spread di cambio)"}. Scadenza massima 30 giorni.</li>
+      </ul></details>
+  </div>`;
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-an-copy]");
+  if (!b) return;
+  const k = +b.dataset.anCopy, text = an.copy[k] || "", done = () => { const m = $(`[data-an-copied="${k}"]`); if (m) m.textContent = "✓ copiato"; };
+  (navigator.clipboard?.writeText(text) || Promise.reject()).then(done).catch(() => {
+    const t = document.createElement("textarea"); t.value = text; document.body.appendChild(t); t.select();
+    try { document.execCommand("copy"); done(); } catch { /* the text stays selectable */ } t.remove();
+  });
+});
 function renderTA() {
   const el = $("#dTA"), t = state.detail, D = dTA.D, s = state.bySym.get(t);
   if (!el || dTA.t !== t || !D || !s) return;
   if (el.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;   // typing: do not redraw
   const T = D.timing, lv = T.levels;
   el.innerHTML = `<h3>Decisione ${info(DEC_INFO)} <span class="muted small ta-asof">${dTA.ta ? `livelli alla chiusura del ${dayIT(dTA.ta.asOf)} · ` : ""}prezzo ${fUsd(D.price)}</span></h3>
-    <div class="dec-top">Verdetto: ${verdictBadge(D.verdict)} <span class="muted small">i motivi e le regole sono nel blocco 5</span></div>
+    ${anBox(D) || `<div class="dec-top">Verdetto: ${verdictBadge(D.verdict)} <span class="muted small">i motivi e le regole sono nel blocco 5</span></div>`}
     <div class="ta-part"><h4>1 · Azienda e valutazione <span class="muted">decide se comprare</span></h4>${decCompany(D.company)}</div>
     <div class="ta-part"><h4>2 · Contesto</h4>${decContext(t, D.context)}</div>
     <div class="ta-part"><h4>3 · Tempismo tecnico <span class="muted">decide quando e a che prezzo</span></h4>${dTA.trend}
@@ -1900,6 +1988,12 @@ drawer.addEventListener("click", e => {
   if (m) openDetail(m.dataset.mopen);
 });
 drawer.addEventListener("change", e => {
+  if (e.target.id === "taSettle") {                     // EUR (Fineco's exchange spread) or USD, saved in portafoglio/regole.json
+    pfPost("/api/rules", { body: JSON.stringify({ settle: e.target.value }), headers: { "Content-Type": "application/json" } })
+      .then(() => { pf.data = null; loadDetailInfo(); })
+      .catch(err => { $("#taRiskMsg").innerHTML = `<span class="down">non salvato: ${esc(err.message)}</span>`; });
+    return;
+  }
   if (e.target.id === "taRisk") {                       // my risk per trade, saved in portafoglio/regole.json
     const v = parseFloat(String(e.target.value).replace(",", "."));
     if (!(v >= 0.1 && v <= 10)) { $("#taRiskMsg").innerHTML = `<span class="down">serve un numero tra 0,1 e 10</span>`; return; }

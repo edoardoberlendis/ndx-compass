@@ -66,18 +66,34 @@ def reaction_moves(reports, closes):
     return out
 
 
-def details(tickers, daily, analysts):
-    """{ticker: {...}} for the companies of the earnings list, from the cache of today or computed now."""
+def reports(tickers):
+    """{ticker: last reports} from today's cache, downloading the missing ones (one Yahoo request each)."""
     from server import read_daily_cache, write_daily_cache   # local import: server imports this module's users
-    cached = read_daily_cache(CACHE) or {}
+    with _lock:
+        cached = read_daily_cache(CACHE) or {}
     todo = [t for t in tickers if t not in cached]
     for t in todo:
         cached[t] = {"reports": _dates(t)}
     if todo:
-        write_daily_cache(CACHE, cached)
+        with _lock:
+            fresh = read_daily_cache(CACHE) or {}
+            fresh.update({t: cached[t] for t in todo})
+            write_daily_cache(CACHE, fresh)
+    return {t: (cached.get(t) or {}).get("reports") or [] for t in tickers}
+
+
+def usual_move(reps, closes):
+    """Mean absolute move on the reaction day of the last reports (None with fewer than 4)."""
+    moves = reaction_moves(reps, closes)
+    return sum(abs(m["move"]) for m in moves) / len(moves) if len(moves) >= 4 else None
+
+
+def details(tickers, daily, analysts):
+    """{ticker: {...}} for the companies of the earnings list, from the cache of today or computed now."""
+    allrep = reports(tickers)
     out = {}
     for t in tickers:
-        reps = (cached.get(t) or {}).get("reports") or []
+        reps = allrep.get(t) or []
         closes = daily[t]["Close"] if t in daily and "Close" in daily[t] else None
         moves = reaction_moves(reps, closes)
         q = ((analysts.get(t) or {}).get("eps") or {}).get("0q") or {}

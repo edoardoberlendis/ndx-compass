@@ -54,7 +54,103 @@ def levels(df):
         "high52": {"v": float(year.max()), "date": day(year.idxmax()), "sessions": int(len(year))},   # highest CLOSE, as in the test
         "range": {"hi": float(rng.max()), "lo": float(rng.min()), "width": float(rng.max() / rng.min() - 1) * 100,
                   "days": RANGE_DAYS},
+        "analysis": analysis(df),
     }
+
+
+# ---------------------------------------------------------------- the "Analisi" box (plan phase 22)
+TREND = {"5": 1.0, "21": 2.0, "63": 4.0}   # ▲ above +x%, ▼ below −x% over 5, 21 and 63 sessions (1 week, 1 month, 3 months)
+SWING_DAYS, SWING_SIDE = 120, 5             # significant high/low: the extreme of the 5 sessions before and after, in the last 120
+ZONE = 1.0                                  # levels less than 1% apart become one zone
+BAND_DAYS = 63                              # daily volatility for the normal 5-day swing
+
+
+def trends(closes):
+    """[{"days", "pct", "arrow"}] for 1 week, 1 month, 3 months: ▲ / ▼ beyond the threshold, = in between."""
+    c = closes.dropna()
+    out = []
+    for n, thr in ((5, TREND["5"]), (21, TREND["21"]), (63, TREND["63"])):
+        if len(c) <= n:
+            out.append({"days": n, "pct": None, "arrow": None, "threshold": thr})
+            continue
+        pct = float(c.iloc[-1] / c.iloc[-1 - n] - 1) * 100
+        out.append({"days": n, "pct": pct, "arrow": "▲" if pct > thr else "▼" if pct < -thr else "=", "threshold": thr})
+    return out
+
+
+def band(closes, price, days=5):
+    """Normal swing over `days` sessions from the daily volatility of the last BAND_DAYS sessions: ±1 and ±1.645
+    standard deviations (about 68% and 90% of the weeks). Not targets: how much the stock usually moves."""
+    r = closes.dropna().pct_change().dropna().iloc[-BAND_DAYS:]
+    if len(r) < 20:
+        return None
+    return band_from_sd(float(r.std()) * 100, price, days)
+
+
+def band_from_sd(daily_sd_pct, price, days=5):
+    """The same swing from a daily standard deviation in percent (decision.py uses the one saved by analysis())."""
+    sd = daily_sd_pct / 100 * days ** 0.5
+    return {"sd": sd * 100, "p68": [price * (1 - sd), price * (1 + sd)], "p90": [price * (1 - 1.645 * sd), price * (1 + 1.645 * sd)]}
+
+
+def pivots(high, low, close):
+    """Classic floor pivots on yesterday's prices: very short-term levels, they change every day."""
+    p = (high + low + close) / 3
+    return {"S2": p - (high - low), "S1": 2 * p - high, "P": p, "R1": 2 * p - low, "R2": p + (high - low)}
+
+
+def zones(levels, price, n=2):
+    """Merge levels less than ZONE% apart, then the n nearest zones above and below the price.
+    levels: [{"v", "name"}]; returns {"above": [...], "below": [...]} with {"lo", "hi", "v", "names", "pct"}."""
+    out = []
+    for lv in sorted(levels, key=lambda x: x["v"]):
+        if out and (lv["v"] / out[-1]["hi"] - 1) * 100 < ZONE:
+            z = out[-1]
+            z["hi"] = lv["v"]
+            z["names"].append(lv["name"])
+        else:
+            out.append({"lo": lv["v"], "hi": lv["v"], "names": [lv["name"]]})
+    for z in out:
+        z["v"] = (z["lo"] + z["hi"]) / 2
+        z["pct"] = (z["v"] / price - 1) * 100
+    above = sorted((z for z in out if z["lo"] > price), key=lambda z: z["lo"])[:n]
+    below = sorted((z for z in out if z["hi"] <= price), key=lambda z: -z["hi"])[:n]
+    return {"above": above, "below": below}
+
+
+def key_levels(df):
+    """Significant highs and lows of the last 120 sessions, 52-week high and low, 50- and 200-day averages."""
+    c, h, lo = df["Close"], df["High"], df["Low"]
+    d = lambda ts: f"{ts.day} {['gen','feb','mar','apr','mag','giu','lug','ago','set','ott','nov','dic'][ts.month - 1]}"
+    out = []
+    H, L = h.iloc[-SWING_DAYS:], lo.iloc[-SWING_DAYS:]
+    k = SWING_SIDE
+    for i in range(k, len(H) - k):
+        if H.iloc[i] == H.iloc[i - k:i + k + 1].max():
+            out.append({"v": float(H.iloc[i]), "name": f"massimo del {d(H.index[i])}"})
+        if L.iloc[i] == L.iloc[i - k:i + k + 1].min():
+            out.append({"v": float(L.iloc[i]), "name": f"minimo del {d(L.index[i])}"})
+    y_h, y_l = h.iloc[-252:], lo.iloc[-252:]
+    out.append({"v": float(y_h.max()), "name": "massimo a 52 settimane"})
+    out.append({"v": float(y_l.min()), "name": "minimo a 52 settimane"})
+    for n in (50, 200):
+        if len(c) >= n:
+            out.append({"v": float(c.rolling(n).mean().iloc[-1]), "name": f"media {n}"})
+    return out
+
+
+def analysis(df):
+    """Everything of the "Analisi" box that depends only on the daily prices (closed sessions)."""
+    c, h, lo, v = df["Close"], df["High"], df["Low"], df["Volume"]
+    last = float(c.iloc[-1])
+    ret = lambda n: float(c.iloc[-1] / c.iloc[-1 - n] - 1) * 100 if len(c) > n else None
+    vola = lambda n: float(c.pct_change().iloc[-n:].std()) * 252 ** 0.5 * 100 if len(c) > n else None
+    v5, v21 = float(v.iloc[-5:].mean()), float(v.iloc[-21:].mean())
+    return {"close": last, "trends": trends(c), "levels": key_levels(df),
+            "pivots": pivots(float(h.iloc[-1]), float(lo.iloc[-1]), last),
+            "data": {"vol5": v5, "vol21": v21, "volRatio": v5 / v21 if v21 else None, "chg1": ret(1), "chg5": ret(5), "chg21": ret(21),
+                     "vola5": vola(5), "vola10": vola(10), "vola21": vola(21)},
+            "dailySd": float(c.pct_change().dropna().iloc[-BAND_DAYS:].std()) * 100}
 
 
 def group_table(constituents, tech):
