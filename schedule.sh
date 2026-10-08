@@ -1,7 +1,8 @@
 #!/bin/sh
 # Install / remove the scheduled jobs (macOS launchd). Never run by Claude without an explicit request (CLAUDE.md).
-#   ./schedule.sh install     morning report Mon–Fri 08:30 (signals.py) + evening job Mon–Fri 22:45 (daily_job.py:
-#                             evening report, signal diary and the day's picture of the portfolio), local time
+#   ./schedule.sh install     morning summary Mon–Fri 08:30 (morning_job.py: a window with today's macro events,
+#                             upcoming earnings of my stocks, positions to review, missing diary days) + evening job
+#                             Mon–Fri 22:45 (daily_job.py: evening report, signal diary, picture of the portfolio)
 #   ./schedule.sh remove
 #   ./schedule.sh run         run the evening job now (same environment as the schedule)
 #   ./schedule.sh status      show whether the jobs are installed and the end of their logs
@@ -10,7 +11,7 @@ set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
 PY="$DIR/.venv/bin/python"
 AGENTS="$HOME/Library/LaunchAgents"
-MORNING="com.nasdaq100.signals"         # 08:30 report (same label as before phase 21)
+MORNING="com.nasdaq100.signals"         # 08:30 morning summary (same label as before, so a new install replaces the old report)
 EVENING="com.nasdaq100.daily"           # 22:45 evening job
 
 plist() {   # label, script, hour, minute
@@ -19,7 +20,6 @@ plist() {   # label, script, hour, minute
     TIMES="$TIMES<dict><key>Weekday</key><integer>$d</integer><key>Hour</key><integer>$3</integer><key>Minute</key><integer>$4</integer></dict>"
   done
   EXTRA=""
-  [ "$2" = "signals.py" ] && EXTRA="<string>--notify</string>"
   cat > "$AGENTS/$1.plist" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -41,7 +41,7 @@ case "$1" in
   install)
     [ -x "$PY" ] || { echo "Missing $PY: run ./run.sh once first to create the .venv"; exit 1; }
     mkdir -p "$DIR/reports/logs" "$AGENTS"
-    plist "$MORNING" signals.py 8 30
+    plist "$MORNING" morning_job.py 8 30
     plist "$EVENING" daily_job.py 22 45
     echo "Installed: $MORNING Mon–Fri 08:30, $EVENING Mon–Fri 22:45 ($(date +%Z))"
     ;;
@@ -56,7 +56,7 @@ case "$1" in
     for l in "$MORNING" "$EVENING"; do
       if launchctl print "gui/$(id -u)/$l" >/dev/null 2>&1; then echo "$l: installed"; else echo "$l: NOT installed"; fi
     done
-    for f in signals daily_job; do
+    for f in morning_job daily_job; do
       [ -f "$DIR/reports/logs/$f.log" ] && { echo "--- reports/logs/$f.log (last lines)"; tail -n 5 "$DIR/reports/logs/$f.log"; }
       [ -s "$DIR/reports/logs/$f.err" ] && { echo "--- reports/logs/$f.err (last lines)"; tail -n 5 "$DIR/reports/logs/$f.err"; }
     done

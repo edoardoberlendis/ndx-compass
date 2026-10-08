@@ -1531,29 +1531,6 @@ def api_market_news():
 # ---------------------------------------------------------------- trend reports (signals.py)
 
 REPORT_DIR = os.path.join(ROOT, "reports")
-_report_job = {"running": False, "error": None, "started": None}
-
-
-@app.route("/api/reports")
-def api_reports():
-    import signals  # local import: signals imports this module
-    os.makedirs(REPORT_DIR, exist_ok=True)
-    return jsonify({"reports": signals.list_reports(), "job": _report_job})
-
-
-@app.route("/api/report/<rid>")
-def api_report(rid):
-    if rid != "latest" and rid not in {f[:-5] for f in os.listdir(REPORT_DIR)}:
-        return jsonify({"error": "not found"}), 404
-    return send_from_directory(REPORT_DIR, rid + ".json", max_age=0)
-
-
-@app.route("/api/backtest")
-def api_backtest():
-    """Last backtest of the technical score (backtest.py, run by hand)."""
-    if not os.path.exists(os.path.join(REPORT_DIR, "backtest.json")):
-        return jsonify({"error": "missing"}), 404
-    return send_from_directory(REPORT_DIR, "backtest.json", max_age=0)
 
 
 @app.route("/api/patterns")
@@ -1562,27 +1539,6 @@ def api_patterns():
     if not os.path.exists(os.path.join(REPORT_DIR, "patterns.json")):
         return jsonify({"error": "missing"}), 404
     return send_from_directory(REPORT_DIR, "patterns.json", max_age=0)
-
-
-@app.route("/api/report/run", methods=["POST"])
-def api_report_run():
-    if _report_job["running"]:
-        return jsonify(_report_job), 409
-
-    def job():
-        import signals  # local import: signals imports this module
-        try:
-            signals.run(notify_user=False)
-            _report_job["error"] = None
-        except Exception as e:
-            log.exception("report failed")
-            _report_job["error"] = str(e)
-        finally:
-            _report_job["running"] = False
-
-    _report_job.update(running=True, error=None, started=datetime.now(ET).isoformat(timespec="seconds"))
-    threading.Thread(target=job, daemon=True).start()
-    return jsonify(_report_job), 202
 
 
 if __name__ == "__main__":

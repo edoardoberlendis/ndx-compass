@@ -262,11 +262,17 @@ Il peso dei settori è la somma dei pesi dei loro titoli.
 
 ## Report e job programmati
 
-Il report tecnico (`signals.py`) non è più una pagina della dashboard (Fase 21), ma continua a essere generato: la mappa
-di rotazione ora è in Mercato → Settori e i titoli di ogni pattern nella sezione Decisione. Con la programmazione di
-macOS (launchd), dal lunedì al venerdì, ora locale:
+Il report tecnico (`signals.py`) non è più una pagina della dashboard (Fase 21): la mappa di rotazione ora è in
+Mercato → Settori e i titoli di ogni pattern nella sezione Decisione. Con la programmazione di macOS (launchd), dal
+lunedì al venerdì, ora locale:
 
-- **08:30** report del mattino (`signals.py`);
+- **08:30** riepilogo del mattino (`morning_job.py`, Fase 23): se c'è qualcosa di rilevante compare una finestra con gli
+  eventi macro di oggi (orario italiano), le trimestrali dei miei titoli (preferiti e portafoglio) nei prossimi 5 giorni,
+  il numero di posizioni in "Rivedi la tesi" e le sedute mancanti nel diario; pulsanti "Chiudi" e "Apri la pagina Oggi"
+  (apre la dashboard su Oggi, avviando l'app se è chiusa). Senza niente di rilevante, nessuna finestra. È una finestra e
+  non una notifica perché su macOS il clic su una notifica creata da uno script apre l'Editor di Script, non il browser;
+  si chiude da sola dopo 30 minuti. Il report del mattino non viene più generato. Prova a mano:
+  `.venv/bin/python morning_job.py` (con `--print` solo il testo, senza finestra);
 - **22:45** job serale (`daily_job.py`): report della sera, diario dei segnali e fotografia del portafoglio del giorno,
   **anche con la dashboard chiusa**. Scrive solo quello che manca: se anche la dashboard è aperta, il primo che salva
   vince e l'altro salta.
@@ -282,7 +288,8 @@ diario non si può ricostruire dopo, e la ⚠ in alto lo segnala.
 ./schedule.sh remove    # disattiva
 ```
 
-Log: `reports/logs/signals.log` / `.err` (mattino) e `reports/logs/daily_job.log` / `.err` (sera).
+Log: `reports/logs/morning_job.log` / `.err` (mattino) e `reports/logs/daily_job.log` / `.err` (sera). Dopo la Fase 23 va
+rifatto `./schedule.sh install`, perché il job delle 08:30 cambia programma.
 Il report è uno screening meccanico, **non è una consulenza finanziaria**.
 
 ## Backtest del Trend (parte tecnica)
@@ -378,14 +385,17 @@ residuo (favorisce i pattern di forza), test multipli, casi sovrapposti, nessun 
 I test (`tests/`) usano solo dati finti e una cartella temporanea al posto di `portafoglio/`, mai i dati reali:
 verdetto (`decision.py`), azioni sulle posizioni (`actions.py`), stima fiscale con e senza zainetto, rendimento
 ponderato per il tempo (`history.py`), quantità da comprare con e senza spread di cambio, tendenze, oscillazione a 5
-giorni, supporti e resistenze, punti pivot, "dalla data" del diario e il riquadro Analisi.
+giorni, supporti e resistenze, punti pivot, "dalla data" del diario e il riquadro Analisi; diario (un giorno salvato non
+si riscrive mai, gli esclusi non entrano nelle statistiche, "dalla data" e "almeno dal", sedute mancanti senza weekend e
+festività); trimestrali (giorno di reazione prima dell'apertura, dopo la chiusura e a cavallo del fine settimana);
+testo del riepilogo del mattino.
 
 ## File del progetto
 
 | File/cartella | A cosa serve |
 |---|---|
 | `server.py` | Server: scarica i dati e li serve alla pagina web |
-| `signals.py` | Report tecnico due volte al giorno (schede Report e Pattern tecnici) |
+| `signals.py` | Report tecnico della sera (archivio in `reports/`, generato dal job serale) |
 | `actions.py` | Tesi delle posizioni, azione proposta (Mantieni / Accumula / Rivedi la tesi) con le sue regole, stima fiscale e zainetto |
 | `analysts.py` | Dati degli analisti e valutazione (scaricati una volta al giorno) |
 | `score.py` | Segnale finale (analisti + valutazione + notizie) e Trend a parte |
@@ -393,6 +403,7 @@ giorni, supporti e resistenze, punti pivot, "dalla data" del diario e il riquadr
 | `history.py` | Storico giornaliero del portafoglio e rendimento ponderato per il tempo contro QQQ e VWCE |
 | `risk.py` | Rischio del portafoglio: volatilità, beta, scenario, massima perdita, contributo al rischio, correlazione |
 | `rules.py` | Il mio rischio massimo per operazione (unica regola rimasta dopo la Fase 21) |
+| `morning_job.py` | Riepilogo del mattino (08:30): finestra con eventi macro, trimestrali dei miei titoli, posizioni da rivedere, sedute mancanti |
 | `daily_job.py` | Job serale: report, diario e fotografia del portafoglio anche con la dashboard chiusa |
 | `earnings.py` | Dettagli delle trimestrali in Oggi (ultima trimestrale, movimento tipico nel giorno di reazione) |
 | `tests/`, `requirements-dev.txt` | Test automatici con dati finti (pytest) |

@@ -962,7 +962,7 @@ const PF_DASH = () => [
   { k: "name", l: "Titolo", cls: "l", sort: x => x.name, html: pfName },
   { k: "value", l: "Valore", sort: x => x.value, html: x => fEur(x.value) },
   { k: "weight", l: "Peso", sort: x => x.weight, html: x => isNum(x.weight) ? fNum(x.weight, 1) + "%" : "—" },
-  { k: "action", l: "Azione", cls: "l", i: "Azione proposta dalle regole (clicca per la tesi e i motivi). Regole di disciplina, non verificate da backtest.", sort: x => ({ "Riduci": 3, "Rivedi la tesi": 2, "Accumula": 1 }[x.action?.action] || 0),
+  { k: "action", l: "Azione", cls: "l", i: "Azione proposta dalle regole (clicca per la tesi e i motivi). Regole di disciplina, non verificate da backtest.", sort: x => ({ "Rivedi la tesi": 2, "Accumula": 1 }[x.action?.action] || 0),
     html: x => x.action ? `<button class="act-btn" data-pos="${esc(x.isin)}" title="${esc(x.action.reasons.join(" · ") || "Nessuna regola scattata")}">${actBadge(x.action)}${x.action.silenced ? ` <span class="muted small">rivista</span>` : ""}${x.thesis ? "" : ` <span class="muted small">senza tesi</span>`}</button>` : "—" },
   { ...ndxCol("trend", "Trend"), cls: "" }, { ...ndxCol("signal", "Segnale"), cls: "l" }, { ...ndxCol("valLabel", "Valutazione"), cls: "l" },
   { ...ndxCol("upside", "Potenziale analisti"), cls: "" }, { ...ndxCol("earnings", "Prossima trimestrale"), cls: "l" },
@@ -978,7 +978,7 @@ const PF_COLS = [
   { k: "fxEffect", l: "Di cui cambio", i: FX_INFO, sort: x => x.fxEffect, html: x => x.currency === "EUR" ? `<span class="muted">—</span>` : `<span class="${sign(x.fxEffect)}">${fEurS(x.fxEffect)}</span>` },
   { k: "today", l: "Oggi", i: "Variazione di oggi in euro, dovuta al prezzo (rispetto alla chiusura precedente della sua borsa).", sort: x => x.today, html: x => `<span class="${sign(x.today)}">${fEurS(x.today)}</span>` },
   { k: "weight", l: "Peso", i: "Quota del valore totale del portafoglio.", sort: x => x.weight, html: x => isNum(x.weight) ? fNum(x.weight, 1) + "%" : "—" },
-  { k: "action", l: "Azione", cls: "l", i: "Azione proposta dalle regole (clicca per la tesi e i motivi). Regole di disciplina, non verificate da backtest.", sort: x => ({ "Riduci": 3, "Rivedi la tesi": 2, "Accumula": 1 }[x.action?.action] || 0),
+  { k: "action", l: "Azione", cls: "l", i: "Azione proposta dalle regole (clicca per la tesi e i motivi). Regole di disciplina, non verificate da backtest.", sort: x => ({ "Rivedi la tesi": 2, "Accumula": 1 }[x.action?.action] || 0),
     html: x => x.action ? `<button class="act-btn" data-pos="${esc(x.isin)}" title="${esc(x.action.reasons.join(" · ") || "Nessuna regola scattata")}">${actBadge(x.action)}${x.action.silenced ? ` <span class="muted small">rivista</span>` : ""}${x.thesis ? "" : ` <span class="muted small">senza tesi</span>`}</button>` : "—" },
 ];
 function renderPortfolio() {
@@ -1047,7 +1047,7 @@ function renderConcentration() {
   $("#pfConcNote").innerHTML = `${notes[pf.dim]} Barra chiara = valore investito, barra scura = esposizione effettiva.`;
 }
 // ---- thesis and proposed action of each position (actions.py, portafoglio/tesi.json)
-const ACT_CLS = { "Riduci": "red", "Rivedi la tesi": "rev", "Accumula": "acc", "Mantieni": "hold" };
+const ACT_CLS = { "Rivedi la tesi": "rev", "Accumula": "acc", "Mantieni": "hold" };
 const actBadge = a => `<span class="act ${ACT_CLS[a.action] || "hold"}">${esc(a.label || a.action)}</span>`;   // label: "Rivedi · target raggiunto"
 const TAX_NOTE = "Stima indicativa, non è una consulenza fiscale: non conta commissioni, minusvalenze che hai già, né casi particolari.";
 const actTax = a => a.tax ? `<span class="act-tax">Effetto fiscale stimato: ${esc(a.tax.text)}. ${info(`<b>Effetto fiscale stimato.</b> Guadagno o perdita in euro sulla parte da vendere, in proporzione al «Valore di carico» di Fineco, con l'imposta indicativa del 26%.<br><br>
@@ -1055,7 +1055,7 @@ const actTax = a => a.tax ? `<span class="act-tax">Effetto fiscale stimato: ${es
   <b>ETF UCITS</b>: i guadagni sono «redditi di capitale», tassati al 26% senza poterli compensare con le perdite; le perdite sono «redditi diversi».<br><br>${TAX_NOTE}`)}</span>` : "";
 const ACT_INFO = `Per ogni posizione la dashboard propone <b>Mantieni</b>, <b>Accumula</b> o <b>Rivedi la tesi</b> con regole esplicite: accanto vedi quali sono scattate e con quali numeri.
   Rivedi la tesi vince su Accumula.<br><br>Sono <b>regole di disciplina scelte da te, non verificate da un backtest</b>: servono a non dimenticare le cose da controllare,
-  non dicono cosa farà il prezzo. «Accumula» scatta solo se hai scritto un peso obiettivo nella tesi. (Le regole «Riduci» sui limiti di peso sono state tolte.)`;
+  non dicono cosa farà il prezzo. «Accumula» scatta solo se hai scritto un peso obiettivo nella tesi.`;
 // panel of one position: thesis to write or edit, proposed action and the full list of rules
 function openPosition(isin) {
   const p = pf.data?.positions?.find(x => x.isin === isin);
@@ -1725,7 +1725,7 @@ const TA_WAIT_INFO = `Un ordine condizionato compra solo se il prezzo supera un 
   <b>margine di un quarto di ATR</b> (l'ATR è il movimento medio di un giorno): serve a non far scattare l'ordine per un superamento di pochi centesimi.<br><br>
   Lo stop è un ATR sotto il livello rotto: se il prezzo torna sotto, la rottura è fallita.`;
 const VERDICT_CLS = { "Entra ora": "acc", "Entra su ritracciamento": "wait", "Entra su rottura": "wait", "Attendi": "hold", "Evita": "red",
-  "Riduci": "red", "Rivedi la tesi": "rev", "Accumula": "acc", "Mantieni": "hold" };
+  "Rivedi la tesi": "rev", "Accumula": "acc", "Mantieni": "hold" };
 const verdictBadge = v => `<span class="act big ${VERDICT_CLS[v.category] || "hold"}">${esc(v.label)}</span>`;
 
 // one operating plan computed by the server (entry, stop options, money); the stop can be switched here

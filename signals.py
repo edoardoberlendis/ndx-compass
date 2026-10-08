@@ -364,29 +364,16 @@ def list_reports():
     return sorted(ids, key=report_key, reverse=True)
 
 
-def notify(report):
-    session = {"morning": "del mattino", "close": "della sera"}.get(report["session"], "intraday")
-    title = f"Report Nasdaq-100 {session}"
-    msg = f"{report['regime']['label']} · Temi più forti: {', '.join(g['name'] for g in report['themes'][:3]) or '—'}"
-    # Pass text as argv, not spliced into the script: no quoting issues and non-ASCII (·) survives launchd.
-    script = ('on run argv\n'
-              'display notification (item 1 of argv) with title (item 2 of argv) subtitle "Apri localhost:8100/#ideas"\n'
-              'end run')
-    subprocess.run(["osascript", "-e", script, msg, title], check=False)
-
-
-def run(notify_user=False):
+def run(notify_user=False):      # notify_user is ignored since phase 23 (the morning summary is morning_job.py)
     report = build_report()
     path = save(report)
     print(f"[{report['generated']}] {report['id']}: {report['headline']} -> {path} ({report['elapsed']}s)")
-    if notify_user:
-        notify(report)
     return report
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--notify", action="store_true", help="post a macOS notification when done")
+    ap.add_argument("--notify", action="store_true", help="ignored (kept for old launchd jobs): see morning_job.py")
     args = ap.parse_args()
     now = datetime.now(ET)
     # scheduled runs (launchd, no terminal) skip weekends and US market holidays; a run from the Terminal always goes

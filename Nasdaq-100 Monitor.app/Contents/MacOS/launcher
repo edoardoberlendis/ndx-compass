@@ -3,6 +3,8 @@
 DIR="$(cd "$(dirname "$0")/../../.." && pwd)"          # project folder that contains this .app
 PORT=8100
 URL="http://localhost:$PORT/"
+# optional page to open, e.g. "overview" from the morning summary (open -a "Nasdaq-100 Monitor.app" --args overview)
+case "$1" in [a-z]*) PAGE_URL="$URL#$1" ;; *) PAGE_URL="$URL" ;; esac
 PY="$DIR/.venv/bin/python"                              # project virtualenv (created by run.sh or below)
 PY312="/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12"   # python.org installer
 # Script-only app bundles can be launched under Rosetta; force native arm64 on Apple silicon
@@ -21,7 +23,7 @@ if up; then
     /usr/sbin/lsof -ti tcp:$PORT | xargs kill 2>/dev/null
     /usr/bin/osascript -e 'display notification "Server fermato" with title "Nasdaq-100 Monitor"'
   elif [ -n "$choice" ]; then
-    open "$URL"
+    open "$PAGE_URL"
   fi
   exit 0
 fi
@@ -55,7 +57,7 @@ disown
 for i in $(seq 1 40); do up && break; sleep 0.5; done
 if up; then
   /usr/bin/osascript -e 'display notification "Carico i dati di mercato… (circa 10 secondi)" with title "Nasdaq-100 Monitor"'
-  open "$URL"
+  open "$PAGE_URL"
 else
   alert "Il server non è partito. Guarda cache/server.log nella cartella del progetto."
 fi
