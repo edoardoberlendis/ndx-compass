@@ -25,14 +25,13 @@
 </header>
 
 <nav class="tabs">
-  <!-- four tabs that follow a manager's work; each one groups the older views (sub-tabs), whose ids and links are unchanged -->
+  <!-- three tabs (phase 21); each one groups older pages as sub-tabs, whose ids and links are unchanged -->
   <div class="tablist" role="tablist">
     <button class="tab" data-main="mercato" title="Cosa sta succedendo?">Mercato</button>
-    <button class="tab" data-main="portafoglio" title="Cosa devo fare con quello che ho?">Portafoglio</button>
+    <button class="tab" data-main="portafoglio" title="Cosa ho e come sta andando?">Portafoglio</button>
     <button class="tab" data-main="ricerca" title="Cosa potrei comprare?">Ricerca</button>
-    <button class="tab" data-main="metodo" title="Il sistema funziona?">Metodo</button>
   </div>
-  <div class="updated"><span class="status" id="status"></span><span class="cal-warn" id="calWarn" hidden>⚠ Festività USA: elenco da aggiornare</span><span id="updated"></span></div>
+  <div class="updated"><span class="status" id="status"></span><span class="info cal-warn" id="calWarn" tabindex="0" role="button" aria-label="Avvisi da controllare" data-info="" hidden>⚠</span><span id="updated"></span></div>
   <div class="subtabs" id="subtabs" hidden></div>
 </nav>
 
@@ -106,40 +105,50 @@
     <div class="table-wrap"><table class="scr" id="scr"></table></div>
   </section>
 
-  <!-- PORTFOLIO (newest export in portafoglio/, personal data: never cached) -->
+  <!-- PORTFOLIO (newest export in portafoglio/, personal data: never cached). One section, four sub-pages (data-pfsub) -->
   <section id="view-portfolio" class="view" hidden>
-    <div class="toolbar pf-up"><button class="btn" id="pfUpBtn">Carica file Fineco</button><input type="file" id="pfUpFile" accept=".xls" hidden>
-      <span class="muted small">oppure trascina qui il file .xls esportato da Fineco · resta solo su questo Mac</span></div>
-    <div id="pfUpBox" class="card" hidden></div>
+    <div data-pfsub="portfolio">
+      <div class="toolbar pf-up"><button class="btn" id="pfUpBtn">Carica file Fineco</button><input type="file" id="pfUpFile" accept=".xls" hidden>
+        <span class="small" id="pfFileInfo"></span><span class="muted small">oppure trascina qui il nuovo file .xls · resta solo su questo Mac</span></div>
+      <div id="pfUpBox" class="card" hidden></div>
+    </div>
     <div id="pfEmpty" class="card empty" hidden></div>
     <div id="pfBody" hidden>
-      <div class="card pf-att" id="pfAttention" hidden></div>
-      <div class="card pf-rules" id="pfRules" hidden></div>
-      <div class="kpis" id="pfKpis"></div>
-      <div class="card" id="pfRisk" hidden></div>
-      <div class="card" id="pfPerf" hidden></div>
-      <div class="card">
-        <div class="card-h"><h2>Posizioni</h2>
-          <div class="seg small" id="pfColSeg"><button data-cols="values" class="on">Valori</button><button data-cols="dash">Dati della dashboard</button></div>
-          <span class="card-meta" id="pfMeta"></span><span class="count" id="pfCount"></span></div>
-        <div id="pfWarn" class="pf-warn" hidden></div>
-        <div id="pfLev" class="pf-lev" hidden></div>
-        <div class="table-wrap"><table class="scr pf" id="pfTbl"></table></div>
-        <p class="muted small">Valori in euro con le stesse formule di Fineco: quantità × prezzo ÷ cambio EUR/USD (1 per i titoli in euro).
-          Il costo è il "Valore di carico" del file, al cambio dei giorni di acquisto. Nessuna indicazione di acquisto o vendita.</p>
+      <div data-pfsub="portfolio">
+        <div class="kpis" id="pfKpis"></div>
+        <div class="card">
+          <div class="card-h"><h2>Posizioni</h2>
+            <div class="seg small" id="pfColSeg"><button data-cols="values" class="on">Valori</button><button data-cols="dash">Dati della dashboard</button></div>
+            <span class="card-meta" id="pfMeta"></span><span class="count" id="pfCount"></span></div>
+          <div id="pfWarn" class="pf-warn" hidden></div>
+          <div id="pfLev" class="pf-lev" hidden></div>
+          <div class="table-wrap"><table class="scr pf" id="pfTbl"></table></div>
+          <p class="muted small">Valori in euro con le stesse formule di Fineco: quantità × prezzo ÷ cambio EUR/USD (1 per i titoli in euro).
+            Il costo è il "Valore di carico" del file, al cambio dei giorni di acquisto.</p>
+        </div>
+        <details class="card fold pf-tax" id="pfTax"></details>
       </div>
-      <div class="card">
-        <div class="card-h"><h2>Concentrazione</h2>
-          <div class="seg small" id="pfDimSeg"><button data-dim="sector" class="on">Settore</button><button data-dim="theme">Tema</button><button data-dim="country">Paese</button></div>
-          <span class="card-meta" id="pfConcMeta"></span></div>
-        <div class="table-wrap"><table class="scr pf-conc" id="pfConc"></table></div>
-        <p class="muted small" id="pfConcNote"></p>
+      <div data-pfsub="pfperf" hidden><div class="card" id="pfPerf" hidden></div></div>
+      <div data-pfsub="pfconc" hidden>
+        <div class="card">
+          <div class="card-h"><h2>Concentrazione</h2>
+            <div class="seg small" id="pfDimSeg"><button data-dim="sector" class="on">Settore</button><button data-dim="theme">Tema</button><button data-dim="country">Paese</button></div>
+            <span class="card-meta" id="pfConcMeta"></span></div>
+          <div class="table-wrap"><table class="scr pf-conc" id="pfConc"></table></div>
+          <p class="muted small" id="pfConcNote"></p>
+        </div>
       </div>
+      <div data-pfsub="pfrisk" hidden><div class="card" id="pfRisk" hidden></div></div>
     </div>
   </section>
 
   <!-- SECTORS (sector returns; the market map lives in Oggi) -->
   <section id="view-sectors" class="view" hidden>
+    <div class="card">
+      <div class="card-h"><h2>Mappa di rotazione</h2><div class="seg small" data-grp-seg><button data-grp="themes" class="on">Temi</button><button data-grp="sectors">Settori</button></div></div>
+      <div id="rrg" class="chart"></div>
+      <p class="hint">x: rendimento vs QQQ a 1 mese · y: vs QQQ a 1 settimana. I gruppi tendono a ruotare in senso orario: In miglioramento → Leader → In indebolimento → In ritardo.</p>
+    </div>
     <div class="card">
       <div class="card-h"><h2>Rendimenti dei settori</h2><span class="card-meta">pesati per capitalizzazione · clicca una riga per vedere i titoli del settore, di nuovo per tornare a tutti</span>
         <button class="btn" id="secAll" hidden>Tutti i settori</button></div>
@@ -157,60 +166,14 @@
     </div>
   </section>
 
-  <!-- PATTERN TECNICI (test results from reports/patterns.json + today's stocks from the report; view id "trade" kept for saved links) -->
-  <section id="view-trade" class="view" hidden>
-    <p class="warn-box" id="ptIntro"></p>
-    <div class="toolbar"><span class="muted" id="ptMeta"></span><button class="link-btn" data-goto="ideas">Cambia report nella scheda Report →</button></div>
-    <div id="ptBody"></div>
-  </section>
-
-  <!-- LE MIE REGOLE (limits of the portfolio, rules.py; saved in portafoglio/regole.json) -->
-  <section id="view-rules" class="view" hidden><div class="card" id="rulesBody"></div></section>
-
   <!-- DIARIO DEI SEGNALI (live check of the verdicts, diary.py) -->
   <section id="view-diary" class="view" hidden><div id="diaryBody"></div></section>
 
-  <!-- REPORT (twice-daily trend report; view id "ideas" kept for saved links) -->
-  <section id="view-ideas" class="view" hidden>
-    <div class="toolbar">
-      <select id="repSel" aria-label="Report"></select>
-      <span class="muted" id="repMeta"></span>
-      <span class="count" id="repJob"></span>
-      <button class="btn" id="runBtn">Genera report ora</button>
-    </div>
-    <div id="ideasEmpty" class="card empty" hidden>Nessun report. Clicca <b>Genera report ora</b> oppure attendi l'esecuzione programmata (08:30 e 22:30, lun–ven).</div>
-    <div id="ideasBody">
-      <div class="card brief" id="brief"></div>
-
-      <div class="card">
-        <div class="card-h"><h2>Mappa di rotazione</h2><div class="seg small" data-grp-seg><button data-grp="themes" class="on">Temi</button><button data-grp="sectors">Settori</button></div></div>
-        <div id="rrg" class="chart"></div>
-        <p class="hint">x: rendimento vs QQQ a 1 mese · y: vs QQQ a 1 settimana. I gruppi tendono a ruotare in senso orario: In miglioramento → Leader → In indebolimento → In ritardo.</p>
-      </div>
-      <div class="card">
-        <div class="card-h"><h2 id="grpTitle">Temi</h2><span class="card-meta">struttura medie 20/40/60 · Δ vs report precedente</span></div>
-        <table class="scr grp" id="grpTable"></table>
-      </div>
-
-      <div class="card" id="changesCard"><div class="card-h"><h2>Cosa è cambiato</h2><span class="card-meta" id="changesMeta"></span></div><ul id="changes" class="changes-list"></ul></div>
-
-      <div class="card">
-        <div class="card-h"><h2>Tutti i titoli · analisi delle medie mobili</h2><span class="card-meta" id="maNote"></span><input id="maFind" class="find" type="search" placeholder="Filtra…" aria-label="Filtra titoli"></div>
-        <div class="table-wrap ma-wrap" id="maWrap"><table class="scr" id="maTable"></table></div>
-      </div>
-      <div class="card" id="btCard">
-        <div class="card-h"><h2>Backtest del Trend (parte tecnica)</h2><div class="seg small" id="btSeg"></div><span class="card-meta" id="btMeta"></span></div>
-        <div id="btBody"><div class="empty">Nessun backtest ancora. Dal Terminale: <code>.venv/bin/python backtest.py</code></div></div>
-      </div>
-      <p class="disclaimer" id="disclaimer"></p>
-    </div>
-  </section>
 </main>
 
 <div id="scrim" class="scrim" hidden></div>
 <aside id="drawer" class="drawer" aria-hidden="true"></aside>
 <div id="tip" class="tip" role="tooltip"></div>
-<div id="maHeadBox" class="ma-headbox" hidden aria-hidden="true"><table class="scr" id="maHead"></table></div>
 
 <footer class="foot">Dati: Yahoo Finance tramite yfinance (quotazioni possibili in ritardo) · elenco titoli: Wikipedia · pesi: i 10 più grandi dal fondo QQQ (Nasdaq.com), gli altri stimati (≈). Non è una consulenza finanziaria.</footer>
 

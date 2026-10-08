@@ -7,3 +7,6 @@ reports/logs/
 
 # dati personali del portafoglio (export Fineco): mai nei commit
 portafoglio/
+
+# archivi del progetto (non vanno nel repository)
+*.zip

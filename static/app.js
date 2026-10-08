@@ -210,12 +210,11 @@ function renderAll() {
   syncTfSegs();
   if (state.view === "overview") renderOverview();
   if (state.view === "watch") renderMyStocks();
-  if (state.view === "portfolio") loadPortfolio();
+  if (PF_SUBS.includes(state.view)) loadPortfolio();
   if (state.view === "screener") renderScreener();
   if (state.view === "sectors") renderSectors();
-  if (state.view === "ideas" || state.view === "trade") renderIdeas();
+  if (state.view === "sectors") loadRotation();
   if (state.view === "diary") loadDiary();
-  if (state.view === "rules") loadRulesPage();
   if (state.detail) { renderDetailHeader(); renderTA(); }
 }
 
@@ -242,9 +241,9 @@ function renderStatus() {
   const el = $("#status");
   el.className = "status " + st;
   el.textContent = label;
-  const w = $("#calWarn");
-  w.hidden = !note.calendarWarning;
-  w.title = note.calendarWarning || "";
+  const w = $("#calWarn"), ws = note.calWarnings || [];
+  w.hidden = !ws.length;
+  w.dataset.info = ws.length ? `<b>Da controllare</b><ul class="why">${ws.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
 }
 
 // ------------------------------------------------------------ timeframe segs
@@ -625,17 +624,57 @@ function toggleWatch(t) {
 }
 
 // earnings of the next 7 days; my stocks first
+// Earnings of the next 7 days: one compact line per company, details on click (estimates, last report, usual move).
+// Details come from /api/earnings (earnings.py); a missing figure is simply not shown.
+const earn = { data: {}, at: 0, open: new Set() };
+const EARN_MOVE_INFO = `Quanto si è mosso in media il titolo, in più o in meno, nel giorno di reazione alle ultime trimestrali (la seduta stessa se i conti escono prima dell'apertura,
+  quella dopo se escono dopo la chiusura), calcolato dai prezzi giornalieri. <b>Indica quanto si rischia tenendo il titolo durante i conti</b>, non in che direzione andrà.`;
+async function loadEarnDetails() {
+  if (Date.now() - earn.at < 60_000) return;
+  earn.at = Date.now();
+  try {
+    const d = await getJSON("/api/earnings");
+    earn.data = d.data || {};
+    if (d.loading) { earn.at = 0; setTimeout(loadEarnDetails, 4000); }
+  } catch { return; }
+  if (state.view === "overview") renderEarnings();
+}
+function earnWhen(ts) {          // Yahoo gives a time only when the company announced it
+  const h = +new Date(ts * 1000).toLocaleString("en-US", { timeZone: tz, hour: "numeric", hour12: false });
+  return h > 0 && h < 12 ? "prima dell'apertura" : h >= 16 ? "dopo la chiusura" : "";
+}
 function renderEarnings() {
+  loadEarnDetails();
   const mine = s => state.watch.has(s.ticker) ? 1 : 0;
   const list = stocks().filter(s => { const d = daysTo(s.earningsTs); return d != null && d <= 7; })
     .sort((a, b) => mine(b) - mine(a) || a.earningsTs - b.earningsTs);
-  miniTable($("#earnings"), list, s => {
-    const d = Math.round(daysTo(s.earningsTs));
-    return `<td class="t">${mine(s) ? '<span class="mine" title="Tra i miei titoli">★</span> ' : ""}${esc(s.ticker)}</td><td class="n">${esc(s.name)}</td>
-      <td class="r num">${fDate(s.earningsTs, { weekday: "short", month: "short", day: "numeric" })}</td>
-      <td class="r muted num">${d <= 0 ? "oggi" : "tra " + d + " g"}</td><td class="r num muted">${fBig(s.mcap)}</td>`;
-  }, "Nessuna trimestrale nei prossimi 7 giorni");
+  const el = $("#earnings");
+  if (!list.length) { el.innerHTML = `<div class="empty">Nessuna trimestrale nei prossimi 7 giorni</div>`; return; }
+  const num = (v, d = 2) => isNum(v) ? fNum(v, d) : null;
+  el.innerHTML = list.map(s => {
+    const d = Math.round(daysTo(s.earningsTs)), E = earn.data[s.ticker] || {}, L = E.last, when = earnWhen(s.earningsTs);
+    const det = [
+      isNum(E.epsExpected) ? `<div><span>Utile per azione atteso</span><b>${num(E.epsExpected)} $</b>${E.epsAnalysts ? ` <span class="muted">(${E.epsAnalysts} analisti)</span>` : ""}</div>` : "",
+      isNum(E.revExpected) ? `<div><span>Ricavi attesi</span><b>$${fBig(E.revExpected)}</b>${E.revAnalysts ? ` <span class="muted">(${E.revAnalysts} analisti)</span>` : ""}</div>` : "",
+      L && isNum(L.reported) ? `<div><span>Ultima trimestrale (${dayShort(L.ts.slice(0, 10))})</span><b>${isNum(L.eps) ? `attesi ${num(L.eps)} $, ` : ""}effettivi ${num(L.reported)} $</b>${isNum(L.surprise) ? ` <span class="${sign(L.surprise)}">sorpresa ${fPct(L.surprise, 1)}</span>` : ""}</div>` : "",
+      E.moves?.length ? `<div><span>Movimenti dopo le ultime trimestrali</span><b>${E.moves.map(m => `<span class="${sign(m.move)}">${fPct(m.move, 1)}</span>`).join(" ")}</b></div>` : "",
+    ].filter(Boolean).join("");
+    const open = earn.open.has(s.ticker) && det;
+    return `<div class="earn-it ${open ? "open" : ""}"><button class="earn-row" data-earn="${esc(s.ticker)}" ${det ? "" : "disabled"}>
+        <span class="t">${mine(s) ? '<span class="mine" title="Tra i miei titoli">★</span> ' : ""}${esc(s.ticker)}</span><span class="n">${esc(s.name)}</span>
+        <span class="r num">${fDate(s.earningsTs, { weekday: "short", month: "short", day: "numeric" })}${when ? ` · <span class="muted">${when}</span>` : ""}</span>
+        <span class="r muted num">${d <= 0 ? "oggi" : "tra " + d + " g"}</span>
+        <span class="r num">${isNum(E.usualMove) ? `di solito ±${fNum(E.usualMove, 0)}%` : ""}</span></button>
+      ${open ? `<div class="earn-det">${det}<p class="muted small">«Di solito ±${fNum(E.usualMove ?? 0, 0)}%» ${info(EARN_MOVE_INFO)} · dati Yahoo Finance</p></div>` : ""}</div>`;
+  }).join("");
 }
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-earn]");
+  if (!b || e.target.closest(".info")) return;
+  const t = b.dataset.earn;
+  earn.open.has(t) ? earn.open.delete(t) : earn.open.add(t);
+  renderEarnings();
+});
 
 // ------------------------------------------------------------ news reliability labels (automatic, approximate)
 // Ufficiale = the company's own releases / SEC filings; Opinione / ipotesi = commentary sites or speculative headlines;
@@ -746,8 +785,7 @@ async function loadMacro() {
   let d;
   try { d = await getJSON("/api/macro"); } catch { macroAt = 0; $("#macro").innerHTML = `<div class="empty">Eventi non disponibili</div>`; return; }
   macroData = d;
-  $("#macro").innerHTML = (d.events.length ? d.events.map((e, k) => macroItem(e, d.rate, k)).join("") : `<div class="empty">Nessun evento nei prossimi 7 giorni</div>`)
-    + d.warnings.map(w => `<div class="mc-warn">⚠ ${esc(w)}</div>`).join("");
+  $("#macro").innerHTML = d.events.length ? d.events.map((e, k) => macroItem(e, d.rate, k)).join("") : `<div class="empty">Nessun evento nei prossimi 7 giorni</div>`;
 }
 $("#macro").addEventListener("click", e => { const b = e.target.closest("[data-macro]"); if (b && macroData) openMacro(macroData.events[+b.dataset.macro]); });
 // side panel of a macro event: same drawer as the stocks, texts from MACRO (unchanged), numbers from /api/macro
@@ -768,7 +806,8 @@ function openMacro(e) {
       <div class="actions"><button class="icon-btn close-btn" id="dClose" aria-label="Chiudi">×</button></div></div></div>
     <div class="d-rest macro-d">
       <div class="d-sec"><h3>Quando</h3><p><b>${esc(w.day)}</b> · ${w.ny} ora di New York · <b>${w.local} ora italiana</b>${e.kind === "fomc" ? "<br>La conferenza stampa inizia mezz'ora dopo la decisione." : ""}</p></div>
-      <div class="d-sec"><h3>Valori</h3>${values}</div>
+      <div class="d-sec"><h3>Valori</h3>${values}
+        <p class="small"><b>Valore atteso:</b> lo trovi nel calendario economico di Fineco (Mercati e trading). La dashboard non lo mostra perché non esiste una fonte gratuita affidabile per le attese.</p></div>
       <div class="d-sec"><h3>Spiegazione</h3><p>${M.info}${SURPRISE_NOTE}</p></div>
       <div class="d-sec"><h3>Come reagisce di solito il mercato</h3><p>${M.react.charAt(0).toUpperCase() + M.react.slice(1)}</p></div>
       <div class="d-sec"><h3>Settori e temi coinvolti</h3><p><b>Settori:</b> ${esc(e.impact.sectors.join(", "))}<br><b>Temi:</b> ${esc(e.impact.themes.join(", "))}</p>
@@ -903,7 +942,7 @@ async function loadPortfolio() {
   } else { risk.data = null; renderRisk(); }
   if (pf.data.file && !pf.data.error) loadPerf(); else { perf.data = null; renderPerf(); }
   clearTimeout(pf.retry);
-  if (pf.data.resolving && state.view === "portfolio") pf.retry = setTimeout(loadPortfolio, 3000);   // tickers still being matched
+  if (pf.data.resolving && PF_SUBS.includes(state.view)) pf.retry = setTimeout(loadPortfolio, 3000);   // tickers still being matched
 }
 const FX_INFO = `Per i titoli in dollari il risultato in euro dipende da due cose: il <b>prezzo del titolo</b> e il <b>cambio EUR/USD</b>.
   "Di cui effetto cambio" è la parte dovuta solo al cambio: quanto varrebbe la posizione al prezzo di oggi ma al cambio dei giorni
@@ -946,8 +985,7 @@ function renderPortfolio() {
   const D = pf.data;
   const empty = !D || !D.file || D.error;
   $("#pfEmpty").hidden = !empty; $("#pfBody").hidden = empty;
-  renderRules();
-  renderAttention();
+  renderTaxBox();
   if (empty) {
     $("#pfEmpty").innerHTML = D?.error ? esc(D.error)
       : `Nessun file del portafoglio. Esporta le posizioni da Fineco in Excel (.xls) e caricale con il pulsante <b>Carica file Fineco</b> qui sopra, oppure trascina il file su questa pagina.`;
@@ -962,8 +1000,8 @@ function renderPortfolio() {
     kpi("Oggi", `<span class="${sign(T.today)}">${fEurS(T.today, 0)}</span>`, "variazione dei prezzi rispetto alla chiusura precedente"),
   ].join("");
   const when = D.quotesAt ? new Date(D.quotesAt * 1000).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }) : null;
-  $("#pfMeta").textContent = `file ${D.file} (esportato il ${new Date(D.fileTime * 1000).toLocaleString("it-IT", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })})`
-    + (D.resolving ? " · cerco i ticker su Yahoo…" : when ? ` · prezzi aggiornati alle ${when} ora locale` : "");
+  $("#pfFileInfo").textContent = `file attuale: ${D.file}, del ${new Date(D.fileTime * 1000).toLocaleString("it-IT", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}`;
+  $("#pfMeta").textContent = D.resolving ? "cerco i ticker su Yahoo…" : when ? `prezzi aggiornati alle ${when} ora locale` : "";
   $("#pfWarn").hidden = !D.warnings.length;
   $("#pfWarn").innerHTML = D.warnings.map(w => `<div>⚠ ${esc(w)}</div>`).join("")
     + (D.warnings.length ? `<div class="muted small">Puoi indicare il ticker giusto in <code>portafoglio/ticker.json</code>, per esempio {"ISIN": "TICKER.MI"}.</div>` : "");
@@ -1015,21 +1053,9 @@ const TAX_NOTE = "Stima indicativa, non è una consulenza fiscale: non conta com
 const actTax = a => a.tax ? `<span class="act-tax">Effetto fiscale stimato: ${esc(a.tax.text)}. ${info(`<b>Effetto fiscale stimato.</b> Guadagno o perdita in euro sulla parte da vendere, in proporzione al «Valore di carico» di Fineco, con l'imposta indicativa del 26%.<br><br>
   <b>Azioni ed ETC/ETN</b>: guadagni e perdite sono «redditi diversi» e si compensano tra loro (le perdite valgono per i 4 anni successivi).<br>
   <b>ETF UCITS</b>: i guadagni sono «redditi di capitale», tassati al 26% senza poterli compensare con le perdite; le perdite sono «redditi diversi».<br><br>${TAX_NOTE}`)}</span>` : "";
-const ACT_INFO = `Per ogni posizione la dashboard propone <b>Mantieni</b>, <b>Accumula</b>, <b>Riduci</b> o <b>Rivedi la tesi</b> con regole esplicite: accanto vedi quali sono scattate e con quali numeri.
-  Vince la più grave: Riduci, poi Rivedi la tesi, poi Accumula.<br><br>Sono <b>regole di disciplina scelte da te, non verificate da un backtest</b>: servono a non dimenticare le cose da controllare,
-  non dicono cosa farà il prezzo. «Accumula» scatta solo se hai scritto un peso obiettivo nella tesi.`;
-function renderAttention() {
-  const el = $("#pfAttention"), D = pf.data, S = D?.actions;
-  if (!S || !D.positions?.length) { el.hidden = true; return; }
-  el.hidden = false;
-  const rank = { "Riduci": 0, "Rivedi la tesi": 1, "Accumula": 2 };
-  const list = D.positions.filter(p => p.action && p.action.action !== "Mantieni").sort((a, b) => rank[a.action.action] - rank[b.action.action] || b.value - a.value);
-  el.innerHTML = `<div class="card-h"><h2>Cosa richiede attenzione oggi ${info(ACT_INFO)}</h2><span class="card-meta">${list.length} ${list.length === 1 ? "posizione" : "posizioni"} su ${D.positions.length}</span></div>
-    ${list.length ? `<div class="att-list">${list.map(p => `<button class="att-it" data-pos="${esc(p.isin)}">${actBadge(p.action)}<b>${esc(p.ticker || p.name)}</b>
-        <span class="att-why">${p.action.reasons.map(esc).join(" · ")}${actTax(p.action)}</span></button>`).join("")}</div>`
-      : `<div class="pf-rules-head">🟢 Nessuna posizione richiede attenzione oggi.</div>`}
-    <div class="muted small">${S.silenced ? `${S.silenced} ${S.silenced === 1 ? "posizione rivista" : "posizioni riviste"} negli ultimi 30 giorni (silenziate finché non scatta un motivo nuovo) · ` : ""}${S.noThesis ? `${S.noThesis} ${S.noThesis === 1 ? "posizione" : "posizioni"} senza tesi (clicca l'azione di una posizione nella tabella per scriverla) · ` : ""}regole di disciplina, non verificate da backtest · non è una consulenza finanziaria</div>`;
-}
+const ACT_INFO = `Per ogni posizione la dashboard propone <b>Mantieni</b>, <b>Accumula</b> o <b>Rivedi la tesi</b> con regole esplicite: accanto vedi quali sono scattate e con quali numeri.
+  Rivedi la tesi vince su Accumula.<br><br>Sono <b>regole di disciplina scelte da te, non verificate da un backtest</b>: servono a non dimenticare le cose da controllare,
+  non dicono cosa farà il prezzo. «Accumula» scatta solo se hai scritto un peso obiettivo nella tesi. (Le regole «Riduci» sui limiti di peso sono state tolte.)`;
 // panel of one position: thesis to write or edit, proposed action and the full list of rules
 function openPosition(isin) {
   const p = pf.data?.positions?.find(x => x.isin === isin);
@@ -1039,7 +1065,7 @@ function openPosition(isin) {
   const icon = { on: "✅", off: "—", na: "·" };
   const num = (k, label, hint) => `<label><span>${label}</span><input type="number" step="any" min="0" data-th="${k}" value="${isNum(th[k]) ? th[k] : ""}" placeholder="facoltativo"><span class="muted small">${hint}</span></label>`;
   const txt = (k, label, ph) => `<label class="th-txt"><span>${label}</span><textarea data-th="${k}" rows="3" maxlength="2000" placeholder="${ph}">${esc(th[k] || "")}</textarea></label>`;
-  const groups = ["Riduci", "Rivedi la tesi", "Accumula"];
+  const groups = ["Rivedi la tesi", "Accumula"];
   drawer.classList.remove("full");
   drawer.innerHTML = `<div class="d-top"><div class="d-head"><div><div class="tt">${esc(p.ticker || p.symbol || p.name)}</div><div class="nm">${esc(p.name)} · ${fNum(p.weight, 1)}% del portafoglio</div></div>
       <div class="actions"><button class="icon-btn close-btn" id="dClose" aria-label="Chiudi">×</button></div></div></div>
@@ -1169,7 +1195,7 @@ async function loadRisk() {
   clearTimeout(risk.retry);
   try { risk.data = await getJSON("/api/portfolio/risk"); } catch { risk.data = { status: "error", error: "server non raggiungibile" }; }
   renderRisk();
-  if (risk.data.status === "loading" && state.view === "portfolio") risk.retry = setTimeout(loadRisk, 3000);
+  if (risk.data.status === "loading" && PF_SUBS.includes(state.view)) risk.retry = setTimeout(loadRisk, 3000);
 }
 function renderRisk() {
   const el = $("#pfRisk"), D = risk.data;
@@ -1183,92 +1209,52 @@ function renderRisk() {
   const betaSay = !isNum(b) ? "" : Math.abs(b - 1) < 0.05 ? "si muove circa come l'indice" : `si muove il ${fNum(Math.abs(b - 1) * 100, 0)}% ${b > 1 ? "più" : "meno"} dell'indice`;
   const left = D.left.length ? ` · fuori dal calcolo: ${D.left.map(x => `${esc(x.name)} (${fNum(x.weight, 1)}% del valore: ${esc(x.why)})`).join(", ")}` : "";
   el.innerHTML = head(`stima dal ${dayIT(D.from)} al ${dayIT(D.to)}, con i pesi di oggi, in euro · copre il ${fNum(D.coverage, 0)}% del valore${D.left.length ? ` (${D.left.length} ${D.left.length === 1 ? "posizione esclusa" : "posizioni escluse"}, vedi i limiti)` : ""}`) + `
+    <p class="risk-intro">Questa pagina serve a capire <b>quanto oscilla il portafoglio</b> e <b>quali posizioni lo fanno oscillare più di quanto pesano</b>:
+      una posizione piccola ma molto volatile, o a leva, può pesare sul rischio molto più che sul valore.</p>
     <div class="kpis">
       ${kpi("Volatilità annua", RISK_INFO.vol, fNum(D.vol, 0) + "%", `QQQ: ${fNum(D.benchVol, 0)}%`)}
       ${kpi("Beta sul Nasdaq-100", RISK_INFO.beta, fNum(b, 2), betaSay)}
       ${kpi("Se il Nasdaq-100 perde", RISK_INFO.scen, D.scenarios.map(s => `<div class="risk-sc">−${s.drop}% → <span class="down">circa ${fEur(s.loss, 0)}</span></div>`).join(""), `circa ${D.scenarios.map(s => fNum(s.pct, 0) + "%").join(" e ")} del portafoglio`)}
-      ${kpi("Massima perdita storica", RISK_INFO.dd, `<span class="down">${fNum(dd.pct, 0)}%</span>`, `dal ${dayIT(dd.peak)} al ${dayIT(dd.trough)} · QQQ negli stessi giorni ${fNum(dd.benchSame, 0)}%`)}
     </div>
     <h4 class="bt-h">Contributo al rischio ${info(RISK_INFO.rc)} <span class="muted" style="text-transform:none;letter-spacing:0">chi pesa sul rischio più di quanto pesa in euro</span></h4>
     <div class="table-wrap"><table class="scr"><thead><tr><th class="l">Posizione</th><th>Peso in euro</th><th>Quota del rischio</th><th>Rapporto</th><th>Beta</th><th>Volatilità annua</th></tr></thead>
       <tbody>${D.positions.map(p => `<tr><td class="l"><b>${esc(p.name)}</b>${p.fullName !== p.name ? ` <span class="muted small">${esc(p.fullName)}</span>` : ""}</td>
         <td>${fNum(p.weight, 1)}%</td><td><b>${fNum(p.risk, 1)}%</b></td><td class="${p.flag ? "down" : ""}">${fNum(p.ratio, 1)}×${p.flag ? " ⚠" : ""}</td><td>${fNum(p.beta, 2)}</td><td>${fNum(p.vol, 0)}%</td></tr>`).join("")}</tbody></table></div>
+    <details class="fold"><summary><span class="small">Altre misure: massima perdita storica e correlazione</span></summary>
+      <div class="kpis">      ${kpi("Massima perdita storica", RISK_INFO.dd, `<span class="down">${fNum(dd.pct, 0)}%</span>`, `dal ${dayIT(dd.peak)} al ${dayIT(dd.trough)} · QQQ negli stessi giorni ${fNum(dd.benchSame, 0)}%`)}
+      </div>
     <h4 class="bt-h">Correlazione ${info(RISK_INFO.corr)}</h4>
     <p>${isNum(D.correlation.avg) ? `Media <b>${fNum(D.correlation.avg, 2)}</b> (${D.correlation.label}): ${{ bassa: "le posizioni si muovono in modo abbastanza indipendente.", media: "le posizioni si muovono in parte insieme.", alta: "le posizioni tendono a muoversi insieme: nei cali scendono quasi tutte." }[D.correlation.label]}` : "Non calcolabile."}
       ${D.correlation.pairs.length ? `<br><span class="muted">Coppie più simili:</span> ${D.correlation.pairs.map(x => `${esc(x.a)} ↔ ${esc(x.b)} <b>${fNum(x.corr, 2)}</b>`).join(" · ")}` : ""}</p>
+    </details>
     <details class="fold"><summary><span class="small">Limiti di questi calcoli: leggili prima di fidarti dei numeri</span></summary>
       <ul class="why bt-lim">${D.limits.map(l => `<li><b>${esc(l.title)}.</b> ${esc(l.text)}</li>`).join("")}</ul>
       <p class="muted small">Calcolato sul ${fNum(D.coverage, 0)}% del valore (${fEur(D.covered, 0)})${left}. Stime, non previsioni. Non è una consulenza finanziaria.</p></details>`;
 }
-// ---- my investment rules (rules.py, portafoglio/regole.json): the box on top of the tab and the page to edit them.
-// Every line shows the measured value and the limit that produced it. Texts are fixed, numbers come from the server.
-const RULE_FIELDS = [
-  ["stock", "Singolo titolo", "% del valore", "Se un titolo a questo peso dimezza, perdi metà di questa quota del portafoglio. Il 10% è anche il tetto usato dai fondi europei per una singola società."],
-  ["etfBroad", "Singolo ETF ampio", "% del valore", "Un ETF ampio (Nasdaq-100, mondo…) è già diversificato, ma oltre circa un terzo su un solo indice vuol dire dipendere da quell'indice."],
-  ["etfOther", "Altro ETF o ETC (tematico, di settore, materie prime)", "% del valore", "È meno diversificato di un ETF ampio e più di un singolo titolo: il limite sta in mezzo."],
-  ["theme", "Singolo tema", "% dell'esposizione effettiva", "I titoli di uno stesso tema si muovono in blocco (per esempio i chip per l'AI): troppo peso su una sola storia è una scommessa unica."],
-  ["sector", "Singolo settore", "% dell'esposizione effettiva", "Il Nasdaq-100 è già per più di metà tecnologia: il limite segnala quando vai oltre l'indice."],
-  ["country", "Singolo paese", "% dell'esposizione effettiva", "Gli USA pesano circa due terzi delle borse mondiali: il limite lascia spazio a questa preferenza senza arrivare al 100%."],
-  ["levValue", "Prodotti a leva, sul valore", "% del valore", "Un prodotto a leva può perdere gran parte del valore in pochi giorni: deve restare una quota che puoi permetterti di vedere quasi azzerata."],
-  ["levExposure", "Prodotti a leva, sull'esposizione effettiva", "% dell'esposizione effettiva", "L'esposizione effettiva conta 3 volte un prodotto a leva 3x: dice quanto del tuo rischio di mercato passa da questi prodotti."],
-  ["tradeRisk", "Rischio massimo per singola operazione", "% del portafoglio", "Quanto perdi al massimo se scatta lo stop di un'operazione. Con l'1%, dieci stop di fila costano circa il 10%. È usato per calcolare quante azioni comprare nella scheda del titolo."],
-  ["near", "Avviso «vicino al limite»", "% del limite", "Da quale quota del limite compare l'avviso giallo, prima di superarlo."],
-];
-const RULES_INFO = `Pochi limiti, come il mandato di una banca privata, controllati ogni volta che si apre o si aggiorna questa scheda.<br><br>
-  <b>Titoli ed ETF</b>: quota del valore in euro. <b>Tema, settore e paese</b>: quota dell'esposizione effettiva (un prodotto a leva 3x conta 3 volte),
-  come nella tabella di concentrazione qui sotto. <b>Prodotti a leva</b>: giudicati solo dai due limiti sulla leva.<br><br>
-  Sono regole che ti dai tu per disciplina: superarne una non significa dover vendere, ma è un punto da guardare.`;
-const fP1 = v => fNum(v, 1) + "%";
 const ruleLimit = v => fNum(v, v % 1 ? 1 : 0) + "%";
-function renderRules() {
-  const R = pf.data?.rules, el = $("#pfRules");
-  if (!R || !R.checks.length) { el.hidden = true; return; }
-  el.hidden = false;
-  const icon = { over: "🔴", near: "🟡", ok: "🟢" };
-  const line = c => `<li class="${c.status}">${icon[c.status]} <b>${esc(c.label)}</b>: ${fP1(c.value)} ${c.basis}, limite ${ruleLimit(c.limit)}${c.status === "over" ? ` <span class="down">(+${fNum(c.excess, 1)} punti)</span>` : ""}</li>`;
-  const bad = R.checks.filter(c => c.status !== "ok"), good = R.checks.filter(c => c.status === "ok");
-  const head = !R.over && !R.near ? `🟢 <b>Tutto nei limiti</b> (${R.ok} controlli)`
-    : `${R.over ? `🔴 <b>${R.over} ${R.over === 1 ? "limite superato" : "limiti superati"}</b> · ` : ""}${R.near ? `🟡 ${R.near} ${R.near === 1 ? "vicino al limite" : "vicini al limite"} · ` : ""}${R.ok} ${R.ok === 1 ? "controllo" : "controlli"} nei limiti`;
-  el.className = `card pf-rules ${R.over ? "over" : R.near ? "near" : "ok"}`;
-  el.innerHTML = `<div class="card-h"><h2>Rispetto delle regole ${info(RULES_INFO)}</h2><button class="btn" data-rules-open>Modifica regole</button></div>
-    <div class="pf-rules-head">${head}</div>
-    ${R.confirmed ? "" : `<div class="muted small">Regole proposte, non ancora confermate da te: aprile con «Modifica regole» e salva i valori che preferisci.</div>`}
-    ${bad.length ? `<ul class="pf-rules-list">${bad.map(line).join("")}</ul>` : ""}
-    ${good.length ? `<details class="fold"><summary><span class="small">Mostra tutti i controlli</span></summary><ul class="pf-rules-list">${good.map(line).join("")}</ul></details>` : ""}`;
-}
-// "Le mie regole": the page to edit the limits (Metodo → Le mie regole; saved in portafoglio/regole.json on this Mac)
-async function loadRulesPage() {
-  if (!pf.data) { try { pf.data = await getJSON("/api/portfolio"); } catch { $("#rulesBody").innerHTML = `<div class="empty">Regole non disponibili al momento.</div>`; return; } }
-  const el = $("#rulesBody"), R = pf.data.rules;
-  if (!R || el.contains(document.activeElement) && ["INPUT"].includes(document.activeElement.tagName)) return;   // typing: do not redraw
-  el.innerHTML = `<div class="card-h"><h2>Le mie regole ${info(RULES_INFO)}</h2><span class="card-meta">limiti del portafoglio · salvati in portafoglio/regole.json, solo su questo Mac</span></div>
-    <div class="rules-d">
-      ${R.confirmed ? "" : `<p class="warn-box">Questi sono i valori di partenza proposti. Diventano le tue regole quando premi <b>Salva</b>.</p>`}
-      <div class="rules-form">${RULE_FIELDS.map(([k, label, unit, why]) => `<label><span>${label} ${info(why)}</span>
-        <span class="rules-in"><input type="number" data-rule="${k}" step="${k === "tradeRisk" ? 0.1 : 1}" min="${k === "tradeRisk" ? 0.1 : k === "near" ? 50 : 1}" max="${k === "tradeRisk" ? 10 : 100}" value="${R.limits[k]}"> ${unit}
-        <span class="muted small">proposto ${ruleLimit(R.defaults[k])}</span></span></label>`).join("")}</div>
-      ${R.etfs.length ? `<div class="d-sec"><h3>Quali dei tuoi ETF sono «ampi» ${info("Un ETF ampio segue un indice largo e diversificato, per esempio il Nasdaq-100, l'S&P 500 o un indice mondiale. Quelli tematici, di settore o su materie prime non lo sono: per loro vale il limite più basso.")}</h3>
-        ${R.etfs.map(e => `<label class="check rules-etf"><input type="checkbox" data-broad="${esc(e.isin)}" ${e.broad ? "checked" : ""}> ${esc(e.name)} <span class="muted small">${esc(e.isin)}</span></label>`).join("")}</div>` : ""}
-      <div class="toolbar" style="margin-top:16px"><button class="btn primary" id="rulesSave">Salva</button><button class="btn" id="rulesReset">Ripristina i valori proposti</button><span id="rulesMsg" class="small"></span></div>
-      <p class="muted small">Il riquadro «Rispetto delle regole» nella scheda Portafoglio mostra quali limiti sono superati. Il rischio per operazione e il limite per singolo titolo sono usati anche nella sezione Decisione della scheda del titolo.</p>
-      <p class="disclaimer">Le regole servono a darti disciplina, non sono un consiglio su come investire. Non è una consulenza finanziaria.</p></div>`;
-  $("#rulesReset").onclick = () => { el.querySelectorAll("[data-rule]").forEach(i => { i.value = R.defaults[i.dataset.rule]; }); $("#rulesMsg").textContent = "Valori proposti rimessi nei campi: premi Salva per confermarli."; };
-  $("#rulesSave").onclick = async () => {
-    const limits = {};
-    el.querySelectorAll("[data-rule]").forEach(i => { limits[i.dataset.rule] = parseFloat(i.value.replace(",", ".")); });
-    const broad = [...el.querySelectorAll("[data-broad]:checked")].map(i => i.dataset.broad);
-    const wrong = RULE_FIELDS.find(([k]) => !isNum(limits[k]) || limits[k] < (k === "tradeRisk" ? 0.1 : k === "near" ? 50 : 1) || limits[k] > (k === "tradeRisk" ? 10 : 100));
-    if (wrong) { $("#rulesMsg").innerHTML = `<span class="down">Controlla «${wrong[1]}»: serve un numero tra ${wrong[0] === "tradeRisk" ? "0,1 e 10" : wrong[0] === "near" ? "50 e 100" : "1 e 100"}.</span>`; return; }
+// ---- zainetto fiscale (actions.py, portafoglio/fiscale.json): optional, used only by the indicative tax estimate
+function renderTaxBox() {
+  const el = $("#pfTax"), F = pf.data?.fiscal || {};
+  if (!el || el.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;   // typing: do not redraw
+  el.innerHTML = `<summary><span class="small"><b>Zainetto fiscale</b> (facoltativo) · ${F.losses ? `minusvalenze disponibili ${fEur(F.losses, 0)}${F.expiry ? `, scadenza più vicina ${dayIT(F.expiry)}` : ""}` : "non indicato"}</span></summary>
+    <p class="small">Lo «zainetto» sono le minusvalenze (perdite realizzate) che puoi ancora usare per pagare meno imposte sulle plusvalenze di azioni, ETC e derivati, entro 4 anni.
+      Lo trovi nel sito Fineco (area fiscale). Se lo indichi, la stima fiscale accanto a «Rivedi · target raggiunto» ne tiene conto per <b>azioni ed ETC</b>; per gli <b>ETF</b> no,
+      perché i loro guadagni sono redditi di capitale e non si compensano.</p>
+    <div class="toolbar"><label class="small">Minusvalenze disponibili <input type="number" id="taxLosses" min="0" step="1" value="${F.losses ?? ""}" placeholder="es. 1200"> €</label>
+      <label class="small">Scadenza più vicina <input type="date" id="taxExpiry" value="${F.expiry || ""}"></label>
+      <button class="btn" id="taxSave">Salva</button><span id="taxMsg" class="small"></span></div>
+    <p class="muted small">${F.losses ? "" : "Campo vuoto: se hai minusvalenze nello zainetto, l'imposta reale può essere più bassa di quella stimata. "}Salvato in portafoglio/fiscale.json, solo su questo Mac. Stima indicativa, non è una consulenza fiscale.</p>`;
+  $("#taxSave").onclick = async () => {
+    const raw = $("#taxLosses").value.trim().replace(",", "."), losses = raw === "" ? null : parseFloat(raw);
+    if (losses !== null && !(losses >= 0)) { $("#taxMsg").innerHTML = `<span class="down">Scrivi un importo in euro, oppure lascia vuoto.</span>`; return; }
     try {
-      await pfPost("/api/rules", { body: JSON.stringify({ limits, broad }), headers: { "Content-Type": "application/json" } });
-      pf.data = await getJSON("/api/portfolio");
+      await pfPost("/api/fiscal", { body: JSON.stringify({ losses, expiry: $("#taxExpiry").value || null }), headers: { "Content-Type": "application/json" } });
       document.activeElement?.blur();
-      await loadRulesPage();
-      $("#rulesMsg").textContent = "✓ Regole salvate";
-    } catch (e) { $("#rulesMsg").innerHTML = `<span class="down">Non salvato: ${esc(e.message)}</span>`; }
+      await loadPortfolio();
+      $("#taxMsg").textContent = "✓ Salvato";
+    } catch (e) { $("#taxMsg").innerHTML = `<span class="down">Non salvato: ${esc(e.message)}</span>`; }
   };
 }
-document.addEventListener("click", e => { if (e.target.closest("[data-rules-open]")) { if (state.detail || state.macro || state.panel) closeDetail(); setView("rules"); } });
 // ---- upload of a Fineco export: preview first (new, sold, changed positions), saved only after confirmation.
 // The file goes only to the server on this Mac (portafoglio/, outside Git); older files stay there.
 const pfUp = { busy: false };
@@ -1311,7 +1297,7 @@ $("#pfUpBox").addEventListener("click", async e => {
   }
 });
 // drag and drop, only while the Portafoglio tab is open (elsewhere the browser keeps its normal behaviour)
-const pfDragging = e => state.view === "portfolio" && [...(e.dataTransfer?.types || [])].includes("Files");
+const pfDragging = e => state.view === "portfolio" && [...(e.dataTransfer?.types || [])].includes("Files");   // Posizioni only
 addEventListener("dragover", e => { if (pfDragging(e)) { e.preventDefault(); $("#view-portfolio").classList.add("drop"); } });
 addEventListener("dragleave", e => { if (!e.relatedTarget) $("#view-portfolio").classList.remove("drop"); });
 addEventListener("drop", e => {
@@ -1752,12 +1738,11 @@ function taPlanHTML(id, p) {
   let size;
   if (!isNum(p.budgetUsd)) size = `<span class="muted">${isNum(p.fx) ? "inserisci il capitale nel blocco 4" : "cambio EUR/USD non disponibile"}</span>`;
   else {
-    const byRisk = Math.floor(p.budgetUsd / risk), byCap = Math.floor(Math.max(0, p.capUsd) / entry), n = Math.max(0, Math.min(byRisk, byCap));
+    const n = Math.max(0, Math.floor(p.budgetUsd / risk));     // only the risk per trade decides (no weight limits since phase 21)
     const eur = v => fEur(v / p.fx, 0), share = v => fNum(v / p.fx / p.capital * 100, 1);
-    size = !n ? `<b>0</b> <span class="muted">${byCap < 1 ? `le tue regole non lasciano spazio per comprarne (${esc(p.capWhy)})` : "con questo capitale e questo rischio non si arriva a un'azione intera"}</span>`
+    size = !n ? `<b>0</b> <span class="muted">con questo capitale e questo rischio non si arriva a un'azione intera</span>`
       : `<b>${fNum(n, 0)}</b> <span class="muted">valore ${fUsd(n * entry)} ≈ ${eur(n * entry)}, ${share(n * entry)}% del portafoglio</span>
-        ${byCap < byRisk ? `<div class="ta-note">Limitate dallo ${esc(p.capWhy)}: con il solo rischio per operazione (${ruleLimit(p.riskPct)}) sarebbero ${fNum(byRisk, 0)}.</div>` : ""}
-        <div class="ta-note">Se scatta lo stop perdi circa ${fUsd(n * risk)} ≈ ${eur(n * risk)} (${share(n * risk)}% del portafoglio; il tuo limite per operazione è ${ruleLimit(p.riskPct)}).</div>`;
+        <div class="ta-note">Se scatta lo stop perdi circa ${fUsd(n * risk)} ≈ ${eur(n * risk)} (${share(n * risk)}% del portafoglio; il tuo rischio per operazione è ${ruleLimit(p.riskPct)}).</div>`;
   }
   return `<div class="ta-plan">
     <div><span>${p.kind === "breakout" ? "Livello di rottura" : p.kind === "pullback" ? "Ordine limite" : "Entrata"}</span><div><b>${fUsd(entry)}</b> <span class="muted">${esc(p.entryNote)}${p.kind === "pullback" ? ` · ${fPct((entry / dTA.D.price - 1) * 100, 1)} dal prezzo attuale` : ""}</span></div></div>
@@ -1791,7 +1776,7 @@ function taPatterns(D) {
         <div>${say(x)} È un'informazione, non un'indicazione di acquisto.</div></div>`).join("") : `<p><b>Nessun pattern verificato oggi.</b></p>`}
     ${no.length ? `<div class="muted small">Pattern presenti ma non verificati (non hanno superato il test):</div>
       <ul class="ta-list">${no.map(x => `<li>${esc(x.name)}${when(x)} ${info(PT_INFO[x.key] || "")} <span class="ta-tag">non verificato</span></li>`).join("")}</ul>` : ""}
-    <button class="link-btn" data-ta-goto="trade">Vedi i risultati del test nella scheda Pattern tecnici →</button>`;
+    <p class="muted small">I risultati completi del test dei 9 pattern sono nel README del progetto.</p>`;
 }
 // fixed phrases chosen from the numbers: stock vs group at 1 and 3 months, and the group's rotation phase vs the Nasdaq-100
 function taGroupSay(t, g) {
@@ -1812,7 +1797,7 @@ function taGroupSay(t, g) {
 function taGroups(t, groups) {
   if (!groups.length) return `<p class="muted">Settore e tema non disponibili.</p>`;
   const pp = v => `<span class="${sign(v)}">${fChg(v)}</span>`;
-  return `<div class="table-wrap"><table class="scr ta-grp"><thead><tr><th class="l">Gruppo</th><th class="l">Fase ${info(`Fase di rotazione rispetto a QQQ, come nella mappa della scheda Report:
+  return `<div class="table-wrap"><table class="scr ta-grp"><thead><tr><th class="l">Gruppo</th><th class="l">Fase ${info(`Fase di rotazione rispetto a QQQ, come nella mappa di rotazione in Mercato → Settori:
       <b>Leader</b> = più forte a 1 mese e a 1 settimana; <b>In indebolimento</b> = più forte a 1 mese ma non nell'ultima settimana;
       <b>In miglioramento</b> = più debole a 1 mese ma in recupero nell'ultima settimana; <b>In ritardo</b> = più debole su entrambe.`)}</th>
       <th>Gruppo vs QQQ 1 sett.</th><th>Gruppo vs QQQ 1 mese</th><th>${esc(t)} vs gruppo 1 mese</th><th>${esc(t)} vs gruppo 3 mesi</th></tr></thead>
@@ -1836,23 +1821,25 @@ function decContext(t, X) {
     <p><b>Trimestrale:</b> ${earn}${X.earningsDays != null && X.earningsDays <= 5 ? ` <span class="ta-tag warn">entro 5 giorni</span>` : ""}<br>
       <b>Eventi macro dei prossimi 7 giorni:</b> ${ev.length ? ev.join(" · ") : `<span class="muted">nessuno</span>`}</p>`;
 }
+const RISK_FIELD_INFO = `Quanto del portafoglio perdi al massimo se scatta lo stop di un'operazione. Con l'1%, dieci stop di fila costano circa il 10%.
+  È l'unica regola rimasta per le quantità (i limiti di peso sono stati tolti): il numero di azioni è quello con cui, se scatta lo stop, perdi questa percentuale.
+  Si salva in portafoglio/regole.json, solo su questo Mac.`;
 function decPlace(D) {
-  const P = D.place, L = P.limits;
+  const P = D.place;
+  const field = `<p class="ta-risk"><label>Rischio massimo per operazione <input type="number" id="taRisk" min="0.1" max="10" step="0.1" value="${P.riskPct}"> % del portafoglio</label>
+    ${info(RISK_FIELD_INFO)} <span id="taRiskMsg" class="small muted"></span></p>`;
   if (!P.loaded) {
     const manual = +LS.get("taCapital", 0) || "";
-    return `<p class="muted">Portafoglio non caricato: non posso dire se lo possiedi né quanto spazio lasciano le tue regole.</p>
+    return `<p class="muted">Portafoglio non caricato: non posso dire se lo possiedi.</p>${field}
       <p>Per calcolare le quantità inserisci il capitale: <input type="number" id="taCapital" min="0" step="100" value="${manual}" placeholder="es. 20000"> €
-        <span class="muted small">(resta solo nel browser) · rischio per operazione ${ruleLimit(L.tradeRisk)}, limite per singolo titolo ${ruleLimit(L.stock)}</span></p>`;
+        <span class="muted small">(resta solo nel browser)</span></p>`;
   }
   const o = P.etfOverlap;
   return `<p>${P.owned ? `<b>Lo possiedi già</b>: ${fEur(P.value, 0)}, ${fNum(P.weight, 1)}% del portafoglio.` : "<b>Non lo possiedi</b> direttamente."}
       ${o ? `<br><b>Sovrapposizione con i tuoi ETF sul Nasdaq-100:</b> ne possiedi già circa ${fEur(o.eur, 0)} in modo indiretto (pesa il ${fNum(o.indexWeight, 2)}% dell'indice; ${o.etfs.map(esc).join(", ")}; conta la leva).`
         : `<br><span class="muted">Nessuna sovrapposizione calcolabile: la dashboard conosce la composizione solo degli ETF sul Nasdaq-100.</span>`}</p>
-    <div class="table-wrap"><table class="scr dec-crit"><thead><tr><th class="l">La mia regola</th><th>Ora</th><th>Limite</th><th>Spazio per comprare</th></tr></thead>
-      <tbody>${P.rooms.map(r => `<tr><td class="l">${esc(r.what.split(" (limite")[0])}</td><td>${fNum(r.now, 1)}%</td><td>${ruleLimit(r.limit)}</td><td class="${r.eur <= 0 ? "down" : ""}">${r.eur > 0 ? "circa " + fEur(r.eur, 0) : "nessuno: limite già raggiunto"}</td></tr>`).join("")}</tbody></table></div>
-    <p><b>Posso comprarne al massimo circa ${fEur(P.maxBuyEur, 0)}</b> <span class="muted">(vincolo più stretto: ${esc(P.tight)})</span>
-      <button class="link-btn" data-rules-open>modifica le mie regole</button></p>
-    <p class="muted small">Titolo: quota del valore; tema, settore e paese: quota dell'esposizione effettiva, come nel riquadro «Rispetto delle regole».</p>`;
+    ${field}
+    <p class="muted small">Le quantità del piano vengono solo da questo rischio e dalla distanza tra entrata e stop: non ci sono limiti di peso, quindi guarda quanto peserebbe la posizione sul portafoglio.</p>`;
 }
 function decPlan(D) {
   const V = D.verdict, pl = D.plans, icon = { true: "✅", false: "❌", null: "·" };
@@ -1860,11 +1847,11 @@ function decPlan(D) {
   const main = V.plan === "now" ? `<h5>Piano: entra ora ${info(TA_PLAN_INFO)}</h5>${taPlanHTML("now", pl.now)}`
     : V.plan === "pullback" ? `<h5>Piano: ordine limite su ritracciamento ${info(TA_PLAN_INFO)}</h5>${taPlanHTML("pullback", pl.pullback)}
         <p class="muted small">L'ordine limite compra solo se il prezzo scende fino a quel livello. Se il prezzo non ci arriva, non compri: è il costo di aspettare un prezzo migliore.</p>`
-    : V.plan === "breakout" ? `<h5>Piano: ordine condizionato sulla rottura</h5>${brk.filter(p => p.pattern === (V.pattern || p.pattern)).slice(0, 1).map((p, k) => taBreakoutHTML(brk.indexOf(p), p)).join("")}` : "";
+    : V.plan === "breakout" ? `<h5>Livello di rottura: solo un'informazione, il pattern non è verificato</h5>${brk.filter(p => p.pattern === (V.pattern || p.pattern)).slice(0, 1).map((p, k) => taBreakoutHTML(brk.indexOf(p), p)).join("")}` : "";
   const others = [
     V.plan !== "now" && pl.now ? `<h5>Se comprassi adesso ${info(TA_PLAN_INFO)}</h5>${taPlanHTML("now", pl.now)}` : "",
     V.plan !== "pullback" && pl.pullback ? `<h5>Ordine limite su ritracciamento (vicino alla media ${pl.pullback.ma})</h5>${taPlanHTML("pullback", pl.pullback)}` : "",
-    ...brk.map((p, k) => V.plan === "breakout" && p.pattern === V.pattern ? "" : `<h5>Ordine condizionato sulla rottura</h5>${taBreakoutHTML(k, p)}`),
+    ...brk.map((p, k) => V.plan === "breakout" && p.pattern === V.pattern ? "" : `<h5>Ordine condizionato sulla rottura (pattern non verificato)</h5>${taBreakoutHTML(k, p)}`),
   ].filter(Boolean);
   return `<div class="dec-verdict"><div>${verdictBadge(V)}</div>
       <ul class="why">${V.why.map(w => `<li>${esc(w)}</li>`).join("")}</ul>
@@ -1873,7 +1860,8 @@ function decPlan(D) {
     ${main}
     <h5>Regole del verdetto ${V.owned ? `<span class="muted">(per un nuovo acquisto; per le posizioni che hai valgono le regole della posizione)</span>` : `<span class="muted">(decide la prima non soddisfatta, in ordine)</span>`}</h5>
     <ul class="rule-list">${D.checks.map(c => `<li class="${c.ok === false ? "bad" : c.ok ? "on" : "na"}"><span class="ri">${icon[c.ok]}</span><span><b>${c.id}</b> ${esc(c.text)}<span class="muted small"> ${c.ok == null ? "non valutabile" : ""} ${esc(c.detail)}</span></span></li>`).join("")}</ul>
-    <p class="muted small">${esc(D.principle)} Se sono tutte soddisfatte: «Entra ora». D5 non soddisfatta: «Entra su ritracciamento». D6: «Entra su rottura». D7: «Entra su ritracciamento». D1 debole: «Evita». Le altre: «Attendi».</p>
+    <p class="muted small">${esc(D.principle)} Se sono tutte soddisfatte: «Entra ora». D1 debole: «Evita». D2 e D4: «Attendi». D5 e D7: «Entra su ritracciamento». D6: «Attendi: a ridosso del massimo»
+      (la rottura del massimo non ha superato il test dei pattern). La regola D3 sui limiti di peso è stata tolta.</p>
     ${others.length ? `<details class="fold"><summary><span class="small">Altri piani possibili (${others.length}), con i loro limiti</span></summary>${others.join("")}</details>` : ""}`;
 }
 function renderTA() {
@@ -1902,8 +1890,6 @@ async function taEnsure() {      // the pattern test and the portfolio (for the 
 drawer.addEventListener("click", e => {
   const o = e.target.closest("[data-ta-stop]");
   if (o) { const [id, v] = o.dataset.taStop.split(":"); dTA.sel[id] = v; return renderTA(); }
-  const g = e.target.closest("[data-ta-goto]");
-  if (g) { closeDetail(); return setView(g.dataset.taGoto); }
   const k = e.target.closest("[data-dec-macro]");        // a macro event listed in the context block
   if (k) {
     const [kind, day] = k.dataset.decMacro.split("|");
@@ -1914,6 +1900,14 @@ drawer.addEventListener("click", e => {
   if (m) openDetail(m.dataset.mopen);
 });
 drawer.addEventListener("change", e => {
+  if (e.target.id === "taRisk") {                       // my risk per trade, saved in portafoglio/regole.json
+    const v = parseFloat(String(e.target.value).replace(",", "."));
+    if (!(v >= 0.1 && v <= 10)) { $("#taRiskMsg").innerHTML = `<span class="down">serve un numero tra 0,1 e 10</span>`; return; }
+    pfPost("/api/rules", { body: JSON.stringify({ tradeRisk: v }), headers: { "Content-Type": "application/json" } })
+      .then(() => { e.target.blur(); pf.data = null; loadDetailInfo(); })
+      .catch(err => { $("#taRiskMsg").innerHTML = `<span class="down">non salvato: ${esc(err.message)}</span>`; });
+    return;
+  }
   if (e.target.id !== "taCapital") return;
   const v = parseFloat(e.target.value);
   LS.set("taCapital", isNum(v) && v > 0 ? v : 0);
@@ -2107,40 +2101,11 @@ function rangeViz(lo, hi, price, target, title, ends) {
 }
 
 
-// ------------------------------------------------------------ ideas (twice-daily trend report)
-const ideasState = { report: null, id: LS.get("repId", "latest"), grp: "themes", maSort: { key: "score", dir: -1 }, loadedId: null };
-// "2026-09-28_morning" -> "28 set 2026 · mattina"
+// ------------------------------------------------------------ dates, pattern test texts, rotation map
 const dayIT = iso => new Date(iso + "T12:00:00").toLocaleDateString("it-IT", { day: "numeric", month: "short", year: "numeric" });
-const repLabel = id => {
-  const [d, s] = id.split("_");
-  return `${dayIT(d)} · ${{ morning: "mattina", close: "sera", afternoon: "pomeriggio", intraday: "seduta" }[s] || s}`;
-};
 const QCOL = { Leading: "--up", Weakening: "--warn", Lagging: "--down", Improving: "--accent" };
-
-async function renderIdeas() {
-  let list = [];
-  try { list = (await getJSON("/api/reports")).reports; } catch { /* server without reports */ }
-  const sel = $("#repSel");
-  sel.innerHTML = `<option value="latest">Ultimo report</option>` + list.map(id => `<option value="${esc(id)}">${esc(repLabel(id))}</option>`).join("");
-  sel.value = list.includes(ideasState.id) ? ideasState.id : "latest";
-  $("#ideasEmpty").hidden = list.length > 0;
-  $("#ideasBody").hidden = !list.length;
-  if (!list.length) { if (state.view === "trade") drawPatterns(); return; }   // the test results need no report
-  if (ideasState.loadedId !== sel.value || !ideasState.report) {
-    try { ideasState.report = await getJSON(`/api/report/${encodeURIComponent(sel.value)}`); ideasState.loadedId = sel.value; }
-    catch (e) { $("#brief").innerHTML = `<div class="empty">Impossibile caricare il report (${esc(e.message)})</div>`; return; }
-  }
-  const R = ideasState.report;
-  if (R.prevId && ideasState.prev?.id !== R.prevId) {   // previous report, for the plain-language "Cosa è cambiato"
-    try { ideasState.prev = { id: R.prevId, R: await getJSON(`/api/report/${encodeURIComponent(R.prevId)}`) }; }
-    catch { ideasState.prev = { id: R.prevId, R: null }; }
-  }
-  if (state.view === "trade") drawPatterns(); else drawIdeas();
-}
-// ------------------------------------------------------------ Pattern tecnici
-// Test results come from reports/patterns.json (backtest.py --patterns); the stocks showing each pattern come from the
-// report chosen in the Report tab. Rule of the page: no pattern is ever presented as "favorevole"; a pattern that passed
-// the test is shown as information, with its caveats. Explanations are fixed texts, the numbers come from the test.
+// Pattern test (reports/patterns.json, backtest.py --patterns): used by the stock detail to say "verificato" / "non
+// verificato". No pattern is ever presented as "favorevole"; the full results are in the README.
 const PT_INFO = {
   high52: "Il titolo chiude al prezzo più alto dell'ultimo anno e quel giorno si scambiano molte più azioni del solito. L'idea è che un massimo raggiunto con tanti scambi mostri un interesse forte dei compratori.",
   near52: "Il prezzo è a non più del 5% dal punto più alto dell'ultimo anno. È un modo semplice per dire che il titolo è forte.",
@@ -2158,19 +2123,6 @@ const dayShort = iso => new Date(iso + "T12:00:00").toLocaleDateString("it-IT", 
 const ptPts = v => !isNum(v) ? "—" : (v > 0 ? "+" : "") + fNum(v, v !== 0 && Math.abs(v) < 0.005 ? 4 : 2);
 const ptEdge = p => p.favorable && p.horizons["3M"].vsAllMedian < 0.5;   // passed, but the typical case is barely above the others
 
-function ptChecks(p, P) {
-  const h3 = p.horizons["3M"], h6 = p.horizons["6M"];
-  const vals = [
-    `Media dell'extra a 3 mesi: ${ptPts(h3.vsAll)} punti (serve almeno +0,5).`,
-    `Mediana dell'extra a 3 mesi: ${ptPts(h3.vsAllMedian)} punti (serve sopra 0).`,
-    `Anni con media positiva: ${p.yearsPositive} su ${p.yearsCounted} con almeno 20 casi (ne servono almeno 6).`,
-    `Media 2017–2021: ${ptPts(p.early)} punti · media 2022–2026: ${ptPts(p.late)} punti (servono entrambe positive).`,
-    `Media dell'extra a 6 mesi: ${ptPts(h6.vsAll)} punti (non deve essere negativa).`,
-    `Casi: ${fNum(p.n, 0)} (ne servono almeno 100).`,
-  ];
-  return p.checks.map((ok, k) => `<span class="info ck" tabindex="0" role="button"
-    data-info="${esc(`<b>${k + 1}. ${esc(P.rule[k])}</b><br>${vals[k]} ${ok ? "✅" : "❌"}`)}">${k + 1} ${ok ? "✅" : "❌"}</span>`).join("");
-}
 function ptSay(p, P) {
   const h = p.horizons["3M"], all = P.all.horizons["3M"];
   if (p.favorable)
@@ -2185,165 +2137,20 @@ function ptSay(p, P) {
     return `In media ha fatto peggio degli altri titoli (${ptPts(h.vsAll)} punti a 3 mesi; mediana ${ptPts(h.vsAllMedian)}).`;
   return "Non rispetta tutte le condizioni: passa sopra quelle con ❌ per vedere i numeri.";
 }
-function ptStocks(p, T) {
-  if (!T) return `<div class="pt-stocks"><span class="l">Titoli:</span><span class="muted">non disponibili in questo report (è precedente a questa pagina): genera un nuovo report nella scheda Report.</span></div>`;
-  const list = T.stocks[p.key] || [], ev = p.kind === "evento";
-  const btn = x => `<button class="pt-tk ${state.watch.has(x.ticker) ? "mine" : ""}" data-open="${esc(x.ticker)}"
-    ${state.watch.has(x.ticker) ? 'title="Tra i tuoi titoli"' : ""}>${state.watch.has(x.ticker) ? "★ " : ""}${esc(x.ticker)}${x.date ? `<small>${dayShort(x.date)}</small>` : ""}</button>`;
-  return `<div class="pt-stocks"><span class="l">${ev ? `Titoli nelle ultime ${T.days} sedute` : "Titoli oggi"}${list.length ? ` (${list.length})` : ""}:</span>
-    ${list.length ? list.map(btn).join("") : `<span class="muted">nessuno</span>`}</div>`;
-}
-function ptDetails(p, P) {
-  const pc = v => `<span class="${sign(v)}">${fPct(v, 2)}</span>`, pp = v => `<span class="${sign(v)}">${ptPts(v)}</span>`;
-  const hz = { "1M": "1 mese", "3M": "3 mesi", "6M": "6 mesi" };
-  const rows = Object.keys(P.horizons).map(k => { const h = p.horizons[k], a = P.all.horizons[k];
-    return `<tr><td class="l"><b>${hz[k] || k}</b></td><td>${pc(h.ret)}</td><td>${pc(h.retMedian)}</td><td>${pc(h.qqq)}</td><td>${pp(h.excess)}</td><td>${pp(h.excessMedian)}</td>
-      <td>${fNum(h.beat, 1)}% <span class="muted">(tutti ${fNum(a.beat, 1)}%)</span></td><td><b>${pp(h.vsAll)}</b></td><td>${pp(h.vsAllMedian)}</td></tr>`; }).join("");
-  const years = p.byYear.map(y => `<tr class="${y.n < 20 ? "muted" : ""}"><td class="l">${y.year}</td><td>${fNum(y.n, 0)}</td>
-    <td>${y.n ? pp(y.vsAll3M) : "—"}${y.n && y.n < 20 ? " *" : ""}</td><td>${y.n ? pp(y.excess3M) : "—"}</td></tr>`).join("");
-  return `<details class="fold"><summary>Dettagli del test (1, 3 e 6 mesi, anno per anno)</summary>
-    <p class="small muted"><b>Regola esatta.</b> ${esc(p.rule)} ${p.kind === "evento" ? `Conta solo il primo giorno, poi ${P.pauseDays} sedute di pausa per lo stesso titolo.` : "Misurato una volta a settimana."}
-      Casi: ${fNum(p.n, 0)} su ${p.tickers} titoli diversi.</p>
-    <div class="table-wrap"><table class="scr"><thead><tr><th class="l">Dopo</th><th>Rendimento medio</th><th>Rendimento mediano</th><th>QQQ stesso periodo</th><th>Extra vs QQQ (media)</th>
-      <th>Extra vs QQQ (mediana)</th><th>% volte meglio di QQQ</th><th>Extra vs tutti i titoli (media)</th><th>Extra vs tutti (mediana)</th></tr></thead><tbody>${rows}</tbody></table></div>
-    <h4 class="bt-h">A 3 mesi, anno per anno</h4>
-    <div class="table-wrap"><table class="scr"><thead><tr><th class="l">Anno</th><th>Casi</th><th>Extra vs tutti i titoli</th><th>Extra vs QQQ</th></tr></thead><tbody>${years}</tbody></table></div>
-    <p class="small muted">* meno di 20 casi: l'anno non conta per la condizione 3. Gli «extra» sono in punti percentuali.</p></details>`;
-}
-async function drawPatterns() {
-  if (!pt.data) {
-    try { pt.data = await getJSON("/api/patterns"); }
-    catch { $("#ptIntro").hidden = true; $("#ptMeta").textContent = "";
-      $("#ptBody").innerHTML = `<div class="card empty">Nessun test dei pattern ancora. Dal Terminale: <code>.venv/bin/python backtest.py --patterns</code></div>`; return; }
+
+// Rotation map of themes and sectors vs QQQ (Mercato → Settori), from /api/rotation (same calculation as the old report)
+const rot = { data: null, grp: LS.get("rotGrp", "themes"), at: 0 };
+async function loadRotation() {
+  if (!rot.data || Date.now() - rot.at > 5 * 60_000) {
+    rot.at = Date.now();
+    try { rot.data = await getJSON("/api/rotation"); } catch { /* keep the previous one */ }
   }
-  const P = pt.data, R = ideasState.report, T = R?.patterns || null;
-  const passed = P.patterns.filter(p => p.favorable), failed = P.patterns.length - passed.length;
-  const passTxt = !passed.length ? "nessuno ha superato il test"
-    : `${failed} non ${failed === 1 ? "ha" : "hanno"} superato il test e ${passed.length} lo ${passed.length === 1 ? "ha" : "hanno"} superato${passed.every(ptEdge) ? " di misura" : ""}`;
-  $("#ptIntro").hidden = false;
-  $("#ptIntro").innerHTML = `<b>Nessun pattern è mostrato come «favorevole».</b> Su ${P.patterns.length} pattern provati con il backtest (${P.from.slice(0, 4)}–${P.to.slice(0, 4)}), ${passTxt}.
-    I titoli elencati sono un'informazione, non un'indicazione di acquisto. Non è una consulenza finanziaria.`;
-  const how = `Per ogni caso passato di un pattern si misura quanto ha reso il titolo nei 3 mesi successivi e lo si confronta con la media di
-    tutti i titoli del Nasdaq-100 nello stesso giorno: la differenza è l'«extra». Un pattern supera il test solo se rispetta tutte e 6 le condizioni,
-    fissate prima di vedere i risultati:<br>${P.rule.map((r, k) => `${k + 1}. ${esc(r)}`).join("<br>")}`;
-  $("#ptMeta").innerHTML = `${T ? `Titoli: prezzi del ${dayIT(T.asOf)}${R.intraday ? " (seduta in corso)" : " (chiusura)"} · ` : ""}test del ${dayIT(P.generated.slice(0, 10))}
-    su ${P.stocks} titoli · Come leggere il test ${info(how)}`;
-  const nOk = p => p.checks.filter(Boolean).length;
-  const order = [...P.patterns].sort((a, b) => (b.favorable - a.favorable) || (nOk(b) - nOk(a)) || (b.horizons["3M"].vsAll - a.horizons["3M"].vsAll));
-  const c = P.control;
-  $("#ptBody").innerHTML = order.map(p => `<div class="card pt-card">
-      <div class="card-h"><h2>${esc(p.name)} ${info(`${PT_INFO[p.key] || ""}<br><br><b>Regola esatta.</b> ${esc(p.rule)}`)}</h2>
-        <span class="pt-badge ${p.favorable ? "edge" : ""}">${p.favorable ? (ptEdge(p) ? "Test superato di misura" : "Test superato") : "Test non superato"}</span></div>
-      <div class="pt-checks"><span>Condizioni:</span>${ptChecks(p, P)}<span class="n">${fNum(p.n, 0)} casi</span></div>
-      <p class="pt-say">${ptSay(p, P)}</p>
-      ${ptStocks(p, T)}
-      ${ptDetails(p, P)}
-    </div>`).join("") + `<div class="card pt-card">
-      <details class="fold"><summary>Controllo casuale: ${c.passed} pattern finti su ${c.runs} hanno superato il test</summary>
-        <p class="small muted">Un pattern finto sceglie titoli a caso, con la stessa frequenza media dei pattern di tipo evento (circa ${fNum(c.casesMean, 0)} casi).
-        Ripetuto ${c.runs} volte, ha superato tutte e 6 le condizioni ${c.passed} ${c.passed === 1 ? "volta" : "volte"} (${fNum(c.passedPct, 1)}%): se fosse successo più del 5% delle volte,
-        la regola sarebbe troppo facile da superare per caso. Quante volte ha superato la singola condizione: ${c.passedEach.map((n, k) => `${k + 1}: ${n}`).join(" · ")}.
-        La condizione 2 è la più dura: pochi titoli salgono moltissimo e alzano la media, quindi il titolo tipico sta sotto la media di tutti.</p></details>
-      <details class="fold"><summary>Limiti del test: leggili prima di fidarti dei numeri</summary>
-        <ul class="why bt-lim">${P.limits.map(l => `<li><b>${esc(l.title)}.</b> ${esc(l.text)}</li>`).join("")}</ul>
-        <p class="small muted">I pattern «Leader di momentum», «Ritracciamento in trend rialzista» e «Incrocio rialzista» sono calcolati con le stesse regole di signals.py
-        (${fNum(P.signalsCheck.compared, 0)} confronti, ${P.signalsCheck.different} differenze). Per rifare il test: <code>.venv/bin/python backtest.py --patterns</code></p></details>
-    </div>`;
+  if (rot.data) renderRRG(rot.data);
 }
-
-function drawIdeas() {
-  const R = ideasState.report;
-  if (!R) return;
-  const gen = new Date(R.generated);
-  const local = gen.toLocaleString("it-IT", { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  $("#repMeta").textContent = `${{ morning: "Mattina (pre-apertura)", close: "Sera (dopo la chiusura)" }[R.session] || "Durante la seduta"} · generato ${local} · prezzi del ${dayIT(R.dataAsOf)}${R.intraday ? " (seduta in corso)" : " (chiusura)"}`;
-  $("#disclaimer").textContent = R.disclaimer;
-  renderBrief(R);
-  renderRRG(R);
-  renderGroupTable(R);
-  renderChanges(R);
-  renderMaTable(R);
-  loadBacktest();
-}
-
-// ------------------------------------------------------------ backtest of the technical score (backtest.py)
-const bt = { data: null, hz: "3M" };
-async function loadBacktest() {
-  if (!bt.data) {
-    try { bt.data = await getJSON("/api/backtest"); } catch { return; }   // no backtest yet: keep the hint
-  }
-  renderBacktest();
-}
-function renderBacktest() {
-  const B = bt.data, rows = B.results[bt.hz];
-  $("#btSeg").innerHTML = Object.keys(B.results).map(h => `<button data-bt="${h}" class="${h === bt.hz ? "on" : ""}">${h === "1M" ? "1 mese" : h === "3M" ? "3 mesi" : "6 mesi"}</button>`).join("");
-  $("#btMeta").textContent = `${dayIT(B.from)} → ${dayIT(B.to)} · ${B.stocks} titoli di oggi · ${fNum(B.observations, 0)} casi (uno a settimana)`;
-  const pc = v => `<span class="${sign(v)}">${fPct(v, 2)}</span>`;
-  const table = `<div class="table-wrap"><table class="scr"><thead><tr><th class="l">Fascia del Trend</th><th>Casi</th><th>Rendimento medio</th><th>QQQ stesso periodo</th>
-      <th>Extra vs QQQ (media)</th><th>Extra vs QQQ (mediana)</th><th>% volte meglio di QQQ</th><th>vs media di tutti i titoli</th></tr></thead>
-    <tbody>${rows.map(x => `<tr class="${x.band === "Tutti i titoli" ? "bt-all" : ""}"><td class="l">${x.band === "Tutti i titoli" ? "<b>Tutti i titoli</b>" : sigBadge(x.band)}</td>
-      <td>${fNum(x.n, 0)}</td><td>${pc(x.ret)}</td><td>${pc(x.qqq)}</td><td><b>${pc(x.excess)}</b></td><td>${pc(x.excessMedian)}</td>
-      <td>${fNum(x.beat, 1)}%</td><td>${x.band === "Tutti i titoli" ? "—" : pc(x.vsAll)}</td></tr>`).join("")}</tbody></table></div>`;
-  const years = `<h4 class="bt-h">Extra-rendimento medio a 3 mesi rispetto a QQQ, anno per anno</h4>
-    <div class="table-wrap"><table class="scr"><thead><tr><th class="l">Anno</th>${B.bands.map(b => `<th>${esc(sigName(b))}</th>`).join("")}<th>Tutti</th></tr></thead>
-    <tbody>${B.byYear.map(y => `<tr><td class="l">${y.year}</td>${B.bands.map(b => `<td>${isNum(y[b]) ? pc(y[b]) : "—"}</td>`).join("")}<td>${pc(y.all)}</td></tr>`).join("")}</tbody></table></div>`;
-  const limits = `<h4 class="bt-h">Limiti: leggili prima di fidarti dei numeri</h4><ul class="why bt-lim">${B.limits.map(l => `<li><b>${esc(l.title)}.</b> ${esc(l.text)}</li>`).join("")}</ul>
-    <p class="muted small">Il calcolo del punteggio nel backtest coincide con quello della dashboard (differenza massima su casi di controllo: ${fNum(B.checkMaxDiff, 2)}).
-    Per rifarlo: <code>.venv/bin/python backtest.py</code> (circa 10 secondi).</p>`;
-  $("#btBody").innerHTML = `<p class="small muted">Ogni settimana, per ogni titolo, il punteggio tecnico, cioè il <b>Trend</b> (medie 20/40/60, RSI, forza vs QQQ),
-    viene messo in una fascia con le stesse soglie del segnale. Visto questo risultato, il Trend non fa più parte del segnale finale. Poi si misura quanto ha reso il titolo nei ${bt.hz === "1M" ? "21" : bt.hz === "3M" ? "63" : "126"} giorni di borsa successivi, e quanto QQQ negli stessi giorni.</p>${table}${years}${limits}`;
-}
-$("#btSeg").addEventListener("click", e => { const b = e.target.closest("[data-bt]"); if (b) { bt.hz = b.dataset.bt; renderBacktest(); } });
-
-// explanations adapted to the current values (fixed wording, numbers from the report)
-const HORIZON = { 20: "breve", 40: "breve-medio", 60: "medio" };
-function qqqInfo(n, vs, slope) {
-  if (!isNum(vs)) return "";
-  let t = `QQQ (il fondo che replica il Nasdaq-100) è ${fNum(Math.abs(vs), 1)}% ${vs >= 0 ? "sopra" : "sotto"} la sua media degli ultimi ${n} giorni:
-    trend di ${HORIZON[n]} periodo <b>${vs >= 0 ? "positivo" : "negativo"}</b>.`;
-  if (Math.abs(vs) > 5) t += ` La distanza è ampia: dopo allunghi così a volte il prezzo rallenta o torna verso la media.`;
-  if (isNum(slope)) t += `<br><br>La media a ${n} ${slope > 0.05 ? "sale" : slope < -0.05 ? "scende" : "è quasi piatta"} (${fPct(slope, 2)} a settimana):
-    ${slope > 0.05 ? "la direzione di fondo è verso l'alto" : slope < -0.05 ? "la direzione di fondo è verso il basso" : "nessuna direzione chiara"}.
-    La pendenza dice dove va la media, la distanza dice dove si trova il prezzo rispetto a lei.`;
-  return t;
-}
-function rsiInfo(v) {
-  if (!isNum(v)) return "";
-  return `RSI a 14 giorni di QQQ: ${fNum(v, 0)} su 100. Misura la forza dei movimenti recenti.
-    ${v > 70 ? "Sopra 70 = ipercomprato: è salito molto e in fretta." : v < 30 ? "Sotto 30 = ipervenduto: è sceso molto e in fretta." : "Tra 30 e 70: nessun eccesso."}`;
-}
-function breadthInfo(n, v, bull, bear) {
-  if (!isNum(v)) return "";
-  const lvl = v >= 70 ? "partecipazione ampia: il movimento coinvolge la maggior parte dei titoli."
-    : v >= 50 ? "più della metà è sopra: partecipazione discreta."
-    : v >= 30 ? "meno della metà è sopra: l'indice è sostenuto da pochi titoli, oppure è debole."
-    : "partecipazione molto debole: la maggior parte dei titoli è sotto la media.";
-  let t = `Il ${Math.round(v)}% dei titoli del Nasdaq-100 ha il prezzo sopra la propria media a ${n} giorni: ${lvl}
-    Se l'indice sale ma questa quota scende, il rialzo si sta restringendo.`;
-  if (isNum(bull)) t += `<br><br>${Math.round(bull)}% dei titoli ha le medie in ordine rialzista (20 sopra 40 sopra 60), ${Math.round(bear)}% in ordine ribassista.`;
-  return t;
-}
-function renderBrief(R) {
-  const g = R.regime, q = g.qqq, b = g.breadth;
-  const col = { long: "--up", selective: "--warn", defensive: "--down" }[g.bias] || "--muted";
-  const cell = (l, v, s, cls = "", tipHtml = "") => `<div><div class="l">${l} ${info(tipHtml)}</div><div class="v ${cls}">${v}</div><div class="s">${s}</div></div>`;
-  $("#brief").innerHTML = `<div>
-      <span class="regime"><i style="background:var(${col})"></i>${esc(g.label)}</span>
-      <p class="hl">${esc(R.headline)}</p><p class="rt">${esc(g.text)}</p></div>
-    <div class="bstats">
-      ${cell("QQQ vs media 20", fPct(q.vs20, 1), `pendenza media 20: ${fPct(q.slope20, 2)}/sett.`, sign(q.vs20), qqqInfo(20, q.vs20, q.slope20))}
-      ${cell("QQQ vs media 40", fPct(q.vs40, 1), `RSI ${fNum(q.rsi, 0)}`, sign(q.vs40), qqqInfo(40, q.vs40, q.slope40) + "<br><br>" + rsiInfo(q.rsi))}
-      ${cell("QQQ vs media 60", fPct(q.vs60, 1), `pendenza media 60: ${fPct(q.slope60, 2)}/sett.`, sign(q.vs60), qqqInfo(60, q.vs60, q.slope60))}
-      ${cell("Sopra media 20", pctR(b["20"]), "dei titoli del Nasdaq-100", "", breadthInfo(20, b["20"]))}
-      ${cell("Sopra media 40", pctR(b["40"]), "dei titoli del Nasdaq-100", "", breadthInfo(40, b["40"]))}
-      ${cell("Sopra media 60", pctR(b["60"]), `${Math.round(g.bullShare)}% medie in ordine rialzista · ${Math.round(g.bearShare)}% ribassista`, "", breadthInfo(60, b["60"], g.bullShare, g.bearShare))}
-    </div>`;
-}
-
 function renderRRG(R) {
-  const el = $("#rrg"), groups = R[ideasState.grp];
+  const el = $("#rrg"), groups = R[rot.grp];
   el.innerHTML = "";
-  $$("[data-grp-seg] button").forEach(b => b.classList.toggle("on", b.dataset.grp === ideasState.grp));
+  $$("[data-grp-seg] button").forEach(b => b.classList.toggle("on", b.dataset.grp === rot.grp));
   const W = el.clientWidth || 500, H = 360, m = { t: 14, r: 16, b: 30, l: 44 }, iw = W - m.l - m.r, ih = H - m.t - m.b;
   const ex = Math.max(3, d3.max(groups, d => Math.abs(d.rs1m)) * 1.15), ey = Math.max(2, d3.max(groups, d => Math.abs(d.rs1w)) * 1.2);
   const x = d3.scaleLinear().domain([-ex, ex]).range([0, iw]).nice(), y = d3.scaleLinear().domain([-ey, ey]).range([ih, 0]).nice();
@@ -2376,148 +2183,9 @@ const scoreBar = v => {
   return `<span class="sbar"><span class="trk"><i style="${v >= 0 ? `left:50%` : `right:50%`};width:${w}%;background:var(${v >= 0 ? "--up" : "--down"})"></i></span><span class="num ${sign(v)}">${v > 0 ? "+" : ""}${fNum(v, 0)}</span></span>`;
 };
 
-function renderGroupTable(R) {
-  const groups = R[ideasState.grp];
-  $("#grpTitle").textContent = ideasState.grp === "themes" ? "Temi" : "Settori";
-  $("#grpTable").innerHTML = `<thead><tr><th class="l">${ideasState.grp === "themes" ? "Tema" : "Settore"}</th><th>Punteggio</th><th>Δ</th><th>Medie rialziste</th><th>&gt;media 20</th><th>&gt;media 40</th><th>&gt;media 60</th><th>vs QQQ 1M</th><th class="l">Fase</th><th class="l">Migliori</th></tr></thead>
-    <tbody>${groups.map(g => `<tr data-g="${esc(g.name)}" data-kind="${g.kind}"><td class="l"><b>${esc(g.name)}</b> <span class="muted">${g.n}</span></td><td>${scoreBar(g.score)}</td>
-      <td class="${sign(g.dScore)}">${isNum(g.dScore) ? (g.dScore > 0 ? "+" : "") + fNum(g.dScore, 1) : "—"}</td>
-      <td>${Math.round(g.bull)}%</td><td>${pctR(g.above20)}</td><td>${pctR(g.above40)}</td><td>${pctR(g.above60)}</td>
-      <td class="${sign(g.rs1m)}">${fChg(g.rs1m)}</td><td class="l"><span class="q ${g.quadrant}">${QLAB[g.quadrant]}</span></td><td class="l muted">${esc(g.leaders.join(" · "))}</td></tr>`).join("")}</tbody>`;
-}
-
-// "Da stamattina", "Da ieri sera", or "Dal report di …"
-function sincePhrase(prevId, curId) {
-  const [pd, ps] = prevId.split("_"), [cd] = curId.split("_");
-  const days = Math.round((Date.parse(cd) - Date.parse(pd)) / 864e5);
-  const today = { morning: "Da stamattina", afternoon: "Da oggi pomeriggio", close: "Da stasera" }[ps];
-  const yday = { morning: "Da ieri mattina", afternoon: "Da ieri pomeriggio", close: "Da ieri sera" }[ps];
-  return days === 0 && today ? today : days === 1 && yday ? yday : `Dal report di ${repLabel(prevId)}`;
-}
-// Cosa è cambiato: plain sentences comparing this report with the previous one (display only, same data as the tables)
-function renderChanges(R) {
-  const c = R.changes;
-  $("#changesCard").hidden = !c;
-  if (!c) return;
-  $("#changesMeta").textContent = `rispetto al report ${repLabel(c.since)}`;
-  const since = sincePhrase(c.since, R.id);
-  const tk = list => { const shown = list.slice(0, 8).map(t => `<b class="tlink" data-t="${esc(t)}">${esc(t)}</b>`).join(", ");
-    return list.length > 8 ? `${shown} e altri ${list.length - 8}` : shown; };
-  const n = (k, one, many) => k === 1 ? `1 ${one}` : `${k} ${many}`;
-  const out = [];
-  const P = ideasState.prev?.id === c.since && ideasState.prev.R ? new Map(ideasState.prev.R.stocks.map(s => [s.ticker, s])) : null;
-  // older reports used the 20/30/60 averages: comparing positions or order with them would be wrong
-  const sameMAs = P && [...P.values()].some(p => isNum(p.vs40));
-  if (P && !sameMAs) out.push(`<span class="muted">Il report precedente usava medie diverse (20/30/60): il confronto su medie e punteggio di trend non è disponibile.</span>`);
-  if (sameMAs) {
-    const all3 = (s, f) => [s.vs20, s.vs40, s.vs60].every(v => isNum(v) && f(v));
-    const has3 = s => [s.vs20, s.vs40, s.vs60].every(isNum);
-    const was = (s, f) => { const p = P.get(s.ticker); return p && has3(p) && f(p); };
-    const up3 = R.stocks.filter(s => all3(s, v => v > 0) && was(s, p => !all3(p, v => v > 0))).map(s => s.ticker);
-    const dn3 = R.stocks.filter(s => all3(s, v => v < 0) && was(s, p => !all3(p, v => v < 0))).map(s => s.ticker);
-    const bull = R.stocks.filter(s => s.stack === "bull" && was(s, p => p.stack !== "bull")).map(s => s.ticker);
-    const bear = R.stocks.filter(s => s.stack === "bear" && was(s, p => p.stack !== "bear")).map(s => s.ticker);
-    if (up3.length) out.push(`${since} ${n(up3.length, "titolo è passato", "titoli sono passati")} sopra le medie 20, 40 e 60: ${tk(up3)}.`);
-    if (dn3.length) out.push(`${since} ${n(dn3.length, "titolo è sceso", "titoli sono scesi")} sotto le medie 20, 40 e 60: ${tk(dn3)}.`);
-    if (bull.length) out.push(`${n(bull.length, "titolo ha", "titoli hanno")} ora le medie in ordine rialzista (20 sopra 40 sopra 60): ${tk(bull)}.`);
-    if (bear.length) out.push(`${n(bear.length, "titolo ha", "titoli hanno")} ora le medie in ordine ribassista (20 sotto 40 sotto 60): ${tk(bear)}.`);
-  }
-  if (P) {
-    const b0 = ideasState.prev.R.regime?.breadth?.["20"], b1 = R.regime?.breadth?.["20"];
-    if (isNum(b0) && isNum(b1) && Math.abs(b1 - b0) >= 10)
-      out.push(`La quota di titoli sopra la media a 20 giorni è ${b1 > b0 ? "salita" : "scesa"} dal ${pctR(b0)} al ${pctR(b1)}.`);
-  }
-  const movers = P && !sameMAs ? [] : c.scoreMovers;   // the trend score depends on the averages: not comparable across versions
-  const ups = movers.filter(m => m.delta >= 10), dns = movers.filter(m => m.delta <= -10);
-  if (ups.length) out.push(`Punteggio di trend salito di più: ${ups.slice(0, 4).map(m => `<b class="tlink" data-t="${esc(m.ticker)}">${esc(m.ticker)}</b> (${m.delta > 0 ? "+" : ""}${fNum(m.delta, 0)}, ora ${fNum(m.score, 0)})`).join(", ")}.`);
-  if (dns.length) out.push(`Punteggio di trend sceso di più: ${dns.slice(0, 4).map(m => `<b class="tlink" data-t="${esc(m.ticker)}">${esc(m.ticker)}</b> (${fNum(m.delta, 0)}, ora ${fNum(m.score, 0)})`).join(", ")}.`);
-  const isTheme = new Set(R.themes.map(t => t.name));
-  c.rotations.forEach(r => out.push(`${isTheme.has(r.name) ? "Il tema" : "Il settore"} <b>${esc(r.name)}</b> è passato da <span class="q ${r.from}">${QLAB[r.from]}</span> a <span class="q ${r.to}">${QLAB[r.to]}</span>.`));
-  const real = out.filter(x => !x.startsWith('<span class="muted">'));
-  if (!real.length) out.push(`<span class="muted">Nessun cambiamento rilevante rispetto al report ${esc(repLabel(c.since))}.</span>`);
-  $("#changes").innerHTML = out.length ? out.map(x => `<li>${x}</li>`).join("")
-    : `<li class="muted">Nessun cambiamento rilevante rispetto al report ${esc(repLabel(c.since))}.</li>`;
-}
-
-function renderMaTable(R) {
-  const q = ($("#maFind").value || "").trim().toLowerCase();
-  const cols = [
-    ["ticker", "Ticker", "l tk", s => esc(s.ticker)], ["sector", "Settore", "l", s => esc(s.sector)],
-    ["score", "Trend", "", s => scoreBar(s.score)],
-    ["stack", "Ordine medie", "l", s => `<span class="stack ${s.stack}">${s.stack === "bull" ? "20>40>60" : s.stack === "bear" ? "20<40<60" : "misto"}</span>`],
-    ["vs20", "vs media 20", "", s => `<span class="${sign(s.vs20)}">${fPct(s.vs20, 1)}</span>`],
-    ["vs60", "vs media 60", "", s => `<span class="${sign(s.vs60)}">${fPct(s.vs60, 1)}</span>`],
-    ["rsi", "RSI", "", s => fNum(s.rsi, 0)],
-    ["rs1m", "vs QQQ 1M", "", s => `<span class="${sign(s.rs1m)}">${fChg(s.rs1m)}</span>`],
-    ["sigScore", "Segnale", "l", s => s.signal ? `${sigBadge(s.signal)} <span class="muted num">${fNum(s.sigScore, 0)}</span>` : "—"],
-  ];
-  if (!cols.some(c => c[0] === ideasState.maSort.key)) ideasState.maSort = { key: "score", dir: -1 };   // sorted by a removed column
-  const { key, dir } = ideasState.maSort;
-  const rows = R.stocks.filter(s => !q || s.ticker.toLowerCase().includes(q) || s.name.toLowerCase().includes(q) || s.sector.toLowerCase().includes(q))
-    .sort((a, b) => { const va = a[key], vb = b[key]; if (va == null) return 1; if (vb == null) return -1; return (typeof va === "string" ? va.localeCompare(vb) : va - vb) * dir; });
-  const head = `<thead><tr>${cols.map(([k, l, c]) => `<th class="${c.split(" ")[0]} ${key === k ? "sorted" + (dir > 0 ? " asc" : "") : ""}" data-mk="${k}">${l}</th>`).join("")}</tr></thead>`;
-  $("#maTable").innerHTML = `${head}<tbody>${rows.map(s => `<tr data-t="${esc(s.ticker)}">${cols.map(([, , c, f]) => `<td class="${c}">${f(s)}</td>`).join("")}</tr>`).join("")}</tbody>`;
-  $("#maHead").innerHTML = head;
-  // reports saved before the change carry a signal that still included the technical part
-  const oldSig = (R.ideas || []).some(i => i.signal?.components?.some(c => c.key === "tech"));
-  $("#maNote").textContent = oldSig ? "segnale calcolato con la versione precedente (tecnica inclusa)" : "";
-  syncMaHead();
-}
-// The table scrolls sideways inside its card, so its own header cannot stick to the page: a copy of the header
-// is shown fixed under the tabs while the table is on screen, with the same column widths and horizontal offset.
-function syncMaHead() {
-  const wrap = $("#maWrap"), box = $("#maHeadBox"), table = $("#maTable"), clone = $("#maHead");
-  if (!wrap || state.view !== "ideas" || !table.tHead) { box.hidden = true; return; }
-  const top = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sticky-top")) || 0;
-  const r = wrap.getBoundingClientRect(), hh = table.tHead.offsetHeight;
-  const show = r.top < top && r.bottom > top + hh * 2;
-  box.hidden = !show;
-  if (!show) return;
-  box.style.cssText = `top:${top}px;left:${r.left}px;width:${wrap.clientWidth}px`;
-  clone.style.width = table.offsetWidth + "px";
-  const src = table.tHead.rows[0].cells, dst = clone.tHead.rows[0].cells;
-  for (let k = 0; k < src.length; k++) dst[k].style.width = dst[k].style.minWidth = src[k].getBoundingClientRect().width + "px";
-  clone.style.transform = `translateX(${-wrap.scrollLeft}px)`;
-  dst[0].style.transform = `translateX(${wrap.scrollLeft}px)`;   // Ticker stays frozen in the copy too
-}
-addEventListener("scroll", syncMaHead, { passive: true });
-
-$("#repSel").addEventListener("change", e => { ideasState.id = e.target.value; LS.set("repId", ideasState.id); renderIdeas(); });
 document.addEventListener("click", e => {
   const b = e.target.closest("[data-grp-seg] button");
-  if (b) { ideasState.grp = b.dataset.grp; renderRRG(ideasState.report); renderGroupTable(ideasState.report); }
-});
-$("#view-trade").addEventListener("click", e => {
-  const t = e.target.closest("[data-open]");
-  if (t) openDetail(t.dataset.open);
-});
-$("#view-ideas").addEventListener("click", e => {
-  const t = e.target.closest("[data-open], .changes-list [data-t], #maTable tr[data-t]");
-  if (t) openDetail(t.dataset.open || t.dataset.t);
-  const th = e.target.closest("th[data-mk]");
-  if (th) { const k = th.dataset.mk; ideasState.maSort = ideasState.maSort.key === k ? { key: k, dir: -ideasState.maSort.dir } : { key: k, dir: ["ticker", "sector", "stack", "setup"].includes(k) ? 1 : -1 }; renderMaTable(ideasState.report); }
-});
-$("#maFind").addEventListener("input", () => renderMaTable(ideasState.report));
-$("#maWrap").addEventListener("scroll", syncMaHead, { passive: true });
-$("#maHeadBox").addEventListener("click", e => {   // sorting from the floating header copy
-  const th = e.target.closest("th[data-mk]");
-  if (th) $(`#maTable th[data-mk="${th.dataset.mk}"]`).click();
-});
-$("#runBtn").addEventListener("click", async () => {
-  const btn = $("#runBtn");
-  btn.disabled = true; btn.textContent = "In esecuzione…";
-  try { await fetch("/api/report/run", { method: "POST" }); } catch { /* polled below */ }
-  for (let k = 0; k < 90; k++) {
-    await new Promise(r => setTimeout(r, 2000));
-    const st = await getJSON("/api/reports").catch(() => null);
-    if (st && !st.job.running) {
-      $("#repJob").textContent = st.job.error ? "Errore: " + st.job.error : "";
-      break;
-    }
-  }
-  btn.disabled = false; btn.textContent = "Genera report ora";
-  ideasState.id = "latest"; ideasState.loadedId = null; LS.set("repId", "latest");
-  renderIdeas();
+  if (b) { rot.grp = b.dataset.grp; LS.set("rotGrp", rot.grp); if (rot.data) renderRRG(rot.data); }
 });
 
 // ------------------------------------------------------------ Diario dei segnali (diary.py): live check of the verdicts
@@ -2537,7 +2205,9 @@ function renderDiary() {
   if (!D) { el.innerHTML = `<div class="card empty">Diario non disponibile al momento.</div>`; return; }
   const hzLab = { "1M": "1 mese", "3M": "3 mesi", "6M": "6 mesi" };
   const intro = `<p class="warn-box"><b>Verifica dal vivo, non un backtest.</b> ${D.days ? `Il diario ha ${D.days} ${D.days === 1 ? "giorno" : "giorni"} (dal ${dayIT(D.first)} al ${dayIT(D.last)}).` : "Il diario è ancora vuoto: il primo salvataggio avviene dopo la prossima chiusura della borsa, con la dashboard accesa."}
-    Finché una categoria ha meno di ${D.minCases} casi o meno di ${D.minDays} giorni diversi, i numeri possono essere solo caso e <b>non vanno usati per decidere</b>. Non è una consulenza finanziaria.</p>`;
+    Finché una categoria ha meno di ${D.minCases} casi o meno di ${D.minDays} giorni diversi, i numeri possono essere solo caso e <b>non vanno usati per decidere</b>. Non è una consulenza finanziaria.</p>
+    ${D.excluded?.length ? `<p class="muted small">Esclusi dalle statistiche (i file restano com'erano): ${D.excluded.map(x => `${dayIT(x.date)} — ${esc(x.why)}`).join(" · ")}.</p>` : ""}
+    ${D.missing?.length ? `<p class="muted small">Sedute senza diario (la dashboard o il job serale non erano attivi dopo la chiusura): ${D.missing.map(dayIT).join(", ")}.</p>` : ""}`;
   const today = D.today.length ? `<div class="card"><div class="card-h"><h2>Verdetti dell'ultimo giorno salvato</h2><span class="card-meta">${dayIT(D.last)} · titoli del Nasdaq-100 e mie posizioni</span></div>
     <div class="pt-stocks">${D.today.map(x => `<span class="act ${VERDICT_CLS[x.category] || "hold"}">${esc(x.category)} · ${x.n}</span>`).join("")}</div></div>` : "";
   const H = D.horizons[diary.hz], rows = H?.rows || [];
@@ -2555,6 +2225,10 @@ function renderDiary() {
       <div class="seg small">${Object.keys(hzLab).map(h => `<button data-dz="${h}" class="${h === diary.hz ? "on" : ""}">${hzLab[h]}</button>`).join("")}</div>
       <span class="card-meta">${H ? `${H.days} giorni misurati` : ""}</span></div>
       ${table}
+      ${H?.byRule?.length ? `<details class="fold"><summary><span class="small">Per regola che ha deciso il verdetto (per esempio «Attendi» per trimestrale o per media 200)</span></summary>
+        <div class="table-wrap"><table class="scr"><thead><tr><th class="l">Verdetto</th><th class="l">Deciso da</th><th>Casi</th><th>Giorni</th><th>Extra vs QQQ (media)</th><th>% volte meglio di QQQ</th><th>Extra vs tutti (media)</th><th>(mediana)</th><th class="l">Affidabilità</th></tr></thead>
+        <tbody>${H.byRule.map(r => `<tr class="${r.enough ? "" : "muted"}"><td class="l">${esc(r.category)}</td><td class="l">${esc(r.ruleName)}</td><td>${fNum(r.n, 0)}</td><td>${r.days}</td>
+          <td>${pp(r.excess)}</td><td>${fNum(r.beat, 1)}%</td><td><b>${pp(r.vsAll)}</b></td><td>${pp(r.vsAllMedian)}</td><td class="l">${r.enough ? "casi sufficienti" : "<b>troppo pochi casi</b>"}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
       <p class="muted small">Rendimento del titolo dalla chiusura del giorno del verdetto a ${H?.sessions || ""} sedute dopo; «extra vs tutti» = rendimento meno la media di tutti i titoli del Nasdaq-100 salvati lo stesso giorno, come nel test dei pattern.</p>
       <h4 class="bt-h">Limiti: leggili prima di fidarti dei numeri</h4><ul class="why bt-lim">${D.limits.map(l => `<li><b>${esc(l.title)}.</b> ${esc(l.text)}</li>`).join("")}</ul>
       <p class="muted small">Dati salvati in <code>portafoglio/diario/</code>, un file per seduta, solo su questo Mac. Ogni giorno contiene, per ogni titolo: prezzo, verdetto, livelli del piano e regole soddisfatte o no.</p></div>`;
@@ -2593,31 +2267,45 @@ document.addEventListener("keydown", e => {
 
 // ------------------------------------------------------------ views, theme, resize
 // Four tabs that follow a manager's work; each groups the older views, whose ids (and saved links) are unchanged.
+// Phase 21: three tabs. The Diario dei segnali appears in Ricerca only with about 3 months of data (it keeps recording
+// in the background in any case). Removed pages (Report, Pattern tecnici, Le mie regole) send old links to the nearest one.
+const DIARY_READY = 63;
 const GROUPS = [
   { id: "mercato", label: "Mercato", ask: "Cosa sta succedendo?", views: [["overview", "Oggi"], ["sectors", "Settori"]] },
-  { id: "portafoglio", label: "Portafoglio", ask: "Cosa devo fare con quello che ho?", views: [["portfolio", "Portafoglio"]] },
-  { id: "ricerca", label: "Ricerca", ask: "Cosa potrei comprare?", views: [["screener", "Screener"], ["watch", "In osservazione"]] },
-  { id: "metodo", label: "Metodo", ask: "Il sistema funziona?", views: [["ideas", "Report"], ["trade", "Pattern tecnici"], ["diary", "Diario dei segnali"], ["rules", "Le mie regole"]] },
+  { id: "portafoglio", label: "Portafoglio", ask: "Cosa ho e come sta andando?", views: [["portfolio", "Posizioni"], ["pfperf", "Performance"], ["pfconc", "Concentrazione"], ["pfrisk", "Rischio"]] },
+  { id: "ricerca", label: "Ricerca", ask: "Cosa potrei comprare?", views: [["screener", "Screener"], ["watch", "In osservazione"], ["diary", "Diario dei segnali"]] },
 ];
+const PF_SUBS = ["portfolio", "pfperf", "pfconc", "pfrisk"];
+const OLD_LINKS = { map: "sectors", ideas: "sectors", trade: "screener", rules: "portfolio", metodo: "screener" };
+const diaryReady = () => (state.snap?.diaryDays || 0) >= DIARY_READY;
 const VIEWS = GROUPS.flatMap(g => g.views.map(v => v[0]));
 const groupOf = v => GROUPS.find(g => g.views.some(x => x[0] === v));
-// "#mercato", "#portafoglio", "#ricerca", "#metodo" open the tab (on the sub-tab used last); "#map" is the old name of Settori
-const viewFromHash = h => h === "map" ? "sectors" : VIEWS.includes(h) ? h : GROUPS.some(g => g.id === h) ? lastSub(GROUPS.find(g => g.id === h)) : null;
-function lastSub(g) { const v = LS.get("sub." + g.id, g.views[0][0]); return g.views.some(x => x[0] === v) ? v : g.views[0][0]; }
+const shownViews = g => g.views.filter(([id]) => id !== "diary" || diaryReady());
+// "#mercato", "#portafoglio", "#ricerca" open the tab (on the sub-tab used last); old links go to the nearest page
+const viewFromHash = h => {
+  if (OLD_LINKS[h]) return OLD_LINKS[h];
+  if (h === "diary") return diaryReady() ? "diary" : "screener";
+  if (VIEWS.includes(h)) return h;
+  const g = GROUPS.find(x => x.id === h);
+  return g ? lastSub(g) : null;
+};
+function lastSub(g) { const v = LS.get("sub." + g.id, g.views[0][0]); return shownViews(g).some(x => x[0] === v) ? v : g.views[0][0]; }
 function setView(v) {
-  if (!VIEWS.includes(v)) v = viewFromHash(v) || "portfolio";
+  if (!VIEWS.includes(v) || (v === "diary" && !diaryReady())) v = viewFromHash(v) || "portfolio";
   const g = groupOf(v);
   state.view = v; LS.set("view", v); LS.set("sub." + g.id, v);
   if (location.hash.slice(1) !== v) history.replaceState(null, "", "#" + v);
   $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.main === g.id));
   const sub = $("#subtabs");
-  sub.hidden = g.views.length < 2;
-  sub.innerHTML = `<span class="sub-ask">${esc(g.ask)}</span>` + g.views.map(([id, label]) => `<button class="subtab ${id === v ? "active" : ""}" data-view="${id}">${esc(label)}</button>`).join("");
-  $$(".view").forEach(el => el.hidden = !state.snap || el.id !== "view-" + v);
+  const subs = shownViews(g);
+  sub.hidden = subs.length < 2;
+  sub.innerHTML = `<span class="sub-ask">${esc(g.ask)}</span>` + subs.map(([id, label]) => `<button class="subtab ${id === v ? "active" : ""}" data-view="${id}">${esc(label)}</button>`).join("");
+  const section = PF_SUBS.includes(v) ? "portfolio" : v;          // the portfolio sub-pages share one section
+  $$(".view").forEach(el => el.hidden = !state.snap || el.id !== "view-" + section);
+  $$("[data-pfsub]").forEach(el => el.hidden = el.dataset.pfsub !== v);
   setStickyTop();
   if (state.snap) renderAll();
   window.scrollTo({ top: 0 });
-  syncMaHead();
 }
 $$(".tab").forEach(t => t.addEventListener("click", () => setView(lastSub(GROUPS.find(g => g.id === t.dataset.main)))));
 $("#subtabs").addEventListener("click", e => { const b = e.target.closest("[data-view]"); if (b) setView(b.dataset.view); });
@@ -2642,7 +2330,7 @@ function setStickyTop() {
 }
 setStickyTop();
 let rz;
-addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { setStickyTop(); syncMaHead(); if (state.snap) renderAll(); if (state.detail) loadDetailChart(); }, 150); });
+addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { setStickyTop(); if (state.snap) renderAll(); if (state.detail) loadDetailChart(); }, 150); });
 
 // ------------------------------------------------------------ boot
 (async function boot() {

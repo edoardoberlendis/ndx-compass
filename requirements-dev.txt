@@ -1,0 +1,2 @@
+# only for the automatic tests (tests/): .venv/bin/python -m pip install -r requirements-dev.txt
+pytest>=8.0

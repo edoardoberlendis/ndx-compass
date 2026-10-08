@@ -19,7 +19,7 @@ import threading
 import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -175,8 +175,61 @@ def market_note(now=None):
         "holiday": hol,
         "reopen": market_calendar.next_trading_day(now).isoformat() if hol else None,
         "earlyClose": early,
-        "calendarWarning": market_calendar.coverage_warning(now.date()),
+        "calWarnings": calendar_warnings(now),
     }
+
+
+def calendar_warnings(now):
+    """Small ⚠ next to the update time (phase 21): calendars that run out within 30 days, failed date checks, and
+    NYSE sessions missing from the signal diary or without an evening report."""
+    out = []
+    w = market_calendar.coverage_warning(now.date())
+    if w:
+        out.append(w)
+    out += macro_calendar.coverage_warnings(now.date())
+    out += [f"Controllo automatico delle date macro non riuscito: {v}. Uso le date scritte nel codice."
+            for v in (macro_calendar._auto.get("errors") or {}).values()]
+    try:
+        import diary
+        last = last_closed_session(now)
+        if last:
+            miss = diary.missing(last)
+            if miss:
+                out.append(f"Diario dei segnali: {'manca' if len(miss) == 1 else 'mancano'} {len(miss)} {'seduta' if len(miss) == 1 else 'sedute'} "
+                           f"({', '.join(d[8:] + '/' + d[5:7] for d in miss[-5:])}{' e altre' if len(miss) > 5 else ''}): la dashboard o il job serale non erano attivi dopo la chiusura.")
+            first = (diary.days() or [None])[0]
+            if first:
+                import signals
+                have = {r.split("_")[0] for r in signals.list_reports() if r.endswith("_close")}
+                no_rep = [d for d in sessions_between(first, last) if d not in have]
+                if no_rep:
+                    out.append(f"Report della sera: {'manca' if len(no_rep) == 1 else 'mancano'} {len(no_rep)} {'seduta' if len(no_rep) == 1 else 'sedute'} dal {first[8:]}/{first[5:7]} "
+                               "(il job serale si installa con ./schedule.sh install).")
+    except Exception:
+        log.exception("calendar warnings")
+    return out
+
+
+def sessions_between(first, last):
+    """NYSE sessions from first to last (ISO dates, both included)."""
+    d, end, out = date.fromisoformat(first), date.fromisoformat(last), []
+    while d <= end:
+        if market_calendar.is_trading_day(d):
+            out.append(d.isoformat())
+        d += timedelta(days=1)
+    return out
+
+
+def last_closed_session(now=None):
+    """The last NYSE session whose close is at least 20 minutes old (ISO date)."""
+    now = now or datetime.now(ET)
+    d = now.date()
+    if market_calendar.is_trading_day(d) and now.hour * 60 + now.minute >= market_calendar.close_minute(now) + 20:
+        return d.isoformat()
+    d -= timedelta(days=1)
+    while not market_calendar.is_trading_day(d):
+        d -= timedelta(days=1)
+    return d.isoformat()
 
 
 # ---------------------------------------------------------------- constituents
@@ -617,6 +670,7 @@ class Store:
                 "indices": idx,
                 "breadth": breadth,
                 "totalMcap": total,
+                "diaryDays": diary_days(),
                 "weightsTop": len(top),                          # how many weights are real QQQ weights (0 = all estimated)
             }
 
@@ -731,6 +785,56 @@ def intraday_breadth(rows, intra):
 store = Store()
 
 
+def diary_days():
+    """Number of sessions in the signal diary (the Diario page is shown from diary.READY_SESSIONS on)."""
+    try:
+        import diary
+        return len(diary.days())
+    except Exception:
+        return 0
+
+
+_earn = {"data": {}, "key": None}
+
+
+def run_daily_job():
+    """The evening job (daily_job.py, launchd at 22:45 Mon-Fri; phase 21): with the dashboard closed it does what the
+    open dashboard does after the close - report, signal diary and the day's picture of my portfolio. It writes only
+    what is missing, so it does not clash with a dashboard that is also open."""
+    import analysts
+    import history
+    import signals
+    t0 = time.time()
+    store.constituents = load_constituents()
+    tickers = [c["ticker"] for c in store.constituents]
+    store.infos = load_infos(tickers)
+    store.analysts = analysts.load(tickers) if not analysts.is_fresh() else analysts.cached_data()
+    store.top_weights = qqq_top_weights()
+    store.refresh_daily()
+    store.refresh_intraday()
+    with ThreadPoolExecutor(4) as ex:                    # headlines for the news part of the signal, as the dashboard does
+        store.news_all = dict(zip(tickers, ex.map(lambda t: news(t, 40), tickers)))
+    store.news_at = time.time()
+    store.build()
+    macro_calendar.refresh()
+    portfolio.refresh()
+    for _ in range(180):                                 # my positions: tickers are matched in the background
+        if not portfolio._state["resolving"]:
+            break
+        time.sleep(1)
+    portfolio.refresh_quotes()
+    with store.lock:
+        snap, infos = store.snapshot, dict(store.infos)
+    history.record(portfolio.snapshot(snap, infos))
+    save_signal_diary()
+    now = datetime.now(ET)
+    rid = f"{now:%Y-%m-%d}_close"
+    after_close = now.hour * 60 + now.minute >= market_calendar.close_minute(now)
+    if market_calendar.is_trading_day(now.date()) and after_close and rid not in signals.list_reports():
+        signals.run(notify_user=False)                   # the evening report, only once the session is closed
+    log.info("daily job done in %.0fs", time.time() - t0)
+
+
 def save_signal_diary():
     """After the close (and until the next open, if the dashboard was off): the day's verdicts in portafoglio/diario/
     (diary.py). A day is written once and never rewritten; nothing here may stop the price refresh."""
@@ -743,11 +847,22 @@ def save_signal_diary():
         if not snap or bench is None or not len(bench):
             return
         now = datetime.now(ET)
-        day = str(bench["Close"].dropna().index[-1].date())             # the last session in the daily history
-        if day == str(now.date()) and now.hour * 60 + now.minute < market_calendar.close_minute(now) + 20:
-            return                                                       # today's bar is not final yet
+        day = last_closed_session(now)                                   # the session the closing prices belong to
         if diary.exists(day) or not store.ta:
             return
+        # Phase 21 fix: the daily history must contain that session's final bar, otherwise levels and the date would
+        # belong to the previous session (this is how 2026-10-01 was saved with the prices of 2 October).
+        last_bar = str(bench["Close"].dropna().index[-1].date())
+        fresh_after_close = store.last_daily and datetime.fromtimestamp(store.last_daily, ET) >= now.replace(
+            hour=DAILY_AFTER_CLOSE[0], minute=DAILY_AFTER_CLOSE[1], second=0, microsecond=0)
+        if last_bar != day or (day == str(now.date()) and not fresh_after_close):
+            store.refresh_daily()
+            store.build()
+            with store.lock:
+                snap, bench = store.snapshot, store.daily.get(SIGNAL_BENCH)
+            if bench is None or str(bench["Close"].dropna().index[-1].date()) != day:
+                log.warning("signal diary: daily history without the session %s yet, retry later", day)
+                return
         pf = portfolio_view()
         if pf.get("resolving"):
             return                                                       # my positions are still being matched: next round
@@ -1160,12 +1275,13 @@ def portfolio_view():
     with store.lock:
         snap, infos = store.snapshot, dict(store.infos)
     pf = portfolio.snapshot(snap, infos)
-    pf["rules"] = rules.evaluate(pf)          # my limits and whether the portfolio respects them
+    pf["rules"] = rules.load()                # my risk per trade (the weight limits were removed in phase 21)
+    pf["fiscal"] = actions.load_fiscal()      # my capital losses carried forward (zainetto fiscale), for the tax estimate
     tickers = [p["ticker"] for p in pf.get("positions") or [] if p.get("ticker")]
     if tickers:
         risk.history(tickers)                 # starts the daily download of 2 years of prices if needed (for the 200-day average)
     rows = {r["ticker"]: r for r in snap["stocks"]} if snap else {}
-    pf["actions"] = actions.evaluate(pf, pf["rules"], {       # thesis and proposed action of every position (actions.py)
+    pf["actions"] = actions.evaluate(pf, {                    # thesis and proposed action of every position (actions.py)
         "rows": rows, "sma200": risk.sma200(), "firstSeen": history.first_seen(),
         "analysts": {t: analysts.analyst_summary(store.analysts.get(t)) for t in tickers if store.analysts.get(t)}})
     return pf
@@ -1209,6 +1325,21 @@ def api_thesis():
     return jsonify(ok=True)
 
 
+@app.route("/api/earnings")
+def api_earnings():
+    """Details of the earnings of the next 7 days (earnings.py): estimates, last report, usual move on the reaction day."""
+    import earnings
+    with store.lock:
+        snap, daily, anl = store.snapshot, store.daily, store.analysts
+    now = time.time()
+    tickers = sorted(r["ticker"] for r in (snap or {}).get("stocks", []) if r.get("earningsTs") and 0 <= r["earningsTs"] - now + 86400 <= 8 * 86400)
+    key = (today_et(), tuple(tickers))
+    if _earn["key"] == key:
+        return jsonify(loading=False, data=_earn["data"])
+    earnings.details_async(tickers, daily, anl, lambda d: _earn.update(data=d, key=key))
+    return jsonify(loading=True, data=_earn["data"])
+
+
 @app.route("/api/diary")
 def api_diary():
     """Signal diary: how each kind of verdict did after 1, 3 and 6 months (diary.py). Personal data, local only."""
@@ -1220,7 +1351,9 @@ def api_diary():
         return jsonify(error="dati non pronti"), 503
     tickers = [c["ticker"] for c in store.constituents]
     closes = {t: daily[t]["Close"].dropna() for t in tickers if t in daily}
-    return app.response_class(json.dumps(diary.results(closes, bench["Close"].dropna()), default=clean), mimetype="application/json")
+    res = diary.results(closes, bench["Close"].dropna())
+    res["missing"] = diary.missing(last_closed_session())
+    return app.response_class(json.dumps(res, default=clean), mimetype="application/json")
 
 
 @app.route("/api/portfolio/history")
@@ -1241,13 +1374,12 @@ def api_portfolio_risk():
 
 @app.route("/api/rules", methods=["POST"])
 def api_rules():
-    """Save my investment rules in portafoglio/regole.json (only from the dashboard open on this Mac)."""
+    """Save my risk per trade in portafoglio/regole.json (only from the dashboard open on this Mac)."""
     import rules
     if not local_request():
-        return jsonify(error="Le regole si modificano solo dalla dashboard aperta su questo Mac."), 403
-    body = request.get_json(silent=True) or {}
+        return jsonify(error="Si modifica solo dalla dashboard aperta su questo Mac."), 403
     try:
-        rules.save(body.get("limits"), body.get("broad"))
+        rules.save_trade_risk((request.get_json(silent=True) or {}).get("tradeRisk"))
     except ValueError as e:
         return jsonify(error=str(e)), 400
     return jsonify(ok=True)
@@ -1261,6 +1393,36 @@ def local_request():
     return (request.remote_addr in ("127.0.0.1", "::1") and host in ("localhost", "127.0.0.1")
             and (origin is None or re.fullmatch(r"http://(localhost|127\.0\.0\.1)(:\d+)?", origin) is not None)
             and request.headers.get("X-Requested-With") == "ndx-dashboard")
+
+
+@app.route("/api/fiscal", methods=["POST"])
+def api_fiscal():
+    """Save my capital losses carried forward (zainetto fiscale) in portafoglio/fiscale.json (only from this Mac)."""
+    import actions
+    if not local_request():
+        return jsonify(error="Si modifica solo dalla dashboard aperta su questo Mac."), 403
+    body = request.get_json(silent=True) or {}
+    try:
+        actions.save_fiscal(body.get("losses"), body.get("expiry"))
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(ok=True)
+
+
+@app.route("/api/rotation")
+def api_rotation():
+    """Rotation map of sectors and themes against QQQ (Mercato → Settori), from the latest daily history: the same
+    signals.group_stats as the old report, so it no longer depends on a saved report."""
+    import signals
+    with store.lock:
+        tech, cons = dict(store.tech), list(store.constituents)
+    with open(os.path.join(ROOT, "themes.json")) as f:
+        theme_def = json.load(f)
+    rows = {t: {**m, "ticker": t} for t, m in tech.items()}
+    sectors = [g for sec in sorted({c["sector"] for c in cons})
+               if (g := signals.group_stats(sec, [rows.get(c["ticker"]) for c in cons if c["sector"] == sec], "sector"))]
+    themes = [g for name, tks in theme_def.items() if (g := signals.group_stats(name, [rows.get(t) for t in tks], "theme"))]
+    return jsonify(sectors=sorted(sectors, key=lambda g: -g["score"]), themes=sorted(themes, key=lambda g: -g["score"]))
 
 
 @app.route("/api/portfolio/upload", methods=["POST"])

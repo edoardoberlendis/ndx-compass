@@ -54,7 +54,7 @@ EARLY_CLOSES = {
 }
 
 COVERED_UNTIL = date(2028, 12, 31)   # last day the tables above are complete for
-WARN_DAYS = 90
+WARN_DAYS = 30            # warn only in the last 30 days before the end of the list (phase 21)
 
 
 def _d(day) -> date:

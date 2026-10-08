@@ -18,6 +18,12 @@ from datetime import datetime
 import portfolio
 
 DIR = os.path.join(portfolio.PORTFOLIO_DIR, "diario")
+EXCLUDED = os.path.join(DIR, "esclusi.json")     # {"AAAA-MM-GG": "reason"}: days left out of the statistics, never modified
+READY_SESSIONS = 63                               # the Diario page is shown only with about 3 months of data (phase 21)
+RULE_ORDER = ["D1", "D2", "D3", "D4", "D5", "D6", "D7"]   # D3 (weight limits) was removed in phase 21: kept for older days
+RULE_NAMES = {"dati": "dati insufficienti", "D1": "azienda debole (D1)", "D2": "trimestrale vicina (D2)", "D3": "miei limiti di peso (D3, regola tolta)",
+              "D4": "sotto la media 200 (D4)", "D5": "titolo tirato (D5)", "D6": "a ridosso del massimo (D6)", "D7": "azienda nella media, prezzo non a sconto (D7)",
+              "tutte": "tutte le regole soddisfatte", "posizione": "regole delle mie posizioni"}
 HORIZONS = {"1M": 21, "3M": 63, "6M": 126}       # trading sessions, as in the backtests
 MIN_CASES, MIN_DAYS = 100, 20                    # below this the page says the cases are too few to conclude anything
 ORDER = ["Entra ora", "Entra su ritracciamento", "Entra su rottura", "Attendi", "Evita", "Accumula", "Mantieni", "Rivedi la tesi", "Riduci"]
@@ -46,6 +52,48 @@ def exists(day):
     return os.path.exists(_path(day))
 
 
+def excluded():
+    """{day: reason} of the days left out of the statistics (the files themselves are never touched)."""
+    try:
+        with open(EXCLUDED) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def missing(last_session):
+    """NYSE sessions from the first diary day to last_session (ISO dates) without a diary file."""
+    import market_calendar
+    from datetime import date, timedelta
+    ds = days()
+    if not ds:
+        return []
+    d, end, have, out = date.fromisoformat(ds[0]), date.fromisoformat(last_session), set(ds), []
+    while d <= end:
+        if market_calendar.is_trading_day(d) and d.isoformat() not in have:
+            out.append(d.isoformat())
+        d += timedelta(days=1)
+    return out
+
+
+def decided_by(e):
+    """The rule that decided a saved verdict: the first one not satisfied, in order (also for days saved before
+    phase 21, from the rules stored that day; the files are only read)."""
+    if e.get("decidedBy"):
+        return e["decidedBy"]
+    if e.get("owned"):
+        return "posizione"
+    rules = {r["id"]: r["ok"] for r in e.get("rules") or []}
+    if not rules:
+        return "dati"
+    if rules.get("D1") is None:
+        return "dati"
+    for rid in RULE_ORDER:
+        if rules.get(rid) is False:
+            return rid
+    return "tutte"
+
+
 def entry(decision=None, position=None):
     """One line of the diary from a "Decisione" sheet (index stock) and/or one of my positions."""
     if decision:
@@ -54,7 +102,7 @@ def entry(decision=None, position=None):
         plans = decision["plans"]
         p = (next((b for b in plans.get("breakouts") or [] if b["pattern"] == v.get("pattern")), None) if key == "breakout" else plans.get(key)) if key else None
         return {"ticker": decision["ticker"], "price": decision["price"], "verdict": v["label"], "category": v["category"], "owned": v["owned"],
-                "index": True, "why": v["why"], "company": decision["company"]["summary"], "companyScore": decision["company"]["score"],
+                "index": True, "why": v["why"], "company": decision["company"]["summary"], "companyScore": decision["company"]["score"], "decidedBy": v.get("decidedBy"),
                 "levels": {"entry": p["entry"], "stop": p["stop"], "target": p["target"]} if p else None,
                 "rules": [{"id": c["id"], "ok": c["ok"]} for c in decision["checks"]],
                 "positionRules": [r["id"] for r in position["action"]["rules"] if r["state"] == "on"] if position else None}
@@ -78,9 +126,11 @@ def save(day, entries):
 def results(closes, bench):
     """For /api/diary: how each kind of verdict did after 1, 3 and 6 months.
     closes: {ticker: daily closes of the index stocks}; bench: QQQ closes (its dates are the session calendar)."""
-    ds = days()
+    skip = excluded()
+    ds = [d for d in days() if d not in skip]
     out = {"days": len(ds), "first": ds[0] if ds else None, "last": ds[-1] if ds else None, "minCases": MIN_CASES, "minDays": MIN_DAYS,
-           "horizons": {}, "pending": {}, "today": [], "limits": [{"title": a, "text": b} for a, b in LIMITS]}
+           "excluded": [{"date": d, "why": w} for d, w in sorted(skip.items())],
+           "horizons": {}, "byRule": {}, "pending": {}, "today": [], "limits": [{"title": a, "text": b} for a, b in LIMITS]}
     if not ds:
         return out
     cal = [str(d.date()) for d in bench.index]
@@ -96,8 +146,16 @@ def results(closes, bench):
     for e in last:
         counts[e["category"]] = counts.get(e["category"], 0) + 1
     out["today"] = [{"category": c, "n": counts[c]} for c in ORDER if c in counts]
+    def stats(key, cs):
+        ret, ex, va = [c[1] for c in cs], [c[2] for c in cs], [c[3] for c in cs]
+        nd = len({c[0] for c in cs})
+        return {**key, "n": len(cs), "days": nd, "enough": len(cs) >= MIN_CASES and nd >= MIN_DAYS,
+                "ret": statistics.fmean(ret), "retMedian": statistics.median(ret),
+                "excess": statistics.fmean(ex), "excessMedian": statistics.median(ex), "beat": sum(x > 0 for x in ex) / len(ex) * 100,
+                "vsAll": statistics.fmean(va), "vsAllMedian": statistics.median(va), "beatAll": sum(x > 0 for x in va) / len(va) * 100}
+
     for name, h in HORIZONS.items():
-        cases = {}
+        cases, by_rule = {}, {}
         measured_days = 0
         for d in ds:
             k = pos.get(d)
@@ -108,26 +166,20 @@ def results(closes, bench):
             for e in files[d]:
                 s = series.get(e["ticker"]) if e.get("index") else None
                 if s and s.get(d) and s.get(end):
-                    rows.append((e["category"], (s[end] / s[d] - 1) * 100))
+                    rows.append((e["category"], decided_by(e), (s[end] / s[d] - 1) * 100))
             if not rows:
                 continue
             measured_days += 1
             rq = (q[end] / q[d] - 1) * 100
-            avg = statistics.fmean(r for _, r in rows)
-            for cat, r in rows:
-                cases.setdefault(cat, []).append((d, r, r - rq, r - avg))
-        table = []
-        for cat in ORDER:
-            cs = cases.get(cat)
-            if not cs:
-                continue
-            ret, ex, va = [c[1] for c in cs], [c[2] for c in cs], [c[3] for c in cs]
-            nd = len({c[0] for c in cs})
-            table.append({"category": cat, "n": len(cs), "days": nd, "enough": len(cs) >= MIN_CASES and nd >= MIN_DAYS,
-                          "ret": statistics.fmean(ret), "retMedian": statistics.median(ret),
-                          "excess": statistics.fmean(ex), "excessMedian": statistics.median(ex), "beat": sum(x > 0 for x in ex) / len(ex) * 100,
-                          "vsAll": statistics.fmean(va), "vsAllMedian": statistics.median(va), "beatAll": sum(x > 0 for x in va) / len(va) * 100})
-        out["horizons"][name] = {"sessions": h, "days": measured_days, "rows": table}
+            avg = statistics.fmean(r for _, _, r in rows)
+            for cat, rule, r in rows:
+                case = (d, r, r - rq, r - avg)
+                cases.setdefault(cat, []).append(case)
+                by_rule.setdefault((cat, rule), []).append(case)
+        table = [stats({"category": cat}, cases[cat]) for cat in ORDER if cases.get(cat)]
+        rules_table = [stats({"category": cat, "rule": rule, "ruleName": RULE_NAMES.get(rule, rule)}, cs)
+                       for (cat, rule), cs in sorted(by_rule.items(), key=lambda kv: (ORDER.index(kv[0][0]) if kv[0][0] in ORDER else 99, kv[0][1]))]
+        out["horizons"][name] = {"sessions": h, "days": measured_days, "rows": table, "byRule": rules_table}
         k0 = pos.get(ds[0])
         out["pending"][name] = max(0, k0 + h - (len(cal) - 1)) if k0 is not None else h
     return out

@@ -19,19 +19,25 @@ Oppure dal Terminale:
 
 ## Cosa contiene
 
-La dashboard ha **quattro schede**, che seguono il lavoro di un gestore; ognuna raggruppa le pagine descritte sotto.
-All'avvio si apre **Portafoglio**.
+La dashboard ha **tre schede** (Fase 21); ognuna raggruppa le pagine descritte sotto. All'avvio si apre **Portafoglio**.
 
-| Scheda | Domanda | Cosa c'è dentro |
+| Scheda | Domanda | Sotto-schede |
 |---|---|---|
-| **Mercato** | Cosa sta succedendo? | Oggi (con gli eventi macro USA) · Settori |
-| **Portafoglio** | Cosa devo fare con quello che ho? | Cosa richiede attenzione oggi · Rispetto delle regole · totali · Rischio · Performance · posizioni con tesi e azione · concentrazione |
-| **Ricerca** | Cosa potrei comprare? | Screener · In osservazione (i preferiti ★, prima "I miei titoli"); da qui si apre la scheda del titolo con la sezione Decisione |
-| **Metodo** | Il sistema funziona? | Report · Pattern tecnici (test dei pattern) · Diario dei segnali · Le mie regole |
+| **Mercato** | Cosa sta succedendo? | Oggi (con eventi macro USA e trimestrali) · Settori (con la mappa di rotazione) |
+| **Portafoglio** | Cosa ho e come sta andando? | Posizioni · Performance · Concentrazione · Rischio |
+| **Ricerca** | Cosa potrei comprare? | Screener · In osservazione (i preferiti ★) · Diario dei segnali (compare quando ha almeno 3 mesi di dati); da qui si apre la scheda del titolo con la sezione Decisione |
 
-I vecchi link continuano a funzionare e portano alla pagina giusta: `#overview` e `#sectors` (Mercato), `#portfolio`,
-`#screener` e `#watch` (Ricerca), `#ideas`, `#trade`, `#diary` e `#rules` (Metodo). `#mercato`, `#portafoglio`,
-`#ricerca` e `#metodo` aprono la scheda sull'ultima pagina usata.
+I vecchi link portano alla pagina più vicina: `#overview` → Oggi, `#sectors` e `#ideas` (il vecchio Report) → Settori,
+`#portfolio` e `#rules` → Posizioni, `#screener` e `#trade` (i vecchi Pattern tecnici) → Screener, `#watch` → In
+osservazione, `#diary` → Diario se visibile, altrimenti Screener. `#mercato`, `#portafoglio` e `#ricerca` aprono la
+scheda sull'ultima pagina usata.
+
+**Tolto nella Fase 21** (per una dashboard più semplice; i calcoli che restano non dipendono da queste parti):
+la scheda Metodo con Report, Pattern tecnici, Diario e Le mie regole (i risultati dei backtest sono più sotto in
+questo file; il diario continua a registrare in background); il riquadro "Cosa richiede attenzione oggi"; i limiti sui
+pesi (titolo, ETF, tema, settore, paese, leva) con il riquadro "Rispetto delle regole", le regole R1, R2 e A3 delle
+azioni (quindi l'azione "Riduci") e la regola D3 del verdetto; il verdetto "Entra su rottura" (diventa "Attendi: a
+ridosso del massimo"); gli avvisi di calendario dentro le card (ora una piccola ⚠ in alto, solo negli ultimi 30 giorni).
 
 - **Oggi**: 4 indicatori (Nasdaq-100, titoli in rialzo/ribasso, % di titoli sopra le medie 20/40/60 e 200, volatilità VIX e VXN con la fascia: calmo/normale/nervosismo/paura),
   mappa del mercato (clic sul nome di un settore per ingrandirlo), grafico intraday del Nasdaq-100, chi si è mosso e perché, trimestrali dei prossimi 7 giorni
@@ -42,34 +48,38 @@ I vecchi link continuano a funzionare e portano alla pagina giusta: `#overview` 
   sul nome o su "Dettagli →" apre il pannello laterale (lo stesso dei titoli) con: data e ora di New York e italiana,
   valore uscito e del mese prima, spiegazione completa, "come reagisce di solito il mercato" (scenari "se… → di
   solito…", mai previsioni), settori e temi più sensibili, quota del mio portafoglio e preferiti coinvolti con
-  l'elenco dei titoli (cliccabili). Valori di CPI e occupazione dall'API pubblica della BLS; il valore atteso
+  l'elenco dei titoli (cliccabili) e la riga "valore atteso: lo trovi nel calendario economico di Fineco (Mercati e
+  trading)". Valori di CPI e occupazione dall'API pubblica della BLS; il valore atteso
   non c'è (nessuna fonte gratuita affidabile), il PCE mostra solo la data (i valori richiederebbero una chiave BEA).
   Date ufficiali scritte in `macro_calendar.py` (Fed, BLS, BEA, 2026); ogni giorno la pagina della Fed e il calendario
   BEA vengono riletti per aggiungere le date nuove, con un avviso se il controllo non riesce o se l'elenco sta per finire.
 - **In osservazione** (Ricerca; prima "I miei titoli"): i preferiti (★) con prezzo, variazioni, posizione rispetto alle medie, valutazione, analisti, segnale,
   prossima trimestrale e ultima notizia. Salvati in `watchlist.json` nella cartella del progetto.
-- **Le mie regole** (in cima alla scheda Portafoglio): pochi limiti, come il mandato di una banca privata. Riquadro
-  **Rispetto delle regole**: verde se tutto è nei limiti, altrimenti l'elenco dei limiti superati con valore, limite e
-  di quanto (per esempio "Prodotti a leva: 28,8% dell'esposizione effettiva, limite 15% (+13,8 punti)"), in giallo quelli
-  vicini al limite. Limiti: singolo titolo, singolo ETF ampio, altro ETF/ETC (quota del valore); tema, settore, paese
-  (quota dell'esposizione effettiva, dove un prodotto a leva 3x conta 3 volte); prodotti a leva (sul valore e
-  sull'esposizione effettiva); rischio massimo per singola operazione (usato per il numero di azioni nell'Analisi
-  tecnica, insieme al limite per singolo titolo). **Modifica regole** apre la pagina Metodo → Le mie regole con i campi, i valori proposti
-  (10 / 35 / 15 / 25 / 50 / 80 / 5 / 15 / 1%, avviso dal 90% del limite) e la spunta "ampio" per i miei ETF. Si salvano
-  in `portafoglio/regole.json` (fuori da Git, solo da questo Mac); finché non salvo valgono i valori proposti, indicati
-  come "non ancora confermati". Superare un limite non è un ordine di vendita: è un punto da guardare.
-- **Rischio del portafoglio** (scheda Portafoglio, sotto i totali), con ⓘ semplici: **volatilità annua** e confronto con
+- **Trimestrali** (in Oggi): una riga compatta per società (data, prima o dopo la seduta, "di solito ±X%"); con un clic
+  si aprono utile per azione e ricavi attesi con il numero di analisti, l'ultima trimestrale (atteso, effettivo,
+  sorpresa %) e il movimento nel giorno di reazione alle ultime 8 trimestrali (la seduta stessa se i conti escono prima
+  dell'apertura, la successiva se escono dopo la chiusura), calcolato dai prezzi giornalieri (`earnings.py`). Un dato
+  che Yahoo non fornisce non viene mostrato.
+- **Avvisi ⚠** (accanto all'orario di aggiornamento in alto): elenchi di date che finiscono entro 30 giorni (festività
+  NYSE, Fed, CPI, PCE, occupazione), controlli automatici delle date non riusciti, sedute senza diario o senza report
+  della sera. La spiegazione compare passando il mouse.
+- **Rischio per operazione** (unica regola rimasta): quanta parte del portafoglio perdo al massimo se scatta lo stop di
+  un'operazione (proposto 1%). Si modifica nella sezione Decisione della scheda del titolo e si salva in
+  `portafoglio/regole.json`. Le quantità vengono solo da questo rischio e dalla distanza tra entrata e stop: non ci
+  sono più limiti di peso.
+- **Rischio del portafoglio** (Portafoglio → Rischio), con una frase iniziale ("quali posizioni fanno oscillare il
+  portafoglio più di quanto pesano") e ⓘ semplici: **volatilità annua** e confronto con
   QQQ; **beta** sul Nasdaq-100; **scenario** "se il Nasdaq-100 perde il 10% / 20% il portafoglio perde circa X €"
   (beta × calo × valore, la leva entra con i prezzi veri dei prodotti a leva); **massima perdita storica** del
   portafoglio di oggi negli ultimi 2 anni, con le date e QQQ negli stessi giorni; **contributo al rischio** di ogni
   posizione confrontato con il suo peso in euro (⚠ da 1,5 volte il peso); **correlazione** media pesata e le 5 coppie
-  più simili. Metodo (`risk.py`): 2 anni di chiusure giornaliere convertite in euro, portafoglio simulato con i pesi di
+  più simili (massima perdita e correlazione sono nella sezione chiusa "Altre misure"). Metodo (`risk.py`): 2 anni di chiusure giornaliere convertite in euro, portafoglio simulato con i pesi di
   oggi tenuti fissi; volatilità e massima perdita sui rendimenti giornalieri, beta, contributo e correlazioni su quelli
   settimanali (Milano e Francoforte chiudono prima di New York). Restano fuori, e sono elencate con il motivo, le
   posizioni con meno di 6 mesi di prezzi o con prezzi storici anomali (salti di un giorno oltre +150% / −75%). Limiti
   scritti nella sezione: due anni sono pochi, pesi di oggi nel passato, scenario lineare, stime e non previsioni.
   I prezzi si scaricano una volta al giorno e restano in memoria.
-- **Storico e performance** (scheda Portafoglio): ogni giorno, a ogni aggiornamento dei prezzi, la dashboard salva in
+- **Storico e performance** (Portafoglio → Performance): ogni giorno, a ogni aggiornamento dei prezzi, la dashboard salva in
   `portafoglio/storico/AAAA-MM-GG.json` valore, costo, cambio e posizioni (solo su questo Mac; i giorni passati non si
   modificano e non si cancellano; i giorni con la dashboard spenta sono ricostruiti con le ultime quantità e le
   chiusure di quei giorni, e segnati come tali). Riquadro **Performance**: grafico del valore in euro con ▲▼ nei giorni
@@ -82,31 +92,25 @@ I vecchi link continuano a funzionare e portano alla pagina giusta: `#overview` 
   di caricamento del file, non ci sono liquidità né dividendi incassati, sotto i 3 mesi lo storico è troppo corto per
   trarre conclusioni. Lo storico parte dal 2 ottobre 2026; dal solo file attuale il passato non si può ricostruire
   (mancano date e prezzi dei singoli acquisti).
-- **Tesi e azioni sulle posizioni** (scheda Portafoglio): per ogni posizione posso scrivere una tesi breve (perché la
-  possiedo, cosa mi aspetto, cosa mi farebbe vendere) con stop, target e peso obiettivo facoltativi, salvata in
-  `portafoglio/tesi.json` (solo su questo Mac). La dashboard propone **Mantieni / Accumula / Riduci / Rivedi la tesi**
-  con regole esplicite (`actions.py`); vince la più grave e accanto compaiono i motivi con i numeri.
-  **Riduci**: R1 peso sopra il mio limite (titolo, ETF ampio, altro ETF), R2 prodotto a leva con i limiti sulla leva
-  superati. **Rivedi la tesi**: V1 stop rotto, V2 target raggiunto (valuta una presa di profitto), V3 prezzo sotto la
-  media 200, V4 stime di utile tagliate di oltre il 3% in 30 giorni, V5 più downgrade che upgrade in 30 giorni,
-  V6 perdita oltre il 25% dal prezzo di carico, V7 prodotto a leva nello storico da più di 30 giorni, V8 tesi più
-  vecchia di 6 mesi. **Accumula** solo se: A1 peso sotto l'80% del mio peso obiettivo, A2 nessuna regola Riduci o
-  Rivedi scattata, A3 arrivare all'obiettivo non supera nessun mio limite, A4 non è un prodotto a leva, A5 nessuna
-  trimestrale entro 5 giorni (altrimenti Mantieni con la nota "accumula dopo la trimestrale del …"). Il target
-  raggiunto compare con l'etichetta **"Rivedi · target raggiunto"**. Il motivo della V6 non suggerisce di vendere
-  ("la tesi è ancora valida? Decidi in base alle prospettive, non al prezzo pagato"). Pulsante **Ho rivisto la tesi**
-  nel pannello: scrivo una riga di motivazione, salvata in `tesi.json` con la data, e i motivi "Rivedi" scattati
-  restano silenziati per 30 giorni, a meno che non ne scatti uno nuovo; nel riquadro le posizioni silenziate sono solo
-  un conteggio. Accanto a "Riduci" e a "Rivedi · target raggiunto" c'è l'**effetto fiscale stimato**: plusvalenza o
-  minusvalenza sulla quota da vendere (sull'intera posizione per il target) e imposta indicativa al 26%; azioni ed
-  ETC/ETN: redditi diversi, plus e minus compensabili; ETF UCITS: i guadagni sono redditi di capitale (non compensano
-  le minusvalenze), le perdite redditi diversi. È una stima indicativa, non una consulenza fiscale. Note senza
-  azione: tesi mancante, trimestrale entro 5 giorni, tema/settore/paese sopra il limite, segnale e Trend ("non
-  verificati"). In cima alla scheda il riquadro **Cosa richiede attenzione oggi** elenca solo le posizioni con azione
-  diversa da Mantieni; la colonna "Azione" della tabella apre il pannello della posizione (tesi, azione, tutte le
-  regole con ✅ / — / non valutabile). Sono regole di disciplina, **non verificate da un backtest**: V4 e V5 valgono
-  solo per i titoli del Nasdaq-100.
-- **Portafoglio**: le mie posizioni reali, dall'export Excel di Fineco ("Portafoglio sintesi") messo nella cartella
+- **Tesi e azioni sulle posizioni** (colonna "Azione" della tabella delle posizioni): per ogni posizione posso scrivere
+  una tesi breve (perché la possiedo, cosa mi aspetto, cosa mi farebbe vendere) con stop, target e peso obiettivo
+  facoltativi, salvata in `portafoglio/tesi.json`. La dashboard propone **Mantieni / Accumula / Rivedi la tesi** con
+  regole esplicite (`actions.py`); accanto compaiono i motivi con i numeri. **Rivedi la tesi**: V1 stop rotto, V2 target
+  raggiunto (etichetta "Rivedi · target raggiunto", valuta una presa di profitto), V3 prezzo sotto la media 200, V4 stime
+  tagliate di oltre il 3% in 30 giorni, V5 più downgrade che upgrade, V6 perde oltre il 25% dal prezzo di carico ("la
+  tesi è ancora valida? Decidi in base alle prospettive, non al prezzo pagato"), V7 prodotto a leva nello storico da più
+  di 30 giorni, V8 tesi più vecchia di 6 mesi. **Accumula** solo se: A1 peso sotto l'80% del mio peso obiettivo, A2
+  nessuna regola Rivedi scattata, A4 non è un prodotto a leva, A5 nessuna trimestrale entro 5 giorni (altrimenti
+  Mantieni con la nota "accumula dopo la trimestrale del …"). Pulsante **Ho rivisto la tesi**: una riga di motivazione,
+  e i motivi Rivedi scattati restano silenziati per 30 giorni, a meno che non ne scatti uno nuovo. Accanto a "Rivedi ·
+  target raggiunto" c'è l'**effetto fiscale stimato** (plusvalenza o minusvalenza e imposta indicativa al 26%): per
+  azioni ed ETC/ETN tiene conto dello **zainetto fiscale** indicato in Posizioni (sezione chiusa sotto la tabella,
+  `portafoglio/fiscale.json`); per gli ETF UCITS no, perché i guadagni sono redditi di capitale. Senza zainetto una nota
+  avverte che l'imposta reale può essere più bassa. Stima indicativa, non consulenza fiscale. Regole di disciplina,
+  **non verificate da un backtest**. (Tolte nella Fase 21: R1, R2 e A3 sui limiti di peso, e con loro "Riduci".)
+- **Portafoglio → Posizioni** (in quest'ordine: caricamento del file su una riga con la data del file attuale,
+  riepilogo con valore, guadagno/perdita, effetto cambio e variazione di oggi, tabella delle posizioni, zainetto
+  fiscale in una sezione chiusa): le mie posizioni reali, dall'export Excel di Fineco ("Portafoglio sintesi") messo nella cartella
   `portafoglio/` (la dashboard legge da sola il file più recente). Il file si carica dalla scheda con il pulsante
   **Carica file Fineco** o trascinandolo sulla pagina: prima compare un'anteprima (posizioni nuove, vendute, con
   quantità cambiata) e solo dopo la conferma il file viene salvato come `portafoglio/portafoglio-AAAA-MM-GG_HHMMSS.xls`.
@@ -143,15 +147,11 @@ I vecchi link continuano a funzionare e portano alla pagina giusta: `#overview` 
 - **Trend**: il punteggio tecnico (medie 20/40/60, RSI, forza vs QQQ), mostrato accanto al segnale ma non più dentro:
   il backtest ha mostrato che non distingue la direzione. Descrive l'andamento del prezzo, non è un voto.
 - **Screener**: i 100 titoli con colonne Panoramica / Performance / Valutazione / Tecnica, filtri (anche "Sopra/Sotto 20, 40 e 60", "Valutazione economica/cara", "Upgrade recenti", "Stime in rialzo/calo"), raggruppati per tema; un secondo clic su un filtro attivo lo toglie e torna a "Tutti". Export CSV. La vista Tecnica mostra la distanza dalle medie 20/40/60/50/200.
-- **Settori**: rendimenti dei settori pesati per capitalizzazione e peso di ogni settore nell'indice. Clic su una riga:
+- **Settori**: **mappa di rotazione** di temi e settori rispetto a QQQ (Leader, In miglioramento, In indebolimento,
+  In ritardo; calcolata dalla dashboard con le ultime chiusure, prima era nel Report), rendimenti dei settori pesati per capitalizzazione e peso di ogni settore nell'indice. Clic su una riga:
   compaiono i titoli di quel settore; di nuovo sulla stessa riga (o "Tutti i settori") si torna a tutti.
-- **Report**: il report tecnico generato da `signals.py` (vedi sotto): sintesi, mappa di rotazione, temi, cosa è cambiato
-  (in frasi semplici rispetto al report precedente), tabella delle medie e backtest.
-- **Pattern tecnici** (al posto della vecchia scheda Idee): per ciascuno dei 9 pattern provati con il backtest, l'esito
-  del test (✅/❌ per le 6 condizioni, con i numeri veri passando sopra), una spiegazione semplice, i dettagli a 1, 3 e 6
-  mesi e anno per anno, e i titoli che lo presentano nel report scelto in Report (per i pattern di tipo evento: quelli
-  in cui è scattato nelle ultime 5 sedute, con la data). **Nessun pattern è mostrato come "favorevole"**: vedi sotto.
-- **Diario dei segnali** (verifica dal vivo): analisti, valutazione e notizie non si possono provare sul passato, quindi
+- **Diario dei segnali** (Ricerca → Diario, visibile solo con almeno 63 sedute, circa 3 mesi; prima registra in
+  background): analisti, valutazione e notizie non si possono provare sul passato, quindi
   i verdetti della sezione Decisione si verificano da oggi in avanti. Dopo ogni chiusura (o al primo avvio prima
   dell'apertura successiva) la dashboard salva in `portafoglio/diario/AAAA-MM-GG.json` il verdetto di ogni titolo del
   Nasdaq-100 e delle mie posizioni: data, prezzo, verdetto, livelli del piano e regole soddisfatte o no. Dopo 1, 3 e
@@ -159,7 +159,11 @@ I vecchi link continuano a funzionare e portano alla pagina giusta: `#overview` 
   titoli dello stesso giorno: casi, giorni, rendimento medio e mediano, extra-rendimento, % di volte meglio. Finché
   una categoria ha meno di 100 casi o meno di 20 giorni diversi la pagina scrive "troppo pochi casi". Il diario non si
   modifica mai a posteriori: un giorno si scrive una volta sola, anche se poi le regole cambiano. Le posizioni fuori
-  dal Nasdaq-100 sono salvate ma non entrano nelle statistiche.
+  dal Nasdaq-100 sono salvate ma non entrano nelle statistiche. I risultati si vedono anche **per regola che ha deciso
+  il verdetto** (per esempio "Attendi" per trimestrale D2 o per media 200 D4), ricavata dalle regole salvate ogni giorno.
+  La data di ogni giorno è quella della seduta dei prezzi (Fase 21: il giorno `2026-10-01` era stato salvato il 2 ottobre
+  con i prezzi del 2 ottobre; il file resta com'è ma è escluso dalle statistiche con `portafoglio/diario/esclusi.json`).
+  Le sedute senza diario compaiono nella ⚠ in alto e nella pagina.
 - **Scheda titolo**: grafico 1G–MAX, confronto con NDX, fondamentali, target degli analisti, notizie, più:
   - **Decisione** (solo titoli del Nasdaq-100; assorbe la vecchia "Analisi tecnica"): la scheda che un analista
     porterebbe al comitato d'investimento, in cinque blocchi letti in ordine (`decision.py`).
@@ -170,18 +174,19 @@ I vecchi link continuano a funzionare e portano alla pagina giusta: `#overview` 
     **2. Contesto**: settore e tema (fase di rotazione, titolo contro il gruppo), eventi macro dei prossimi 7 giorni,
     giorni alla trimestrale. **3. Tempismo tecnico** (decide QUANDO e A CHE PREZZO): medie e trend, livelli chiave,
     pattern presenti con l'etichetta "verificato" o "non verificato" dal test della Fase 11.
-    **4. Posto nel mio portafoglio** (decide QUANTO): se lo possiedo e quanto pesa, spazio lasciato da ogni mia regola
-    (titolo, tema, settore, paese), sovrapposizione con i miei ETF sul Nasdaq-100, massimo acquistabile.
+    **4. Posto nel mio portafoglio** (decide QUANTO): se lo possiedo e quanto pesa, sovrapposizione con i miei ETF sul
+    Nasdaq-100 e il campo del **rischio per operazione**.
     **5. Piano operativo** con il verdetto e, sotto, l'elenco delle regole soddisfatte (✅) e non (❌); decide la prima
     non soddisfatta: D1 azienda debole → **Evita**; D2 trimestrale entro 5 giorni → **Attendi: trimestrale il …**;
-    D3 l'acquisto supererebbe un mio limite → **Attendi**; D4 prezzo sotto la media 200 → **Attendi**; D5 tirato
-    (oltre l'8% sopra la media 20 o RSI oltre 75) → **Entra su ritracciamento** (ordine limite vicino alla media 20 o
-    50); D6 entro il 3% sotto il massimo a 52 settimane → **Entra su rottura** (ordine condizionato, con la nota che la
-    rottura NON ha superato il test); D7 azienda nella media e prezzo oltre il 2% sopra la media 20 → **Entra su
-    ritracciamento**; tutte soddisfatte → **Entra ora**. Per i titoli che possiedo il verdetto è l'azione della Fase 17.
+    D4 prezzo sotto la media 200 → **Attendi**; D5 tirato (oltre l'8% sopra la media 20 o RSI oltre 75) → **Entra su
+    ritracciamento** (ordine limite vicino alla media 20 o 50); D6 entro il 3% sotto il massimo a 52 settimane →
+    **Attendi: a ridosso del massimo** (il livello di rottura e l'ordine condizionato restano visibili come
+    informazione, con "pattern non verificato": la rottura non ha superato il test della Fase 11); D7 azienda nella
+    media e prezzo oltre il 2% sopra la media 20 → **Entra su ritracciamento**; tutte soddisfatte → **Entra ora**.
+    (Fase 21: tolta la regola D3 sui limiti di peso; gli altri numeri restano gli stessi, per confrontare il diario.) Per i titoli che possiedo il verdetto è l'azione della Fase 17.
     Ogni piano ha entrata, stop (sotto la media 50 o l'ultimo minimo meno mezzo ATR se tra 1,5 e 3,5 ATR, altrimenti
-    2 × ATR; le altre opzioni si possono cliccare), target a 2 volte il rischio e quantità calcolata dal rischio per
-    operazione e dallo spazio lasciato dalle mie regole. Regole non verificate da backtest (lo dice la sezione): le
+    2 × ATR; le altre opzioni si possono cliccare), target a 2 volte il rischio e quantità calcolata solo dal rischio per
+    operazione (nessun tetto: la pagina mostra quanto peserebbe la posizione). Regole non verificate da backtest (lo dice la sezione): le
     misura il Diario dei segnali.
   - **Valutazione** (Economica / In linea / Cara): P/E atteso, P/S ed EV/EBITDA contro la mediana dei titoli dello
     stesso settore nel Nasdaq-100 (saltato se il settore ha meno di 3 titoli) e P/E / P/S di oggi contro la mediana
@@ -236,34 +241,35 @@ soluzione mista:
 I pesi del fondo QQQ sono quasi uguali a quelli dell'indice, ma non identici (il fondo tiene anche un po' di liquidità).
 Il peso dei settori è la somma dei pesi dei loro titoli.
 
-## Report automatico (scheda Report)
+## Report e job programmati
 
-`signals.py` gira dal lunedì al venerdì alle **08:30** (piano prima dell'apertura, sulla chiusura precedente)
-e alle **22:30** (dopo la chiusura USA), ora locale, tramite launchd (il programmatore di macOS).
-Nei giorni festivi della borsa USA l'esecuzione programmata non genera report (da Terminale o con il pulsante sì).
-Ogni esecuzione salva `reports/<data>_<sessione>.json`, mostra una notifica e compare nella scheda **Report**.
+Il report tecnico (`signals.py`) non è più una pagina della dashboard (Fase 21), ma continua a essere generato: la mappa
+di rotazione ora è in Mercato → Settori e i titoli di ogni pattern nella sezione Decisione. Con la programmazione di
+macOS (launchd), dal lunedì al venerdì, ora locale:
+
+- **08:30** report del mattino (`signals.py`);
+- **22:45** job serale (`daily_job.py`): report della sera, diario dei segnali e fotografia del portafoglio del giorno,
+  **anche con la dashboard chiusa**. Scrive solo quello che manca: se anche la dashboard è aperta, il primo che salva
+  vince e l'altro salta.
+
+Se il Mac è in stop all'orario, macOS esegue il job al risveglio (il diario usa i prezzi della seduta chiusa, ma i dati
+degli analisti sono quelli del risveglio; l'ora è salvata nel file). Se il Mac è spento il job salta: un giorno di
+diario non si può ricostruire dopo, e la ⚠ in alto lo segnala.
 
 ```sh
-./schedule.sh install   # attiva (o riattiva) la programmazione
-./schedule.sh run       # esegue subito il job, come farebbe la programmazione
+./schedule.sh install   # attiva (o riattiva) la programmazione delle 08:30 e delle 22:45
+./schedule.sh status    # dice se è installata e mostra le ultime righe dei log
+./schedule.sh run       # esegue subito il job serale, come farebbe la programmazione
 ./schedule.sh remove    # disattiva
-.venv/bin/python signals.py   # esegue il report a mano
 ```
 
-Log del job: `reports/logs/signals.log` e `reports/logs/signals.err`.
-
-Cosa calcola per ogni titolo: medie mobili a 20/40/60 giorni, il loro ordine e la pendenza settimanale,
-la distanza del prezzo da ciascuna, RSI(14), ATR, forza relativa rispetto a QQQ (1S/1M/3M) e rapporto volumi 20/60 giorni.
-Tutto confluisce in un punteggio di trend da −100 a +100. I titoli sono raggruppati per settore e per **temi**
-definiti in `themes.json` (modificabile). Il report contiene anche i titoli che presentano ciascun pattern tecnico
-(scheda Pattern tecnici). Le idee di trading con entrata, stop e target sono state tolte: i setup non hanno superato il test.
-
+Log: `reports/logs/signals.log` / `.err` (mattino) e `reports/logs/daily_job.log` / `.err` (sera).
 Il report è uno screening meccanico, **non è una consulenza finanziaria**.
 
 ## Backtest del Trend (parte tecnica)
 
 ```sh
-.venv/bin/python backtest.py   # circa 10 secondi, salva reports/backtest.json (sezione nella scheda Report)
+.venv/bin/python backtest.py   # circa 10 secondi, salva reports/backtest.json
 ```
 
 Ogni settimana degli ultimi ~10 anni ricalcola, per i titoli di oggi, il punteggio tecnico della dashboard (stesso
@@ -274,10 +280,24 @@ meglio di quelle centrali (la parte tecnica non distingue la direzione), il Tren
 principali: survivorship bias (si usano i componenti di oggi), casi sovrapposti, un solo tipo di mercato, nessun costo.
 Pesi e soglie non vengono adattati ai risultati.
 
+Risultati (29 settembre 2026: casi dal 10 gen 2017 al 27 mar 2026, 99 titoli, 41.935 osservazioni settimanali), a 3 mesi:
+
+| Fascia del Trend | Casi | Rendimento medio | Extra vs QQQ (media) | Extra vs QQQ (mediana) | % volte meglio di QQQ | vs media di tutti |
+|---|---|---|---|---|---|---|
+| Molto positivo | 8.761 | +8,59% | +3,77 | −0,10 | 49,7% | +2,08 |
+| Positivo | 9.665 | +5,69% | +0,79 | −0,41 | 48,5% | −0,90 |
+| Neutro | 12.081 | +6,06% | +0,56 | −0,55 | 48,6% | −1,14 |
+| Negativo | 6.601 | +7,40% | +1,38 | −0,27 | 49,1% | −0,31 |
+| Molto negativo | 4.827 | +8,86% | +2,99 | +1,04 | 52,2% | +1,30 |
+| Tutti i titoli | 41.935 | +7,04% | +1,69 | −0,22 | 49,3% | — |
+
+Le due fasce estreme vanno meglio di quelle centrali: il Trend non distingue la direzione, per questo non fa parte del
+segnale finale.
+
 ## Test dei pattern tecnici (Fase 11)
 
 ```sh
-.venv/bin/python backtest.py --patterns   # circa 15 secondi, salva reports/patterns.json (scheda Pattern tecnici)
+.venv/bin/python backtest.py --patterns   # circa 15 secondi, salva reports/patterns.json (usato dalla sezione Decisione)
 ```
 
 Verifica 9 pattern rialzisti con regole fissate **prima** di vedere i risultati; `reports/backtest.json` non viene toccato.
@@ -323,19 +343,39 @@ come pattern "favorevole".
 è mostrato con i suoi limiti; chi non lo supera è mostrato come "Test non superato". Limiti del test: survivorship bias
 residuo (favorisce i pattern di forza), test multipli, casi sovrapposti, nessun costo, un solo tipo di mercato.
 
+## Da verificare quando il diario avrà almeno 3 mesi di dati
+
+- **"Entra ora"**: togliendo la regola D3 (Fase 21) i titoli con "Entra ora" sono passati da 18 a 33 su 101. Controllare
+  nel Diario se "Entra ora" fa meglio di tutti i titoli dello stesso giorno (colonna "extra vs tutti", con casi
+  sufficienti); altrimenti le regole del verdetto vanno ripensate.
+
+## Test automatici
+
+```sh
+.venv/bin/python -m pip install -r requirements-dev.txt   # una volta sola (pytest)
+.venv/bin/python -m pytest -q                             # prima di ogni commit: devono passare tutti
+```
+
+I test (`tests/`) usano solo dati finti e una cartella temporanea al posto di `portafoglio/`, mai i dati reali:
+verdetto (`decision.py`), azioni sulle posizioni (`actions.py`), stima fiscale con e senza zainetto, rendimento
+ponderato per il tempo (`history.py`) e quantità da comprare.
+
 ## File del progetto
 
 | File/cartella | A cosa serve |
 |---|---|
 | `server.py` | Server: scarica i dati e li serve alla pagina web |
 | `signals.py` | Report tecnico due volte al giorno (schede Report e Pattern tecnici) |
-| `actions.py` | Tesi delle posizioni e azione proposta (Mantieni / Accumula / Riduci / Rivedi la tesi) con le sue regole |
+| `actions.py` | Tesi delle posizioni, azione proposta (Mantieni / Accumula / Rivedi la tesi) con le sue regole, stima fiscale e zainetto |
 | `analysts.py` | Dati degli analisti e valutazione (scaricati una volta al giorno) |
 | `score.py` | Segnale finale (analisti + valutazione + notizie) e Trend a parte |
 | `backtest.py` | Backtest del Trend e, con `--patterns`, test dei pattern tecnici (a mano) |
 | `history.py` | Storico giornaliero del portafoglio e rendimento ponderato per il tempo contro QQQ e VWCE |
 | `risk.py` | Rischio del portafoglio: volatilità, beta, scenario, massima perdita, contributo al rischio, correlazione |
-| `rules.py` | Le mie regole di investimento (limiti) e il controllo sul portafoglio |
+| `rules.py` | Il mio rischio massimo per operazione (unica regola rimasta dopo la Fase 21) |
+| `daily_job.py` | Job serale: report, diario e fotografia del portafoglio anche con la dashboard chiusa |
+| `earnings.py` | Dettagli delle trimestrali in Oggi (ultima trimestrale, movimento tipico nel giorno di reazione) |
+| `tests/`, `requirements-dev.txt` | Test automatici con dati finti (pytest) |
 | `diary.py` | Diario dei segnali: salva ogni giorno i verdetti e misura com'è andata ogni categoria dopo 1, 3 e 6 mesi |
 | `decision.py` | Sezione Decisione della scheda titolo: cinque blocchi, verdetto e piani operativi con regole esplicite |
 | `technical.py` | Numeri della sezione Analisi tecnica nella scheda del titolo (ATR, livelli, pattern, settore e tema) |

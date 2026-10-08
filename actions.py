@@ -2,10 +2,13 @@
 
 Personal data: my theses live in portafoglio/tesi.json (outside Git), edited from the dashboard.
 
-For every position the dashboard proposes Mantieni / Accumula / Riduci / Rivedi la tesi from the explicit rules below,
-and always shows which rules fired, with their numbers. The gravest action wins: Riduci, then Rivedi la tesi, then
-Accumula, otherwise Mantieni. These are rules of discipline chosen by the user: NONE of them is verified by a backtest
-(the signal diary of phase 19 will measure them from now on), and the page says so.
+For every position the dashboard proposes Mantieni / Accumula / Rivedi la tesi from the explicit rules below, and
+always shows which rules fired, with their numbers. Rivedi la tesi wins over Accumula, otherwise Mantieni. These are
+rules of discipline chosen by the user: NONE of them is verified by a backtest, and the page says so.
+Phase 21 removed the rules based on the weight limits (R1, R2: the only "Riduci" rules, and A3): ids are not reused.
+
+The indicative tax estimate (next to "Rivedi · target raggiunto") can use my capital losses carried forward
+("zainetto fiscale", portafoglio/fiscale.json) for shares and ETC/ETN, never for ETF gains.
 """
 from __future__ import annotations
 
@@ -14,9 +17,9 @@ import os
 from datetime import date, datetime
 
 import portfolio
-import rules
 
 FILE = os.path.join(portfolio.PORTFOLIO_DIR, "tesi.json")
+FISCAL = os.path.join(portfolio.PORTFOLIO_DIR, "fiscale.json")      # {"losses": EUR, "expiry": "AAAA-12-31"}
 TEXTS = ("why", "expect", "sell")           # perché la possiedo, cosa mi aspetto, cosa mi farebbe vendere
 NUMBERS = ("stop", "target", "weight")      # stop price, target price, target weight (% of the portfolio): all optional
 MAX_TEXT = 2000
@@ -31,13 +34,11 @@ EARNINGS_DAYS = 5       # A5: no "Accumula" with earnings within 5 days (Mantien
 SILENCE_DAYS = 30       # after "Ho rivisto la tesi" the review rules that had fired stay silent for 30 days, unless a new one fires
 TAX_RATE = 0.26         # indicative Italian tax on financial gains
 
-ORDER = ["Riduci", "Rivedi la tesi", "Accumula", "Mantieni"]
+ORDER = ["Rivedi la tesi", "Accumula", "Mantieni"]
 SHORT = {"V1": "stop rotto", "V2": "target raggiunto: valuta una presa di profitto", "V3": "sotto la media a 200 giorni",
          "V4": "stime degli analisti tagliate", "V5": "più downgrade che upgrade", "V6": "",
          "V7": "prodotto a leva tenuto oltre 30 giorni", "V8": "tesi da rileggere (più di 6 mesi)"}
 RULES = [   # id, group, what the rule says (shown in the position's panel)
-    ("R1", "Riduci", "Il peso supera il mio limite per singolo titolo, ETF ampio o altro ETF"),
-    ("R2", "Riduci", "È un prodotto a leva e uno dei miei limiti sulla leva è superato"),
     ("V1", "Rivedi la tesi", "Il prezzo è sceso sotto lo stop che ho scritto nella tesi"),
     ("V2", "Rivedi la tesi", "Il prezzo ha raggiunto il target che ho scritto: valuta una presa di profitto"),
     ("V3", "Rivedi la tesi", "Il prezzo è sotto la media a 200 giorni"),
@@ -47,8 +48,7 @@ RULES = [   # id, group, what the rule says (shown in the position's panel)
     ("V7", "Rivedi la tesi", "È un prodotto a leva in portafoglio da più di 30 giorni"),
     ("V8", "Rivedi la tesi", "La tesi è stata scritta più di 6 mesi fa: va riletta"),
     ("A1", "Accumula", "Ho scritto un peso obiettivo e il peso attuale è sotto l'80% di quell'obiettivo"),
-    ("A2", "Accumula", "Nessuna regola Riduci o Rivedi è scattata"),
-    ("A3", "Accumula", "Arrivare al peso obiettivo non farebbe superare nessun mio limite"),
+    ("A2", "Accumula", "Nessuna regola Rivedi è scattata"),
     ("A4", "Accumula", "Non è un prodotto a leva"),
     ("A5", "Accumula", "Nessuna trimestrale nei prossimi 5 giorni"),
 ]
@@ -117,9 +117,39 @@ def review(isin, note, fired):
     _write(all_)
 
 
-def tax_estimate(p, sell_value, whole):
+def load_fiscal():
+    """My capital losses carried forward (zainetto fiscale): {"losses": EUR or None, "expiry": date or None}."""
+    try:
+        with open(FISCAL) as f:
+            d = json.load(f)
+    except Exception:
+        d = {}
+    v = d.get("losses")
+    return {"losses": float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None, "expiry": d.get("expiry") or None}
+
+
+def save_fiscal(losses, expiry):
+    """Save the zainetto fiscale (empty losses = no zainetto). Raises ValueError with an Italian message."""
+    if losses in (None, ""):
+        losses = None
+    elif not isinstance(losses, (int, float)) or isinstance(losses, bool) or losses < 0:
+        raise ValueError("Le minusvalenze disponibili devono essere un importo in euro (zero o positivo).")
+    if expiry:
+        try:
+            date.fromisoformat(expiry)
+        except (TypeError, ValueError):
+            raise ValueError("La scadenza deve essere una data (giorno, mese, anno).")
+    os.makedirs(portfolio.PORTFOLIO_DIR, exist_ok=True)
+    with open(FISCAL + ".tmp", "w") as f:
+        json.dump({"losses": losses or None, "expiry": expiry or None}, f)
+    os.replace(FISCAL + ".tmp", FISCAL)
+    return load_fiscal()
+
+
+def tax_estimate(p, sell_value, whole, fiscal=None):
     """Indicative Italian tax effect of selling sell_value EUR of a position (gain or loss in EUR in proportion to the
-    part sold, as in Fineco's cost value). Not tax advice: the page says so."""
+    part sold, as in Fineco's cost value). For shares and ETC/ETN a gain is first offset with the capital losses carried
+    forward (fiscal = load_fiscal()); for ETF (UCITS) gains are capital income and are never offset. Not tax advice."""
     if not p.get("value") or sell_value <= 0:
         return None
     part = min(1.0, sell_value / p["value"])
@@ -127,17 +157,29 @@ def tax_estimate(p, sell_value, whole):
     kind = p["kind"].upper()
     etf = kind == "ETF"
     basis = "sull'intera posizione" if whole else "sulla quota da vendere"
+    losses = (fiscal or {}).get("losses")
+    used = 0.0
     if gain > 0:
-        tax = gain * TAX_RATE
-        how = ("per gli ETF UCITS il guadagno è un reddito di capitale: non si compensa con minusvalenze pregresse" if etf
-               else "reddito diverso: compensabile con minusvalenze pregresse, che ridurrebbero l'imposta")
+        if etf:
+            tax = gain * TAX_RATE
+            how = "per gli ETF UCITS il guadagno è un reddito di capitale: non si compensa con le minusvalenze, nemmeno con quelle dello zainetto"
+        elif losses:
+            used = min(losses, gain)
+            tax = (gain - used) * TAX_RATE
+            exp = (fiscal or {}).get("expiry")
+            how = (f"reddito diverso: usando {it(used, 0)} € delle minusvalenze del tuo zainetto"
+                   + (f" (scadenza più vicina {exp[8:10]}/{exp[5:7]}/{exp[:4]})" if exp else "")
+                   + f" l'imposta scende da circa {it(gain * TAX_RATE, 0)} € a circa {it(tax, 0)} €")
+        else:
+            tax = gain * TAX_RATE
+            how = "reddito diverso: se hai minusvalenze nello zainetto, l'imposta reale può essere più bassa"
         text = f"plusvalenza stimata {basis} circa {it(gain, 0)} € → imposta indicativa al 26% circa {it(tax, 0)} € ({how})"
     else:
         tax = 0.0
         how = ("per gli ETF UCITS la perdita è un reddito diverso: compensa plusvalenze di azioni, ETC e derivati nei 4 anni successivi, non i guadagni degli ETF" if etf
                else "reddito diverso: compensa plusvalenze di azioni, ETC e derivati nei 4 anni successivi")
         text = f"minusvalenza stimata {basis} circa {it(-gain, 0)} € → nessuna imposta ({how})"
-    return {"gain": gain, "tax": tax, "whole": whole, "etf": etf, "text": text}
+    return {"gain": gain, "tax": tax, "whole": whole, "etf": etf, "lossesUsed": used, "text": text}
 
 
 def _has_thesis(t):
@@ -146,23 +188,17 @@ def _has_thesis(t):
 
 # ---------------------------------------------------------------- rules
 
-def evaluate(pf, rule_eval, ctx):
+def evaluate(pf, ctx):
     """Attach to every position of the snapshot its thesis and proposed action:
     p["action"] = {"action", "reasons", "rules": [{"id", "group", "text", "state": on|off|na, "detail"}], "notes"}.
     ctx: {"rows": Nasdaq-100 rows by ticker, "analysts": analyst summaries by ticker, "sma200": {ticker: value},
-          "firstSeen": {isin: first day in the history}}. Returns the summary for the "attention" box."""
+          "firstSeen": {isin: first day in the history}}. Returns a short summary (counts)."""
     positions = pf.get("positions") or []
     total = (pf.get("totals") or {}).get("value") or 0
     if not positions or not total:
         return {"attention": 0, "noThesis": 0, "silenced": 0, "counts": {}}
-    L = rule_eval["limits"]
     theses = load()
-    broad = rules.load()["broad"]
-    lev_over = [c for c in rule_eval["checks"] if c["kind"] == "lev" and c["status"] == "over"]
-    over_groups = {(c["kind"], c["label"].split(" ", 1)[1]): c for c in rule_eval["checks"]
-                   if c["kind"] in ("theme", "sector", "country") and c["status"] == "over"}
-    conc = {dim: {r["name"]: r.get("expPct") or 0 for r in (pf.get("concentration") or {}).get(dim, [])}
-            for dim in ("theme", "sector", "country")}
+    fiscal = load_fiscal()
     today = date.today()
     counts = {a: 0 for a in ORDER}
     no_thesis = silenced_n = 0
@@ -172,7 +208,6 @@ def evaluate(pf, rule_eval, ctx):
         has = _has_thesis(th)
         no_thesis += not has
         lev = (p.get("leverage") or 1) > 1
-        sell_eur = 0.0
         weight = p["value"] / total * 100
         price, tk = p["price"], p.get("ticker")
         row = (ctx.get("rows") or {}).get(tk) or {}
@@ -180,28 +215,6 @@ def evaluate(pf, rule_eval, ctx):
 
         def put(rid, state, detail=""):
             res[rid] = (state, detail)
-
-        # ---- Riduci
-        if lev:
-            put("R1", "na", "i prodotti a leva sono giudicati dai limiti sulla leva")
-            if lev_over:
-                c = lev_over[0]
-                sell = max((x["excess"] for x in lev_over if x["limitKey"] == "levValue"), default=0) / 100 * total
-                lev_value = sum(x["value"] for x in positions if (x.get("leverage") or 1) > 1)
-                sell_eur = sell * p["value"] / lev_value if lev_value else 0      # this product's share of what has to be sold
-                put("R2", "on", "; ".join(f"prodotti a leva al {it(x['value'])}% {x['basis']}, limite {it(x['limit'], 0)}%" for x in lev_over)
-                    + (f" → vendere circa {it(sell, 0)} € di prodotti a leva per rientrare" if sell > 0 else ""))
-            else:
-                put("R2", "off", "i limiti sulla leva sono rispettati")
-        else:
-            key = "stock" if not portfolio.is_fund(p["kind"]) else "etfBroad" if rules.is_broad(p, broad) else "etfOther"
-            what = {"stock": "singolo titolo", "etfBroad": "ETF ampio", "etfOther": "altro ETF/ETC"}[key]
-            if weight > L[key]:
-                sell_eur = (weight - L[key]) / 100 * total
-                put("R1", "on", f"peso {it(weight)}% del valore, limite {it(L[key], 0)}% ({what}) → vendere circa {it(sell_eur, 0)} € per rientrare")
-            else:
-                put("R1", "off", f"peso {it(weight)}%, limite {it(L[key], 0)}% ({what})")
-            put("R2", "na", "non è un prodotto a leva")
 
         # ---- Rivedi la tesi
         if th.get("stop"):
@@ -264,25 +277,12 @@ def evaluate(pf, rule_eval, ctx):
         else:
             put("A1", "na", "nessun peso obiettivo indicato nella tesi")
         put("A2", "off" if fired else "on", "scattate: " + ", ".join(fired) if fired else "nessuna")
-        if tw and not lev:
-            key = "stock" if not portfolio.is_fund(p["kind"]) else "etfBroad" if rules.is_broad(p, broad) else "etfOther"
-            add = max(0.0, tw - weight)
-            blocks = [f"limite per la posizione {it(L[key], 0)}%"] if tw > L[key] else []
-            groups = [("theme", t) for t in p.get("themes") or []] + [("sector", p.get("sector")), ("country", p.get("country"))]
-            for dim, name in groups:
-                if name and name not in rules.SKIP and conc[dim].get(name, 0) + add > L[dim]:
-                    blocks.append(f"{dict(rules.DIMS)[dim].lower()} {name} salirebbe a circa {it(conc[dim].get(name, 0) + add)}% (limite {it(L[dim], 0)}%)")
-            put("A3", "off" if blocks else "on", "; ".join(blocks) if blocks else "nessun limite superato arrivando all'obiettivo")
-        else:
-            put("A3", "na", "serve un peso obiettivo" if not lev else "prodotto a leva")
         put("A4", "off" if lev else "on", "prodotto a leva" if lev else "")
         put("A5", "off" if earn_soon else "on", f"trimestrale il {earn_day}" if earn_soon else "" if row else "data della trimestrale nota solo per i titoli del Nasdaq-100")
 
-        if any(r.startswith("R") for r in fired):
-            action = "Riduci"
-        elif fired_v and not silenced:
+        if fired_v and not silenced:
             action = "Rivedi la tesi"
-        elif all(res[r][0] == "on" for r in ("A1", "A2", "A3", "A4", "A5")):
+        elif all(res[r][0] == "on" for r in ("A1", "A2", "A4", "A5")):
             action = "Accumula"
         else:
             action = "Mantieni"
@@ -292,23 +292,18 @@ def evaluate(pf, rule_eval, ctx):
         label = "Rivedi · target raggiunto" if action == "Rivedi la tesi" and target_hit else action
         if action == "Accumula":
             reasons = [f"peso {it(weight)}%, obiettivo {it(tw)}% · nessuna regola contraria"]
-        else:           # every rule that fired, with its numbers (for Riduci the review reasons follow, unless silenced)
+        else:           # every rule that fired, with its numbers (none once I have reviewed the thesis)
             why_v = lambda r: res[r][1] if r == "V6" else f"{SHORT[r]} ({res[r][1]})"
-            reasons = [res[r][1] for r in fired if r.startswith("R")] + ([] if silenced else [why_v(r) for r in fired_v])
-        if action == "Mantieni" and earn_soon and all(res[r][0] == "on" for r in ("A1", "A2", "A3", "A4")):
+            reasons = [] if silenced else [why_v(r) for r in fired_v]
+        if action == "Mantieni" and earn_soon and all(res[r][0] == "on" for r in ("A1", "A2", "A4")):
             notes.append(f"Accumula dopo la trimestrale del {earn_day}.")
-        tax = (tax_estimate(p, sell_eur, False) if action == "Riduci" and sell_eur > 0
-               else tax_estimate(p, p["value"], True) if target_hit else None)
+        tax = tax_estimate(p, p["value"], True, fiscal) if target_hit else None
 
         # ---- notes without action
         if not has:
             notes.append("Tesi non ancora scritta.")
         if earn_soon:
             notes.append(f"Trimestrale {'oggi' if earn_days == 0 else 'domani' if earn_days == 1 else f'tra {earn_days} giorni'}.")
-        for dim, name in [("theme", t) for t in p.get("themes") or []] + [("sector", p.get("sector")), ("country", p.get("country"))]:
-            c = over_groups.get((dim, name))
-            if c:
-                notes.append(f"{c['label']} è sopra il mio limite ({it(c['value'])}% {c['basis']}, limite {it(c['limit'], 0)}%).")
         if row.get("signal"):
             notes.append(f"Segnale della dashboard: {row['signal']}" + (f" · Trend {row['trend']:+.0f}" if row.get("trend") is not None else "") + " (non verificati da backtest).")
 
@@ -318,4 +313,4 @@ def evaluate(pf, rule_eval, ctx):
                        "silenced": {"until": left, "date": last["date"], "note": last["note"],
                                     "rules": [SHORT[r] or "perdita oltre il 25% dal prezzo di carico" for r in fired_v]} if silenced else None,
                        "rules": [{"id": rid, "group": grp, "text": txt, "state": res[rid][0], "detail": res[rid][1]} for rid, grp, txt in RULES]}
-    return {"attention": sum(v for k, v in counts.items() if k != "Mantieni"), "noThesis": no_thesis, "silenced": int(silenced_n), "counts": counts}
+    return {"noThesis": no_thesis, "silenced": int(silenced_n), "counts": counts}

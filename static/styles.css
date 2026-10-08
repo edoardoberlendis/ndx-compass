@@ -767,3 +767,22 @@ table.pf tr.lev td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 .subtab.active { background: var(--surface-2); border-color: var(--border); color: var(--ink); }
 #view-rules .rules-d { max-width: 760px; }
 .tabs { flex-wrap: wrap; }
+/* ------------------------------------------------ phase 21 */
+.cal-warn.info { font-size: 13px; color: var(--warn); margin-left: 0; }
+.risk-intro { line-height: 1.55; margin: 0 0 10px; }
+.pf-tax > summary { padding: 2px 0; }
+.pf-tax input[type=number] { width: 110px; }
+.pf-tax input, .ta-risk input { padding: 3px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--ink); font: inherit; }
+.ta-risk input { width: 64px; }
+.earn-list .earn-it { border-top: 1px solid var(--grid); }
+.earn-list .earn-it:first-child { border-top: 0; }
+.earn-row { display: grid; grid-template-columns: 70px minmax(0, 1fr) auto auto 92px; gap: 8px; align-items: baseline; width: 100%; border: 0; background: none; padding: 6px 0; font: inherit; color: var(--ink); text-align: left; cursor: pointer; }
+.earn-row[disabled] { cursor: default; }
+.earn-row .t { font-weight: 650; }
+.earn-row .n { color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.earn-row .r { text-align: right; white-space: nowrap; }
+.earn-row:not([disabled]):hover .t { color: var(--accent); }
+.earn-det { padding: 2px 0 8px 78px; font-size: 12.5px; }
+.earn-det > div { display: flex; gap: 8px; flex-wrap: wrap; padding: 2px 0; }
+.earn-det > div > span:first-child { color: var(--ink-2); min-width: 210px; }
+@media (max-width: 700px) { .earn-row { grid-template-columns: 60px minmax(0, 1fr) auto; } .earn-row .r.muted, .earn-row .r:last-child { display: none; } .earn-det { padding-left: 0; } }

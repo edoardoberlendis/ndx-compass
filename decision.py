@@ -4,8 +4,8 @@ committee, in five blocks read in order, ending with a verdict produced by expli
     1. Azienda e valutazione  -> decides IF to buy
     2. Contesto               -> sector / theme, macro events, earnings
     3. Tempismo tecnico       -> decides WHEN and AT WHAT PRICE
-    4. Posto nel portafoglio  -> decides HOW MUCH (my rules, rules.py)
-    5. Piano operativo        -> verdict: Entra ora / Entra su ritracciamento / Entra su rottura / Attendi / Evita
+    4. Posto nel portafoglio  -> decides HOW MUCH (my risk per trade, rules.py)
+    5. Piano operativo        -> verdict: Entra ora / Entra su ritracciamento / Attendi / Evita
                                  (for a stock I own: the action of actions.py)
 
 Nothing here is verified by a backtest, except the pattern test of phase 11 (which most patterns failed): the page
@@ -128,52 +128,36 @@ def plan(kind, entry, note, ta, money, break_level=None, extra=None):
     out = {"kind": kind, "entry": entry, "entryNote": note, "opts": opts, "def": default, "why": why, "stop": st["v"],
            "target": entry + 2 * risk, "breakLevel": break_level, **(extra or {}), **money}
     if money.get("budgetUsd") is not None:
-        by_risk = math.floor(money["budgetUsd"] / risk)
-        by_cap = math.floor(max(0.0, money["capUsd"]) / entry)
-        out["qty"] = max(0, min(by_risk, by_cap))
-        out["qtyByRisk"] = by_risk
+        out["qty"] = quantity(money["budgetUsd"], entry, st["v"])
     return out
+
+
+def quantity(budget_usd, entry, stop):
+    """Shares to buy so that hitting the stop loses at most budget_usd (rounded down; no cap since phase 21)."""
+    risk = entry - stop
+    return max(0, math.floor(budget_usd / risk)) if risk > 0 else 0
 
 
 # ---------------------------------------------------------------- 4. place in my portfolio
 
-def place(t, row, info, pf, fx, capital=None):
-    """Do I own it, how much room my rules leave, overlap with my Nasdaq-100 ETFs, and the money for the position size."""
-    R = (pf or {}).get("rules") or {}
-    L = R.get("limits") or {"tradeRisk": 1, "stock": 10, "theme": 25, "sector": 50, "country": 80}
+def place(t, row, pf, fx, capital=None):
+    """Do I own it, overlap with my Nasdaq-100 ETFs, and the money for the position size (my risk per trade).
+    Phase 21 removed the weight limits: the quantity comes only from the risk per trade, with no cap."""
+    risk_pct = ((pf or {}).get("rules") or {}).get("tradeRisk") or 1.0
     positions = (pf or {}).get("positions") or []
     total = ((pf or {}).get("totals") or {}).get("value") or 0
-    exposure = ((pf or {}).get("totals") or {}).get("exposure") or 0
     if not positions or not total:
         cap = capital if capital and capital > 0 else None
-        money = {"capital": cap, "fx": fx, "riskPct": L["tradeRisk"], "maxPct": L["stock"],
-                 "budgetUsd": cap * L["tradeRisk"] / 100 * fx if cap and fx else None,
-                 "capUsd": cap * L["stock"] / 100 * fx if cap and fx else None, "capWhy": f"mio limite per singolo titolo ({it(L['stock'], 0)}%)"}
-        return {"loaded": False, "limits": L}, money, None
+        money = {"capital": cap, "fx": fx, "riskPct": risk_pct, "budgetUsd": cap * risk_pct / 100 * fx if cap and fx else None}
+        return {"loaded": False, "riskPct": risk_pct}, money, None
     own = next((p for p in positions if p.get("ticker") == t), None)
-    weight = own["value"] / total * 100 if own else 0.0
-    rooms = [{"what": f"singolo titolo (limite {it(L['stock'], 0)}%)", "eur": (L["stock"] - weight) / 100 * total, "now": weight, "limit": L["stock"]}]
-    conc = {dim: {r["name"]: r.get("expPct") or 0 for r in (pf.get("concentration") or {}).get(dim, [])} for dim in ("theme", "sector", "country")}
-    groups = [("theme", "tema", th) for th in portfolio._themes_by_ticker().get(t, [])] + [("sector", "settore", row.get("sector"))]
-    country = portfolio.COUNTRY_IT.get((info or {}).get("country") or "", (info or {}).get("country"))
-    if country:
-        groups.append(("country", "paese", country))
-    for dim, word, name in groups:
-        if name:
-            now = conc[dim].get(name, 0)
-            rooms.append({"what": f"{word} {name} (limite {it(L[dim], 0)}%)", "eur": (L[dim] - now) / 100 * (exposure or total), "now": now, "limit": L[dim]})
-    tight = min(rooms, key=lambda r: r["eur"])
-    max_buy = max(0.0, tight["eur"])
     etfs = [p for p in positions if p.get("sector") == portfolio.LOOK_THROUGH_NDX]
     w = row.get("weight") or 0
-    indirect = sum(p["exposure"] for p in etfs) * w / 100
     use_fx = pf.get("fx") or fx
-    money = {"capital": total, "fx": use_fx, "riskPct": L["tradeRisk"], "maxPct": L["stock"],
-             "budgetUsd": total * L["tradeRisk"] / 100 * use_fx if use_fx else None,
-             "capUsd": max_buy * use_fx if use_fx else None, "capWhy": f"spazio lasciato dalle mie regole: {tight['what']}"}
-    return {"loaded": True, "limits": L, "owned": bool(own), "weight": weight, "value": own["value"] if own else 0,
-            "rooms": rooms, "tight": tight["what"], "maxBuyEur": max_buy,
-            "etfOverlap": {"eur": indirect, "indexWeight": w, "etfs": [p["name"] for p in etfs]} if etfs and w else None}, money, own
+    money = {"capital": total, "fx": use_fx, "riskPct": risk_pct, "budgetUsd": total * risk_pct / 100 * use_fx if use_fx else None}
+    return {"loaded": True, "riskPct": risk_pct, "owned": bool(own), "weight": own["value"] / total * 100 if own else 0.0,
+            "value": own["value"] if own else 0,
+            "etfOverlap": {"eur": sum(p["exposure"] for p in etfs) * w / 100, "indexWeight": w, "etfs": [p["name"] for p in etfs]} if etfs and w else None}, money, own
 
 
 # ---------------------------------------------------------------- the whole sheet
@@ -187,7 +171,7 @@ def decide(t, row, info, valuation, an, ta, ptest, events, pf, fx, capital=None)
     earn_days = (datetime.fromtimestamp(ets).date() - now.date()).days if ets else None
     earn_soon = earn_days is not None and 0 <= earn_days <= EARNINGS_DAYS
     earn_day = datetime.fromtimestamp(ets).strftime("%d/%m") if ets and (earn_days or 0) >= 0 else None
-    pl, money, own = place(t, row, info, pf, fx, capital)
+    pl, money, own = place(t, row, pf, fx, capital)
 
     tests = {p["key"]: p for p in (ptest or {}).get("patterns", [])}
     patterns = [{"key": x["key"], "date": x.get("date"), "name": tests[x["key"]]["name"], "verified": bool(tests[x["key"]]["favorable"])}
@@ -223,13 +207,10 @@ def decide(t, row, info, valuation, an, ta, ptest, events, pf, fx, capital=None)
     # ---- verdict: the first rule not satisfied decides (the list is shown under the verdict)
     near_high = bool(ta and price <= ta["high52"]["v"] and price >= ta["high52"]["v"] * (1 - RESISTANCE / 100))
     extended = (vs20 is not None and vs20 > EXTENDED) or (rsi is not None and rsi > RSI_MAX)
-    one_share = money.get("capUsd") is None or money["capUsd"] >= price
     checks = [
         {"id": "D1", "text": "Azienda e valutazione: solida o nella media (decide SE comprare)", "ok": None if comp["summary"] == "dati insufficienti" else comp["summary"] != "debole",
          "detail": f"{comp['summary']} ({comp['score']:+d} punti su {comp['known']} criteri)"},
         {"id": "D2", "text": f"Nessuna trimestrale nei prossimi {EARNINGS_DAYS} giorni", "ok": not earn_soon, "detail": f"trimestrale il {earn_day}" if earn_day else "data non nota"},
-        {"id": "D3", "text": "L'acquisto non mi fa superare nessun mio limite (decide QUANTO)", "ok": None if not pl["loaded"] else one_share,
-         "detail": "portafoglio non caricato" if not pl["loaded"] else f"posso comprarne al massimo circa {it(pl['maxBuyEur'], 0)} € ({pl['tight']})"},
         {"id": "D4", "text": "Prezzo sopra la media a 200 giorni", "ok": None if vs200 is None else vs200 >= 0, "detail": "" if vs200 is None else f"{'+' if vs200 >= 0 else ''}{it(vs200)}%"},
         {"id": "D5", "text": f"Non tirato: al massimo {it(EXTENDED, 0)}% sopra la media 20 e RSI non oltre {RSI_MAX}", "ok": None if vs20 is None else not extended,
          "detail": "" if vs20 is None else f"{'+' if vs20 >= 0 else ''}{it(vs20)}% sulla media 20, RSI {it(rsi or 0, 0)}"},
@@ -243,31 +224,33 @@ def decide(t, row, info, valuation, an, ta, ptest, events, pf, fx, capital=None)
         a = own["action"]
         verdict = {"label": a.get("label") or a["action"], "category": a["action"], "owned": True, "isin": own["isin"],
                    "why": a["reasons"] or ["Nessuna regola delle posizioni è scattata."], "plan": "now" if a["action"] == "Accumula" else None,
-                   "change": None}
+                   "change": None, "decidedBy": "posizione"}
     else:
-        def v(label, why, plan_key=None, change=None, pattern=None):
-            return {"label": label, "category": label.split(":")[0], "owned": False, "why": [why], "plan": plan_key, "change": change, "pattern": pattern}
+        def v(label, why, by, plan_key=None, change=None, pattern=None):
+            return {"label": label, "category": label.split(":")[0], "owned": False, "why": [why], "plan": plan_key, "change": change,
+                    "pattern": pattern, "decidedBy": by}
         if not ta or ok["D1"] is None:
-            verdict = v("Attendi", "dati insufficienti per valutare l'azienda o il tempismo", change="servono più dati (fondamentali, analisti o storico dei prezzi)")
+            verdict = v("Attendi", "dati insufficienti per valutare l'azienda o il tempismo", "dati", change="servono più dati (fondamentali, analisti o storico dei prezzi)")
         elif ok["D1"] is False:
             verdict = v("Evita", f"azienda e valutazione deboli ({comp['score']:+d} punti): " + ", ".join(c["label"].lower() for c in comp["criteria"] if c["points"] == -1),
-                        change="da rivalutare se i criteri negativi migliorano")
+                        "D1", change="da rivalutare se i criteri negativi migliorano")
         elif ok["D2"] is False:
-            verdict = v(f"Attendi: trimestrale il {earn_day}", "la trimestrale è entro 5 giorni: il prezzo può saltare in entrambe le direzioni", change="rivaluta dopo la trimestrale")
-        elif ok["D3"] is False:
-            verdict = v("Attendi", f"comprarlo ora ti farebbe superare un tuo limite ({pl['tight']})", change="serve più spazio nel portafoglio su quel limite")
+            verdict = v(f"Attendi: trimestrale il {earn_day}", "la trimestrale è entro 5 giorni: il prezzo può saltare in entrambe le direzioni", "D2", change="rivaluta dopo la trimestrale")
         elif ok["D4"] is False:
-            verdict = v("Attendi", f"il prezzo è sotto la media a 200 giorni ({it(vs200)}%): il trend di fondo è negativo", change="rivaluta quando il prezzo torna sopra la media a 200 giorni")
+            verdict = v("Attendi", f"il prezzo è sotto la media a 200 giorni ({it(vs200)}%): il trend di fondo è negativo", "D4", change="rivaluta quando il prezzo torna sopra la media a 200 giorni")
         elif ok["D5"] is False and plans.get("pullback"):
-            verdict = v("Entra su ritracciamento", f"il titolo è tirato ({'+' if vs20 >= 0 else ''}{it(vs20)}% sulla media 20, RSI {it(rsi or 0, 0)}): meglio un prezzo più vicino alle medie", "pullback")
-        elif ok["D6"] is False and any(p["pattern"] == "high52" for p in plans.get("breakouts") or []):
-            verdict = v("Entra su rottura", "il prezzo è a ridosso del massimo a 52 settimane: comprando ora il primo ostacolo è vicino. Attenzione: la rottura del massimo NON ha superato il test dei pattern", "breakout", pattern="high52")
+            verdict = v("Entra su ritracciamento", f"il titolo è tirato ({'+' if vs20 >= 0 else ''}{it(vs20)}% sulla media 20, RSI {it(rsi or 0, 0)}): meglio un prezzo più vicino alle medie", "D5", "pullback")
+        elif ok["D6"] is False:
+            # phase 21: no "Entra su rottura" any more, the breakout of the 52-week high failed the pattern test (phase 11)
+            verdict = v("Attendi: a ridosso del massimo", "il prezzo è a meno del 3% sotto il massimo a 52 settimane: comprando ora il primo ostacolo è vicino, "
+                        "e la rottura del massimo non ha superato il test dei pattern", "D6", "breakout" if plans.get("breakouts") else None,
+                        change="rivaluta se il prezzo si allontana dal massimo (ritracciamento) o lo supera con decisione", pattern="high52")
         elif ok["D7"] is False and plans.get("pullback"):
-            verdict = v("Entra su ritracciamento", "l'azienda è nella media, non solida: ha senso solo a un prezzo più vicino alle medie", "pullback")
+            verdict = v("Entra su ritracciamento", "l'azienda è nella media, non solida: ha senso solo a un prezzo più vicino alle medie", "D7", "pullback")
         elif plans.get("now"):
-            verdict = v("Entra ora", "tutte le regole sono soddisfatte", "now")
+            verdict = v("Entra ora", "tutte le regole sono soddisfatte", "tutte", "now")
         else:
-            verdict = v("Attendi", "livelli tecnici non calcolabili", change="servono più dati di prezzo")
+            verdict = v("Attendi", "livelli tecnici non calcolabili", "dati", change="servono più dati di prezzo")
     return {"ticker": t, "price": price, "company": comp, "context": context, "timing": timing, "place": pl, "plans": plans,
             "verdict": verdict, "checks": checks,
             "principle": "L'azienda e la valutazione decidono SE comprare, il tempismo tecnico decide QUANDO e A CHE PREZZO, il portafoglio decide QUANTO."}
