@@ -1360,6 +1360,30 @@ def api_earnings():
     return jsonify(loading=True, data=_earn["data"])
 
 
+@app.route("/api/etf")
+def api_etf():
+    """Ricerca → ETF (etf.py): public data of the day, plus "Ha senso per il mio portafoglio?" computed now in memory."""
+    import etf
+    import risk
+    d = etf.public()
+    if not d:
+        return jsonify(status="loading", error=etf._state["error"])
+    out = {k: v for k, v in d.items() if not k.startswith("_")}
+    pf = portfolio_view()
+    if pf.get("positions") and not pf.get("error"):
+        with store.lock:
+            snap = store.snapshot
+        idx = {r["ticker"]: r.get("weight") or 0 for r in (snap or {}).get("stocks", [])}
+        tickers = [p["ticker"] for p in pf["positions"] if p.get("ticker")]
+        closes = risk.history(tickers)                    # may still be downloading: correlation then shown as "in calcolo"
+        port_w = risk.portfolio_weekly(pf, closes) if closes else pd.Series(dtype=float)
+        out["fit"] = etf.fit(d["rows"], pf, idx, port_w, d["_weekly"])
+        out["corrReady"] = closes is not None
+    out["status"] = "ok"
+    out["portfolioLoaded"] = bool(pf.get("positions"))
+    return app.response_class(json.dumps(out, default=clean), mimetype="application/json")
+
+
 @app.route("/api/diary")
 def api_diary():
     """Signal diary: how each kind of verdict did after 1, 3 and 6 months (diary.py). Personal data, local only."""

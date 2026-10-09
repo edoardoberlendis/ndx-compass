@@ -25,7 +25,7 @@ La dashboard ha **tre schede** (Fase 21); ognuna raggruppa le pagine descritte s
 |---|---|---|
 | **Mercato** | Cosa sta succedendo? | Oggi (con eventi macro USA e trimestrali) · Settori (con la mappa di rotazione) |
 | **Portafoglio** | Cosa ho e come sta andando? | Posizioni · Performance · Concentrazione · Rischio |
-| **Ricerca** | Cosa potrei comprare? | Screener · In osservazione (i preferiti ★) · Diario dei segnali (compare quando ha almeno 3 mesi di dati); da qui si apre la scheda del titolo con la sezione Decisione |
+| **Ricerca** | Cosa potrei comprare? | Screener · ETF (Fase 24) · In osservazione (i preferiti ★) · Diario dei segnali (compare quando ha almeno 3 mesi di dati); da qui si apre la scheda del titolo con la sezione Decisione |
 
 I vecchi link portano alla pagina più vicina: `#overview` → Oggi, `#sectors` e `#ideas` (il vecchio Report) → Settori,
 `#portfolio` e `#rules` → Posizioni, `#screener` e `#trade` (i vecchi Pattern tecnici) → Screener, `#watch` → In
@@ -150,6 +150,34 @@ ridosso del massimo"); gli avvisi di calendario dentro le card (ora una piccola 
 - **Settori**: **mappa di rotazione** di temi e settori rispetto a QQQ (Leader, In miglioramento, In indebolimento,
   In ritardo; calcolata dalla dashboard con le ultime chiusure, prima era nel Report), rendimenti dei settori pesati per capitalizzazione e peso di ogni settore nell'indice. Clic su una riga:
   compaiono i titoli di quel settore; di nuovo sulla stessa riga (o "Tutti i settori") si torna a tutti.
+- **ETF** (Ricerca → ETF, Fase 24; `etf.py`, `/api/etf`): 63 ETF ed ETC UCITS quotati in Italia (`etf_universe.json`, elenco
+  approvato l'8 ottobre 2026). I dati si calcolano una volta al giorno in background (circa un minuto la prima volta).
+  - **Radar dei temi** (visibile): le 5 categorie più forti e le 5 più deboli sul rendimento in euro a 3 mesi, con
+    accanto il momentum 12-1. Per ognuna c'è un «perché» calcolato: i due primi titoli dell'ETF americano equivalente
+    che spiegano almeno il 10% del movimento, la categoria con cui si è mossa negli ultimi 6 mesi (correlazione) e i
+    titoli delle notizie quando Yahoo li fornisce. C'è poi un verdetto in tre parti: (a) momentum forte, medio o debole
+    (terzo delle categorie) e da quanti mesi, **non verificato**; (b) rischio di essere arrivati tardi, cioè il percentile
+    della distanza di oggi dalla media 200 nei giorni degli ultimi 5 anni (alto sopra il 90°, medio tra 70° e 90°, basso
+    sotto), più la perdita massima storica e la nota «tema giovane» sotto i 5 anni; (c) se ha senso per il mio
+    portafoglio. Per i temi c'è una ⓘ «satellite».
+  - **Tabella** con filtro per gruppo e ordinamento. Colonne: 1 m, 3 m, 1 a, 3 a, 12-1, volatilità, perdita massima a 3
+    anni, trend 50/200, TER, «Per il mio portafoglio». Rendimenti in euro.
+  - **Storico dei prezzi**: Borsa Italiana se completo, altrimenti Xetra, altrimenti l'ETF americano convertito in euro
+    con il cambio di ogni giorno; la fonte è scritta nel pannello dell'ETF.
+  - **Ha senso per il mio portafoglio?** Regole: sovrapposizione sui primi 10 titoli (somma dei pesi minori, guardando
+    dentro i miei fondi; per gli ETF molto ampi il valore reale è più alto); correlazione settimanale in euro su 2 anni;
+    concentrazione in tecnologia, USA e dollaro (stimato dagli USA) se investissi il 10%. **Si sovrappone** se la
+    sovrapposizione è almeno 25 punti, o la correlazione almeno 0,85, o la concentrazione più alta sale di almeno 1 punto.
+    **Diversifica** se la sovrapposizione è sotto 10, la correlazione sotto 0,60 e una concentrazione scende di almeno 1
+    senza che nessuna salga di più di 0,5. Altrimenti **neutro**. Note «costoso» con TER sopra lo 0,50% e «patrimonio
+    piccolo» sotto i 100 milioni.
+  - **Pannello dell'ETF**: rendimenti in euro con la parte dovuta al cambio (per i sottostanti in una sola valuta), trend,
+    «Ha senso adesso?» (solo rischio di essere arrivati tardi e «non verificato»: mai «favorevole» o «investi»), dettagli
+    della sovrapposizione, composizione e dati di justETF con fonte e data (avviso se hanno più di 6 mesi), P/E
+    dell'ETF americano equivalente, ⓘ sulle tasse, ★ per metterlo In osservazione e link alla posizione se lo possiedo.
+    Gli ETF americani sono solo fonti di dati, mai prodotti da comprare.
+  - **Sezioni chiuse**: mappa di rotazione delle categorie rispetto all'All-World (VWCE) e test delle regole di momentum.
+  - Gli ETF con la ★ compaiono in Ricerca → In osservazione, sotto i titoli.
 - **Diario dei segnali** (Ricerca → Diario, visibile solo con almeno 63 sedute, circa 3 mesi; prima registra in
   background): analisti, valutazione e notizie non si possono provare sul passato, quindi
   i verdetti della sezione Decisione si verificano da oggi in avanti. Dopo ogni chiusura (o al primo avvio prima
@@ -369,6 +397,35 @@ come pattern "favorevole".
 è mostrato con i suoi limiti; chi non lo supera è mostrato come "Test non superato". Limiti del test: survivorship bias
 residuo (favorisce i pattern di forza), test multipli, casi sovrapposti, nessun costo, un solo tipo di mercato.
 
+## Test del momentum sulle categorie di ETF (Fase 24)
+
+`etf_backtest.py` (a mano, `.venv/bin/python etf_backtest.py`, risultato in `reports/etf_momentum.json`) prova due regole
+sulle 47 categorie misurabili con un ETF americano di lunga storia, ogni mese dal 3 aprile 2000 al 1 aprile 2026
+(313 mesi, 11.835 osservazioni). Idrogeno e Chip di memoria non sono misurabili. Misura: rendimento a 3 mesi della
+categoria meno la media di tutte le categorie dello stesso mese. Le condizioni sono le stesse 6 della Fase 11, fissate
+prima dei risultati; il controllo casuale usa 200 regole finte.
+
+| Condizione | M1: momentum 12-1 nel terzo migliore | M2: sopra la media 200 |
+|---|---|---|
+| 1. media dell'extra a 3 mesi almeno +0,5 punti | ❌ +0,37 | ❌ +0,08 |
+| 2. mediana sopra 0 | ✅ +0,20 | ❌ −0,08 |
+| 3. positiva in almeno 2/3 degli anni | ✅ 18 su 27 | ❌ 12 su 27 |
+| 4. positiva in entrambe le metà | ✅ +0,19 / +0,50 | ✅ +0,11 / +0,06 |
+| 5. a 6 mesi non negativa | ✅ +0,70 | ✅ +0,18 |
+| 6. almeno 100 casi | ✅ 4.053 | ✅ 8.185 |
+| **Esito** | **non superato** | **non superato** |
+| Controllo casuale (regole finte che superano tutto) | 0 su 200 | 0 su 200 |
+
+**M2 come protezione nei crolli.** Soglia fissata prima del test: la massima perdita deve ridursi di almeno un terzo in
+almeno 2/3 delle categorie con almeno 5 anni di storia, e la volatilità deve essere più bassa in almeno 2/3. Risultato:
+perdita ridotta di un terzo in 24 categorie su 47 (ne servivano 32); volatilità più bassa in 47 su 47, un risultato
+meccanico perché nei mesi sotto la media si sta fuori. Quindi la protezione è **non verificata**. Aiuta nei crolli lunghi
+(Nasdaq da −83% a −45%, Finanziari da −83% a −36%) ma non in quelli rapidi (Oro da −46% a −42%, Sanità da −39% a −41%),
+e riduce il rendimento annuo in molte categorie (Mondo da 11,6% a 7,4%).
+
+**Regola della dashboard:** nella scheda ETF momentum e trend sono informazioni **non verificate**: niente «favorevole
+adesso» né «investi». Limiti: le categorie sono misurate con ETF americani in dollari, nessun costo, test multipli.
+
 ## Da verificare quando il diario avrà almeno 3 mesi di dati
 
 - **"Entra ora"**: togliendo la regola D3 (Fase 21) i titoli con "Entra ora" sono passati da 18 a 33 su 101. Controllare
@@ -388,7 +445,9 @@ ponderato per il tempo (`history.py`), quantità da comprare con e senza spread 
 giorni, supporti e resistenze, punti pivot, "dalla data" del diario e il riquadro Analisi; diario (un giorno salvato non
 si riscrive mai, gli esclusi non entrano nelle statistiche, "dalla data" e "almeno dal", sedute mancanti senza weekend e
 festività); trimestrali (giorno di reazione prima dell'apertura, dopo la chiusura e a cavallo del fine settimana);
-testo del riepilogo del mattino.
+testo del riepilogo del mattino; scheda ETF (scelta dello storico Borsa Italiana → Xetra → ETF americano in euro,
+conversione in euro, effetto cambio, percentili del rischio di essere arrivati tardi, terzi del momentum e mesi
+consecutivi, sovrapposizione, regole «si sovrappone / diversifica / neutro»).
 
 ## File del progetto
 
@@ -414,6 +473,9 @@ testo del riepilogo del mattino.
 | `macro_calendar.py` | Eventi macro USA: date ufficiali, controllo automatico, valori BLS (da aggiornare ogni anno per CPI e occupazione) |
 | `market_calendar.py` | Festività e chiusure anticipate della borsa USA (da aggiornare ogni anno) |
 | `themes.json` | Temi personalizzati (elenchi di ticker) |
+| `etf_universe.py`, `etf_universe.json` | Elenco dei 63 ETF ed ETC della scheda ETF con i dati di justETF (fonte e data); rilanciarlo quando i dati hanno più di 6 mesi |
+| `etf.py` | Scheda Ricerca → ETF: rendimenti in euro, radar dei temi, rischio di essere arrivati tardi, «Ha senso per il mio portafoglio?» |
+| `etf_backtest.py` | Test delle regole di momentum sulle categorie (a mano, `reports/etf_momentum.json`) |
 | `static/` | La pagina web (HTML, CSS, JavaScript) |
 | `requirements.txt` | Librerie Python necessarie |
 | `run.sh`, `schedule.sh` | Avvio da Terminale e programmazione del report |

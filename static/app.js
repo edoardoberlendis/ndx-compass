@@ -215,6 +215,7 @@ function renderAll() {
   if (state.view === "sectors") renderSectors();
   if (state.view === "sectors") loadRotation();
   if (state.view === "diary") loadDiary();
+  if (state.view === "etf" || state.view === "watch") loadEtf();
   if (state.detail) { renderDetailHeader(); renderTA(); }
 }
 
@@ -621,6 +622,8 @@ function toggleWatch(t) {
   if (state.view === "overview") renderEarnings();
   if (state.view === "screener") renderScreener();
   if (state.detail === t) renderDetailHeader();
+  if (state.view === "etf") renderEtf();
+  if (state.panel === "etf" && etfS.open) openEtf(etfS.open);
 }
 
 // earnings of the next 7 days; my stocks first
@@ -2242,9 +2245,13 @@ async function loadRotation() {
   if (rot.data) renderRRG(rot.data);
 }
 function renderRRG(R) {
-  const el = $("#rrg"), groups = R[rot.grp];
-  el.innerHTML = "";
   $$("[data-grp-seg] button").forEach(b => b.classList.toggle("on", b.dataset.grp === rot.grp));
+  drawRRG($("#rrg"), R[rot.grp], groupTip, "Rendimento relativo a 1 mese vs QQQ (punti) →");
+}
+// rotation chart: x = 1-month return vs the reference, y = 1-week return vs the reference (also used by the ETF tab)
+function drawRRG(el, groups, tipFn, xLabel) {
+  el.innerHTML = "";
+  if (!groups?.length) return;
   const W = el.clientWidth || 500, H = 360, m = { t: 14, r: 16, b: 30, l: 44 }, iw = W - m.l - m.r, ih = H - m.t - m.b;
   const ex = Math.max(3, d3.max(groups, d => Math.abs(d.rs1m)) * 1.15), ey = Math.max(2, d3.max(groups, d => Math.abs(d.rs1w)) * 1.2);
   const x = d3.scaleLinear().domain([-ex, ex]).range([0, iw]).nice(), y = d3.scaleLinear().domain([-ey, ey]).range([ih, 0]).nice();
@@ -2261,8 +2268,8 @@ function renderRRG(R) {
   pts.append("circle").attr("r", 12).attr("fill", "transparent");
   pts.append("circle").attr("r", d => 4 + Math.sqrt(d.n) * 1.3).attr("fill", d => css(QCOL[d.quadrant])).attr("stroke", css("--surface")).attr("stroke-width", 2);
   pts.append("text").attr("class", "rrg-label").attr("x", d => x(d.rs1m) > iw - 120 ? -10 : 10).attr("text-anchor", d => x(d.rs1m) > iw - 120 ? "end" : "start").attr("y", 4).text(d => d.name);
-  pts.on("mousemove", (ev, d) => showTip(groupTip(d), ev)).on("mouseleave", hideTip);
-  svg.append("text").attr("class", "ref-label").attr("x", m.l + iw).attr("y", H - 2).attr("text-anchor", "end").text("Rendimento relativo a 1 mese vs QQQ (punti) →");
+  pts.on("mousemove", (ev, d) => showTip(tipFn(d), ev)).on("mouseleave", hideTip);
+  svg.append("text").attr("class", "ref-label").attr("x", m.l + iw).attr("y", H - 2).attr("text-anchor", "end").text(xLabel);
 }
 function groupTip(d) {
   return `<div class="tip-h">${d.kind === "theme" ? "Tema" : "Settore"} · ${d.n} titoli</div><b>${esc(d.name)}</b> <span class="q ${d.quadrant}">${QLAB[d.quadrant]}</span>
@@ -2280,6 +2287,194 @@ const scoreBar = v => {
 document.addEventListener("click", e => {
   const b = e.target.closest("[data-grp-seg] button");
   if (b) { rot.grp = b.dataset.grp; LS.set("rotGrp", rot.grp); if (rot.data) renderRRG(rot.data); }
+});
+
+// ------------------------------------------------------------ Ricerca → ETF (etf.py, /api/etf)
+// What is rising, why (computed), whether it makes sense for my portfolio. The momentum rules failed the test
+// (etf_backtest.py): nothing here says "favorevole" or "investi", only "non verificato". Texts fixed, numbers from data.
+const etfS = { data: null, at: 0, grp: LS.get("etfGrp", "Tutti"), sort: { key: "r3m", dir: -1 }, retry: null };
+const ETF_GROUPS = ["Tutti", "Globali", "Aree e paesi", "Settori", "Temi", "Stili e fattori", "Obbligazionari", "Oro e materie prime"];
+const FIT_CLS = { "diversifica": "acc", "neutro": "hold", "si sovrappone": "red" };
+const fitBadge = f => f ? `<span class="act ${FIT_CLS[f.verdict]}">${esc(f.verdict[0].toUpperCase() + f.verdict.slice(1))}</span>` : `<span class="muted small">—</span>`;
+const ETF_FISCAL_INFO = `<b>Tasse sugli ETF (indicazioni generali, da verificare con Fineco).</b> I guadagni degli ETF UCITS sono <b>redditi di capitale</b>, tassati al 26%,
+  e <b>non si compensano</b> con le minusvalenze dello zainetto; le perdite invece sono redditi diversi e compensano guadagni su azioni, ETC e derivati.
+  Per gli <b>ETC</b> (oro, argento, materie prime) guadagni e perdite sono entrambi redditi diversi, compensabili. Per la parte in titoli di Stato (come i BTP) è prevista
+  un'aliquota agevolata del 12,5%.<br><br><b>Accumulazione</b>: i dividendi restano nell'ETF e non paghi tasse finché non vendi. <b>Distribuzione</b>: li incassi e paghi subito il 26%.<br>
+  <b>Hedged</b> (cambio coperto): l'ETF elimina l'effetto del cambio euro/dollaro, con un piccolo costo in più.`;
+const ETF_SAT_INFO = `<b>Satellite.</b> Nei portafogli professionali i temi (idrogeno, uranio, spazio…) si usano in <b>piccole quote</b> accanto a ETF ampi, il «nucleo».
+  Sono più volatili e spesso gli ETF nascono vicino al picco del tema: per esempio gli ETF sull'idrogeno lanciati nel 2021, poco prima di un forte calo.`;
+const ETF_OVERLAP_INFO = `<b>Sovrapposizione</b>: per ciascuno dei primi 10 titoli dell'ETF (dall'ETF americano equivalente) somma il più piccolo tra il suo peso nell'ETF e il suo peso nel tuo
+  portafoglio, guardando dentro i tuoi fondi. Usa <b>solo i primi 10 titoli</b>: per gli ETF molto ampi (MSCI World, All-World) il valore reale è più alto di quello mostrato.
+  I titoli sono confrontati per sigla (ASML e ASML.AS contano come lo stesso titolo).`;
+const ETF_FIT_INFO = `Regole: <b>si sovrappone</b> se la sovrapposizione è almeno 25 punti, o la correlazione con il tuo portafoglio è almeno 0,85, o investendo il 10% del portafoglio
+  sale di almeno 1 punto la tua concentrazione più alta (tecnologia, USA o dollaro). <b>Diversifica</b> se la sovrapposizione è sotto 10 punti, la correlazione sotto 0,60 e
+  il 10% fa scendere di almeno 1 punto una delle tre senza farne salire nessuna di più di 0,5. Altrimenti <b>neutro</b>. Il dollaro è stimato dal peso degli USA.`;
+const ETF_LATE_INFO = `<b>Rischio di essere arrivati tardi</b>: confronta quanto il prezzo è lontano oggi dalla sua media a 200 giorni con la storia della stessa categoria negli ultimi 5 anni
+  (o quella disponibile). <b>Alto</b> se oggi è più lontano che nel 90% dei giorni, <b>medio</b> tra il 70% e il 90%, <b>basso</b> altrimenti. Descrive, non prevede.`;
+const ETF_MOM_INFO = `<b>Momentum 12-1</b>: rendimento in euro da 12 mesi fa a 1 mese fa. Forte = terzo migliore delle categorie, debole = ultimo terzo.
+  Questa regola <b>non ha superato il test</b> sulle categorie (vedi «Test delle regole»): è un'informazione, <b>non verificata</b>.`;
+async function loadEtf() {
+  clearTimeout(etfS.retry);
+  if (!etfS.data || etfS.data.status !== "ok" || Date.now() - etfS.at > 5 * 60_000) {
+    try { etfS.data = await getJSON("/api/etf"); etfS.at = Date.now(); } catch { etfS.data = { status: "error" }; }
+  }
+  if (state.view === "etf") renderEtf();
+  if (state.view === "watch") renderWatchEtf();
+  if (etfS.data.status === "loading") etfS.retry = setTimeout(loadEtf, 5000);
+}
+// justETF writes in English: the page shows Italian words (unknown ones stay as they are)
+const ETF_IT = {
+  "Accumulating": "Accumulazione", "Distributing": "Distribuzione", "Physical": "Fisica", "Synthetic": "Sintetica (swap)",
+  "Full replication": "replica completa", "Optimized sampling": "campionamento ottimizzato", "Sampling": "campionamento",
+  "Unfunded swap": "swap", "Physically backed": "garantito dal metallo fisico", "Currency unhedged": "Non coperto",
+  "Currency hedged": "Coperto (hedged)", "Other": "Altro", "United States": "USA", "Japan": "Giappone", "United Kingdom": "Regno Unito",
+  "Germany": "Germania", "France": "Francia", "Switzerland": "Svizzera", "Netherlands": "Paesi Bassi", "Italy": "Italia",
+  "Ireland": "Irlanda", "Spain": "Spagna", "South Korea": "Corea del Sud", "China": "Cina", "Brazil": "Brasile", "Mexico": "Messico",
+  "Singapore": "Singapore", "Luxembourg": "Lussemburgo", "Hong Kong": "Hong Kong", "Denmark": "Danimarca", "Israel": "Israele",
+  "Finance": "Finanza", "Technology": "Tecnologia", "Industrials": "Industria", "Healthcare": "Sanità",
+  "Consumer Non-Cyclicals": "Beni di prima necessità", "Consumer Cyclicals": "Consumi discrezionali", "Non-Energy Materials": "Materiali",
+  "Energy": "Energia", "Business Services": "Servizi alle imprese", "Utilities": "Utility", "Non-Corporate": "Enti non societari",
+  "Sovereign": "Titoli di Stato", "Telecommunication": "Telecomunicazioni", "Consumer Services": "Servizi ai consumatori" };
+const MONTHS_EN = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const MONTHS_IT = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
+const etfIt = v => v == null ? v : ETF_IT[v] ?? String(v).replace(new RegExp(MONTHS_EN.join("|")), m => MONTHS_IT[MONTHS_EN.indexOf(m)]).replace(/^As of /, "Dati al ");
+const etfRow = isin => etfS.data?.rows?.find(r => r.isin === isin);
+const etfFit = isin => etfS.data?.fit?.[isin];
+function momText(t, months) {
+  return t ? `momentum ${t}${months ? ` da ${months} ${months === 1 ? "mese" : "mesi"}` : ""}, <b>non verificato</b>` : "momentum non calcolabile";
+}
+function lateText(L) {
+  if (!L) return "storia troppo breve per confrontare la distanza dalla media 200";
+  return `rischio di essere arrivati tardi <b>${L.level}</b>: ${fPct(L.dist, 1)} dalla media 200; oggi è più lontano dalla media di quanto sia stato nel
+    ${fNum(L.percentile, 0)}% dei giorni degli ultimi ${fNum(L.years, 0)} anni`;
+}
+function radarItem(x) {
+  const f = etfFit(x.isin), r = etfRow(x.isin);
+  return `<li class="rad-it"><button class="link-btn rad-open" data-etf="${esc(x.isin)}">${esc(x.category)}</button>
+      ${r?.group === "Temi" ? info(ETF_SAT_INFO) : ""}
+      <div>${esc(x.sentence)}</div>
+      ${x.news?.length ? `<div class="muted small">Notizie: ${x.news.map(n => `${esc(n.symbol)} · ${n.url ? `<a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)}</a>` : esc(n.title)}`).join(" — ")}</div>` : ""}
+      <div class="small rad-v">(a) ${momText(x.momTercile, x.momMonths)} ${info(ETF_MOM_INFO)} · (b) ${lateText(x.late)} ${info(ETF_LATE_INFO)}${isNum(x.maxDDhist) ? `; perdita massima storica ${fPct(x.maxDDhist, 0)}` : ""}${x.young ? " · <b>tema giovane</b>: meno di 5 anni di storia" : ""}
+        · (c) per il tuo portafoglio: ${f ? `${fitBadge(f)} <span class="muted">${esc(f.why)}</span>` : `<span class="muted">${etfS.data.portfolioLoaded ? "in calcolo" : "portafoglio non caricato"}</span>`}</div></li>`;
+}
+function renderEtf() {
+  const el = $("#etfBody"), D = etfS.data;
+  if (!D || D.status === "error") { el.innerHTML = `<div class="card empty">Dati degli ETF non disponibili al momento.</div>`; return; }
+  if (D.status === "loading") { el.innerHTML = `<div class="card empty">Calcolo in corso: scarico i prezzi di 63 ETF e i dati degli ETF americani equivalenti (circa un minuto la prima volta al giorno)…</div>`; return; }
+  const T = D.test, R = D.radar, stale = D.rows.filter(r => r.stale).length;
+  const rowsAll = D.rows.filter(r => etfS.grp === "Tutti" || r.group === etfS.grp);
+  const { key, dir } = etfS.sort;
+  const val = (r, k) => k === "fit" ? ({ "diversifica": 1, "neutro": 0, "si sovrappone": -1 }[etfFit(r.isin)?.verdict] ?? -2) : k === "name" ? r.name : r[k];
+  const rows = rowsAll.slice().sort((a, b) => { const va = val(a, key), vb = val(b, key); if (va == null) return 1; if (vb == null) return -1; return (typeof va === "string" ? va.localeCompare(vb) : va - vb) * dir; });
+  const pc = v => `<span class="${sign(v)}">${isNum(v) ? fPct(v, 1) : "—"}</span>`;
+  const tr = r => `${isNum(r.vs50) ? (r.vs50 >= 0 ? "▲" : "▼") : "—"}${isNum(r.vs200) ? (r.vs200 >= 0 ? "▲" : "▼") : "—"}`;
+  const cols = [["name", "ETF", "l"], ["r1m", "1 m"], ["r3m", "3 m"], ["r1y", "1 a"], ["r3y", "3 a"], ["mom12_1", "12-1"], ["vol", "Vol."], ["maxDD3y", "Perd. max 3 a"], ["vs200", "Trend 50/200"], ["ter", "TER"], ["fit", "Per il mio portafoglio", "l"]];
+  el.innerHTML = `<p class="warn-box"><b>Nessuna categoria è indicata come «favorevole» o «da comprare».</b> Le regole di momentum provate sulle categorie (${T ? `${dayIT(T.from)} – ${dayIT(T.to)}` : ""})
+      non hanno superato il test: momentum e trend sono informazioni <b>non verificate</b>. Rendimenti in euro, quello che guadagni tu. Non è una consulenza finanziaria.${stale ? ` <b>${stale} ETF hanno dati di justETF con più di 6 mesi</b>: rilancia etf_universe.py.` : ""}</p>
+    <div class="card"><div class="card-h"><h2>Radar dei temi</h2><span class="card-meta">rendimento in euro a 3 mesi, una categoria per riga · dati del ${dayIT(D.generated.slice(0, 10))}</span></div>
+      <div class="rad-cols">
+        <div><h4 class="bt-h">Più forti</h4><table class="scr mini"><thead><tr><th class="l">Categoria</th><th>3 mesi</th><th>12-1</th></tr></thead><tbody>${R.strong.map(x => `<tr data-etf="${esc(x.isin)}"><td class="l">${esc(x.category)}</td><td>${pc(x.r3m)}</td><td>${pc(x.mom12_1)}</td></tr>`).join("")}</tbody></table></div>
+        <div><h4 class="bt-h">Più deboli</h4><table class="scr mini"><thead><tr><th class="l">Categoria</th><th>3 mesi</th><th>12-1</th></tr></thead><tbody>${R.weak.map(x => `<tr data-etf="${esc(x.isin)}"><td class="l">${esc(x.category)}</td><td>${pc(x.r3m)}</td><td>${pc(x.mom12_1)}</td></tr>`).join("")}</tbody></table></div>
+      </div>
+      <ul class="rad-list">${R.strong.slice(0, 1).map(radarItem).join("")}</ul>
+      <details class="fold"><summary><span class="small">Il «perché» delle altre ${R.strong.length + R.weak.length - 1} categorie del radar</span></summary><ul class="rad-list">${R.strong.slice(1).concat(R.weak).map(radarItem).join("")}</ul></details>
+      <p class="muted small">Il «perché» è calcolato: contributo dei primi titoli dell'ETF americano equivalente al suo rendimento, correlazione degli ultimi 6 mesi con le altre categorie, titoli delle notizie quando Yahoo ne fornisce.
+        Il momentum 12-1 accanto ai 3 mesi mostra quando un tema sale di recente ma è nella media sull'anno.</p></div>
+    <div class="card"><div class="card-h"><h2>Tutti gli ETF</h2><span class="card-meta">${rows.length} ETF · clicca una riga per i dettagli</span></div>
+      <div class="chips">${ETF_GROUPS.map(g => `<button data-etfgrp="${esc(g)}" class="${g === etfS.grp ? "on" : ""}">${esc(g)}</button>`).join("")}</div>
+      <div class="table-wrap"><table class="scr etf-tbl"><thead><tr>${cols.map(([k, l, c]) => `<th class="${c || ""} ${key === k ? "sorted" + (dir > 0 ? " asc" : "") : ""}" data-etfsort="${k}">${l}${k === "mom12_1" ? " " + info(ETF_MOM_INFO) : k === "fit" ? " " + info(ETF_FIT_INFO) : ""}</th>`).join("")}</tr></thead>
+        <tbody>${rows.map(r => `<tr data-etf="${esc(r.isin)}"><td class="l"><b>${esc(r.category)}</b><div class="muted small">${esc(r.name || "")}${state.watch.has(r.yahoo) ? " ★" : ""}${etfFit(r.isin)?.held ? " · <b>lo possiedi</b>" : ""}</div></td>
+          <td>${pc(r.r1m)}</td><td>${pc(r.r3m)}</td><td>${pc(r.r1y)}</td><td>${pc(r.r3y)}</td><td>${pc(r.mom12_1)}</td><td>${isNum(r.vol) ? fNum(r.vol, 0) + "%" : "—"}</td>
+          <td class="down">${isNum(r.maxDD3y) ? fPct(r.maxDD3y, 0) : "—"}</td><td title="sopra o sotto la media 50 e la media 200">${tr(r)}</td><td>${isNum(r.ter) ? fNum(r.ter, 2) + "%" : "—"}</td><td class="l">${fitBadge(etfFit(r.isin))}</td></tr>`).join("")}</tbody></table></div>
+      <p class="muted small">Rendimenti in euro, dividendi inclusi per gli ETF ad accumulazione. Trend: ▲▼ = sopra o sotto la media 50, poi la media 200. Volatilità a 1 anno.
+        ${D.portfolioLoaded ? (D.corrReady ? "" : "Correlazione con il tuo portafoglio in calcolo (prezzi in scaricamento). ") : "Carica il portafoglio per la colonna «Per il mio portafoglio». "}</p></div>
+    <details class="card fold"><summary><span class="small"><b>Mappa di rotazione delle categorie</b> (rispetto all'All-World VWCE)</span></summary><div id="etfRrg" class="chart"></div></details>
+    <details class="card fold"><summary><span class="small"><b>Test delle regole di momentum</b>: M1 e M2 non superati</span></summary>${etfTestHTML(T)}</details>`;
+  const rr = $("#etfRrg");
+  rr.closest("details").addEventListener("toggle", () => drawRRG(rr, D.rotation, d => `<div class="tip-h">Categoria</div><b>${esc(d.name)}</b> <span class="q ${d.quadrant}">${QLAB[d.quadrant]}</span>
+      <div class="tip-row"><span>vs All-World 1 mese / 1 settimana</span><b>${fChg(d.rs1m)} / ${fChg(d.rs1w)}</b></div>`, "Rendimento relativo a 1 mese vs All-World (punti) →"), { once: true });
+}
+function etfTestHTML(T) {
+  if (!T) return `<p class="muted">Test non disponibile: .venv/bin/python etf_backtest.py</p>`;
+  const ck = c => c ? "✅" : "❌", R = T.rules, C = T.control, P = T.m2Protection;
+  return `<p class="small">Storico ${dayIT(T.from)} – ${dayIT(T.to)}, categorie misurate con ETF americani. Misura: rendimento a 3 mesi della categoria meno la media di tutte le categorie dello stesso mese.
+      Controllo casuale: ${C.m1.passed} su ${C.m1.runs} regole finte superano tutte le condizioni (M1), ${C.m2.passed} su ${C.m2.runs} (M2).</p>
+    <div class="table-wrap"><table class="scr"><thead><tr><th class="l">Condizione</th><th>M1 (12-1 nel terzo migliore)</th><th>M2 (sopra la media 200)</th></tr></thead><tbody>
+      ${T.conditions.map((c, k) => `<tr><td class="l">${k + 1}. ${esc(c)}</td><td>${ck(R.m1.checks[k])}</td><td>${ck(R.m2.checks[k])}</td></tr>`).join("")}
+      <tr><td class="l">Media / mediana dell'extra a 3 mesi</td><td>${fChg(R.m1.mean3)} / ${fChg(R.m1.median3)}</td><td>${fChg(R.m2.mean3)} / ${fChg(R.m2.median3)}</td></tr>
+      <tr><td class="l"><b>Esito</b></td><td><b>${R.m1.pass ? "superato" : "non superato"}</b></td><td><b>${R.m2.pass ? "superato" : "non superato"}</b></td></tr></tbody></table></div>
+    <p class="small">M2 come protezione nei crolli (soglia fissata prima del test: ${esc(P.rule)}): perdita massima ridotta di un terzo in ${P.ddCutCount} categorie su ${P.n}, volatilità più bassa in ${P.volLowerCount} su ${P.n}:
+      <b>${P.verified ? "verificata" : "non verificata"}</b>.</p>`;
+}
+// panel of one ETF
+function openEtf(isin) {
+  const r = etfRow(isin);
+  if (!r) return;
+  const f = etfFit(isin), J = r.justetf;
+  state.detail = null; state.macro = null; state.panel = "etf"; etfS.open = isin;
+  const pc = v => `<span class="${sign(v)}">${isNum(v) ? fPct(v, 1) : "—"}</span>`;
+  const H = ["r1m", "r3m", "r6m", "r1y", "r3y"], HL = { r1m: "1 mese", r3m: "3 mesi", r6m: "6 mesi", r1y: "1 anno", r3y: "3 anni" };
+  const loc = k => isNum(r[k]) && r.fx && isNum(r.fx[k]) ? ((1 + r[k] / 100) / (1 + r.fx[k] / 100) - 1) * 100 : null;
+  const list = rows => rows?.length ? rows.map(([n, p]) => `${esc(etfIt(n))} <b>${fNum(p, 1)}%</b>`).join(" · ") : "—";
+  const conc = f ? Object.keys(f.before).map(k => `<tr><td class="l">${esc(k)}</td><td>${fNum(f.before[k], 1)}%</td><td>${fNum(f.after[k], 1)}%</td><td class="${sign(f.after[k] - f.before[k])}">${fChg(f.after[k] - f.before[k])}</td></tr>`).join("") : "";
+  drawer.classList.remove("full");
+  drawer.innerHTML = `<div class="d-top"><div class="d-head"><div><div class="tt">${esc(r.category)}</div><div class="nm">${esc(r.name || "")}</div>
+        <div class="sec">${esc(r.isin)} · ${esc(r.yahoo || "")} · ${esc(r.provider || "")} · ${esc(r.group)}</div></div>
+      <div class="actions"><button class="icon-btn star ${state.watch.has(r.yahoo) ? "on" : ""}" data-star="${esc(r.yahoo)}" title="In osservazione">${state.watch.has(r.yahoo) ? "★" : "☆"}</button>
+        <button class="icon-btn close-btn" id="dClose" aria-label="Chiudi">×</button></div></div></div>
+    <div class="d-rest etf-d">
+      <div class="d-sec"><h3>Per il mio portafoglio ${info(ETF_FIT_INFO)}</h3>
+        ${f ? `<p>${fitBadge(f)} <span class="muted">${esc(f.why)}</span></p>${f.held ? `<p><b>Lo possiedi</b> (${fNum(f.heldWeight, 1)}% del portafoglio). <button class="link-btn" data-pos="${esc(r.isin)}">Apri la sua posizione →</button></p>` : ""}
+          ${f.notes.length ? `<p class="small">${f.notes.map(esc).join("<br>")}</p>` : ""}` : `<p class="muted">${etfS.data.portfolioLoaded ? "In calcolo." : "Portafoglio non caricato."}</p>`}</div>
+      <div class="d-sec"><h3>Rendimenti in euro</h3>
+        <div class="table-wrap"><table class="scr"><thead><tr><th class="l"></th>${H.map(k => `<th>${HL[k]}</th>`).join("")}</tr></thead><tbody>
+          <tr><td class="l"><b>In euro</b></td>${H.map(k => `<td><b>${pc(r[k])}</b></td>`).join("")}</tr>
+          ${r.fx ? `<tr><td class="l">di cui cambio</td>${H.map(k => `<td>${pc(r.fx[k])}</td>`).join("")}</tr><tr><td class="l">nella valuta del sottostante</td>${H.map(k => `<td>${pc(loc(k))}</td>`).join("")}</tr>` : ""}</tbody></table></div>
+        <p class="muted small">${esc(r.fxNote || "")} · Storico: ${esc(r.historySource || "—")}</p>
+        <p>Trend: ${isNum(r.vs50) ? `${fPct(r.vs50, 1)} dalla media 50` : "—"} · ${isNum(r.vs200) ? `${fPct(r.vs200, 1)} dalla media 200` : "—"} · momentum 12-1 ${pc(r.mom12_1)}
+          (${momText(r.momTercile, r.momMonths)}) ${info(ETF_MOM_INFO)}<br>Volatilità ${isNum(r.vol) ? fNum(r.vol, 0) + "%" : "—"} · perdita massima 3 anni ${isNum(r.maxDD3y) ? fPct(r.maxDD3y, 0) : "—"}
+          ${r.group === "Temi" ? ` · ${info(ETF_SAT_INFO)} satellite` : ""}</p></div>
+      <details class="d-sec fold"><summary><h3>Ha senso adesso?</h3></summary>
+        <p>${lateText(r.late)} ${info(ETF_LATE_INFO)}${isNum(r.maxDDhist) ? `. Perdita massima nella storia disponibile (${fNum(r.historyYears, 0)} anni): ${fPct(r.maxDDhist, 0)}` : ""}${(r.historyYears || 0) < 5 ? ". <b>Tema giovane</b>: meno di 5 anni di storia" : ""}.</p>
+        <p class="small">Momentum (M1) e sopra la media 200 (M2) non hanno superato il test sulle categorie: <b>non verificati</b>. Non è un'indicazione di acquisto.</p></details>
+      <details class="d-sec fold"><summary><h3>Sovrapposizione, correlazione, concentrazione</h3></summary>
+        ${f ? `<p>Sovrapposizione ${info(ETF_OVERLAP_INFO)}: <b>${isNum(f.overlap) ? fNum(f.overlap, 1) + " punti" : "non calcolabile (composizione non disponibile)"}</b>${f.common.length ? ` · titoli in comune: ${f.common.map(esc).join(", ")}` : ""}</p>
+          <p>Correlazione con il tuo portafoglio (settimanale, 2 anni, in euro): <b>${isNum(f.corr) ? fNum(f.corr, 2) : "in calcolo"}</b></p>
+          <div class="table-wrap"><table class="scr"><thead><tr><th class="l">Se investissi il 10% del portafoglio</th><th>Oggi</th><th>Dopo</th><th>Differenza</th></tr></thead><tbody>${conc}</tbody></table></div>
+          <p class="muted small">Pesi sull'esposizione effettiva. Composizione dell'ETF da justETF (primi 5 paesi e settori). Il dollaro è stimato dal peso degli USA.</p>` : `<p class="muted">Portafoglio non caricato.</p>`}</details>
+      <details class="d-sec fold"><summary><h3>Composizione</h3></summary>
+        <p><b>Primi 10 titoli:</b> ${list(J.top10)}<br><b>Paesi:</b> ${list(J.countries)}<br><b>Settori:</b> ${list(J.sectors)}</p>
+        <p class="muted small">${esc(etfIt(J.holdingsDate) || "")} · fonte justETF</p></details>
+      <details class="d-sec fold"><summary><h3>Dati dell'ETF</h3></summary>
+        <div class="d-stats">${[["TER", isNum(r.ter) ? fNum(r.ter, 2) + "%" : "—"], ["Patrimonio", isNum(r.sizeEurM) ? fNum(r.sizeEurM, 0) + " mln €" : "—"], ["Dividendi", etfIt(r.distribution) || "—"],
+          ["Replica", [etfIt(r.replication), etfIt(J.replicationMethod)].filter(Boolean).join(", ") || "—"], ["Cambio", etfIt(r.hedge) || "—"], ["Struttura", r.legal || "—"], ["Indice", r.index || "—"], ["Lancio", etfIt(r.launch) || "—"],
+          ["Valuta del sottostante", r.underlyingCurrency], ["P/E (ETF americano " + (r.usProxy || "—") + ")", isNum(r.pe) ? fNum(r.pe, 1) : "—"]].map(([l, v]) => `<div><span>${esc(l)}</span><span>${esc(v)}</span></div>`).join("")}</div>
+        <p class="muted small">Fonte: <a href="${esc(J.source)}" target="_blank" rel="noopener">justETF</a>, letto il ${dayIT(J.date)}${r.stale ? ` · <b class="down">dati con più di 6 mesi: da aggiornare</b>` : ""}.
+          ${r.usProxy ? `L'ETF americano ${esc(r.usProxy)} è usato solo come fonte di dati, mai come prodotto da comprare.` : ""}${r.note ? `<br>${esc(r.note)}` : ""}</p></details>
+      <p class="small">${info(ETF_FISCAL_INFO)} Tasse, accumulazione e distribuzione, cambio coperto.</p>
+      <p class="disclaimer">Dati e confronti a scopo di studio, non verificati come indicazioni di acquisto. Non è una consulenza finanziaria.</p></div>`;
+  drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); scrim.hidden = false;
+  $("#dClose").onclick = closeDetail;
+}
+// ETFs I follow (★), shown under the stocks in Ricerca → In osservazione
+function renderWatchEtf() {
+  const el = $("#myEtf");
+  if (!el) return;
+  const mine = (etfS.data?.rows || []).filter(r => state.watch.has(r.yahoo));
+  if (!mine.length) { el.hidden = true; if (!etfS.data && [...state.watch].some(t => /\.(MI|DE)$/.test(t))) loadEtf(); return; }
+  el.hidden = false;
+  const pc = v => `<span class="${sign(v)}">${isNum(v) ? fPct(v, 1) : "—"}</span>`;
+  el.innerHTML = `<div class="card-h"><h2>ETF in osservazione</h2><span class="card-meta">dalla scheda ETF · clicca per i dettagli</span></div>
+    <div class="table-wrap"><table class="scr"><thead><tr><th class="l">ETF</th><th>1 m</th><th>3 m</th><th>1 a</th><th>12-1</th><th class="l">Per il mio portafoglio</th></tr></thead>
+    <tbody>${mine.map(r => `<tr data-etf="${esc(r.isin)}"><td class="l"><b>${esc(r.category)}</b> <span class="muted small">${esc(r.yahoo)}</span></td><td>${pc(r.r1m)}</td><td>${pc(r.r3m)}</td><td>${pc(r.r1y)}</td><td>${pc(r.mom12_1)}</td><td class="l">${fitBadge(etfFit(r.isin))}</td></tr>`).join("")}</tbody></table></div>`;
+}
+document.addEventListener("click", e => {
+  const g = e.target.closest("[data-etfgrp]");
+  if (g) { etfS.grp = g.dataset.etfgrp; LS.set("etfGrp", etfS.grp); return renderEtf(); }
+  const s = e.target.closest("[data-etfsort]");
+  if (s && !e.target.closest(".info")) { const k = s.dataset.etfsort; etfS.sort = etfS.sort.key === k ? { key: k, dir: -etfS.sort.dir } : { key: k, dir: k === "name" ? 1 : -1 }; return renderEtf(); }
+  const o = e.target.closest("[data-etf]");
+  if (o && !e.target.closest(".info, a")) openEtf(o.dataset.etf);
 });
 
 // ------------------------------------------------------------ Diario dei segnali (diary.py): live check of the verdicts
@@ -2367,7 +2562,7 @@ const DIARY_READY = 63;
 const GROUPS = [
   { id: "mercato", label: "Mercato", ask: "Cosa sta succedendo?", views: [["overview", "Oggi"], ["sectors", "Settori"]] },
   { id: "portafoglio", label: "Portafoglio", ask: "Cosa ho e come sta andando?", views: [["portfolio", "Posizioni"], ["pfperf", "Performance"], ["pfconc", "Concentrazione"], ["pfrisk", "Rischio"]] },
-  { id: "ricerca", label: "Ricerca", ask: "Cosa potrei comprare?", views: [["screener", "Screener"], ["watch", "In osservazione"], ["diary", "Diario dei segnali"]] },
+  { id: "ricerca", label: "Ricerca", ask: "Cosa potrei comprare?", views: [["screener", "Screener"], ["etf", "ETF"], ["watch", "In osservazione"], ["diary", "Diario dei segnali"]] },
 ];
 const PF_SUBS = ["portfolio", "pfperf", "pfconc", "pfrisk"];
 const OLD_LINKS = { map: "sectors", ideas: "sectors", trade: "screener", rules: "portfolio", metodo: "screener" };

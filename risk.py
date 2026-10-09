@@ -220,3 +220,30 @@ def snapshot(pf):
     except Exception as e:
         log.exception("portfolio risk failed")
         return {"status": "error", "error": str(e)}
+
+
+def portfolio_weekly(pf, closes):
+    """Weekly returns in EUR of my portfolio with today's weights (same method as compute), for the ETF tab's
+    correlation; positions without usable prices are left out. Returns a Series (empty if not computable)."""
+    positions = [p for p in pf.get("positions") or [] if p.get("value")]
+    fx = closes.get(portfolio.FX)
+    series, value = {}, {}
+    for p in positions:
+        c = closes.get(p.get("ticker") or "")
+        e = _eur(c, p["currency"], fx) if c is not None else None
+        if e is None or len(e) < MIN_DAYS:
+            continue
+        moves = e.pct_change()
+        if moves.max() > JUMP_UP or moves.min() < JUMP_DOWN:
+            continue
+        series.setdefault(p["isin"], e)
+        value[p["isin"]] = value.get(p["isin"], 0) + p["value"]
+    if not series:
+        return pd.Series(dtype=float)
+    w = pd.Series(value) / sum(value.values())
+    px = pd.DataFrame(series).sort_index()
+    px.index = pd.to_datetime(px.index).tz_localize(None).normalize()
+    px = px[~px.index.duplicated(keep="last")].ffill()
+    r = px.resample("W-FRI").last().pct_change()
+    ok = r.notna()
+    return ((r.fillna(0) * w).sum(axis=1) / (ok * w).sum(axis=1).where(lambda x: x > 0)).dropna()
