@@ -97,15 +97,16 @@ def company(info, valuation, an):
 
 # ---------------------------------------------------------------- stops and plans
 
-def stops(entry, ta, break_level=None):
-    """Stop options below the entry, the proposed one and why (same rule as phase 12)."""
+def stops(entry, ta, break_level=None, money=usd):
+    """Stop options below the entry, the proposed one and why (same rule as phase 12). money formats the prices in
+    the labels: dollars for the stocks, euro for the ETFs of Borsa Italiana (etf_buy.py)."""
     a = ta["atr"]
     opts = []
     if break_level is not None:
-        opts.append({"id": "level", "v": break_level - STOP_LEVEL * a, "label": f"un ATR sotto il livello rotto ({usd(break_level)})"})
+        opts.append({"id": "level", "v": break_level - STOP_LEVEL * a, "label": f"un ATR sotto il livello rotto ({money(break_level)})"})
     elif ta.get("sma50"):
-        opts.append({"id": "sma50", "v": ta["sma50"] - STOP_MA * a, "label": f"sotto la media 50 ({usd(ta['sma50'])}) meno mezzo ATR"})
-    opts.append({"id": "low", "v": ta["low"]["v"] - STOP_MA * a, "label": f"sotto l'ultimo minimo ({usd(ta['low']['v'])} del {ta['low']['date'][8:]}/{ta['low']['date'][5:7]}) meno mezzo ATR"})
+        opts.append({"id": "sma50", "v": ta["sma50"] - STOP_MA * a, "label": f"sotto la media 50 ({money(ta['sma50'])}) meno mezzo ATR"})
+    opts.append({"id": "low", "v": ta["low"]["v"] - STOP_MA * a, "label": f"sotto l'ultimo minimo ({money(ta['low']['v'])} del {ta['low']['date'][8:]}/{ta['low']['date'][5:7]}) meno mezzo ATR"})
     if break_level is None:
         opts.append({"id": "atr", "v": entry - STOP_ATR * a, "label": f"{it(STOP_ATR, 0)} × ATR sotto l'entrata"})
     ok = [dict(o, atrs=(entry - o["v"]) / a) for o in opts if o["v"] < entry]

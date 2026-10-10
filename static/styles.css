@@ -820,3 +820,10 @@ table.pf tr.lev td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 .fb { color: var(--ink-2); font-weight: 700; margin-left: 1px; }
 .div-tbl td.l { min-width: 240px; white-space: normal; }
 .div-tbl tbody tr { cursor: pointer; }
+.etf-per { align-items: center; margin: 0 0 12px; }
+.trend-w { font-weight: 700; font-size: 12px; }
+.trend-w.up { color: var(--up); } .trend-w.down { color: var(--down); } .trend-w.flat { color: var(--ink-2); }
+.trend-c { white-space: nowrap; } .trend-c .spark { display: block; margin-top: 2px; }
+.trend-big { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0 8px; }
+.buy-sec .checks { list-style: none; padding: 0; margin: 6px 0; font-size: 13px; line-height: 1.7; }
+.buy-sec tr.on td { font-weight: 700; }

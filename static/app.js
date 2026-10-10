@@ -2295,7 +2295,33 @@ document.addEventListener("click", e => {
 // ------------------------------------------------------------ Ricerca → ETF (etf.py, /api/etf)
 // What is rising, why (computed), whether it makes sense for my portfolio. The momentum rules failed the test
 // (etf_backtest.py): nothing here says "favorevole" or "investi", only "non verificato". Texts fixed, numbers from data.
-const etfS = { data: null, at: 0, grp: LS.get("etfGrp", "Tutti"), sort: { key: "r3m", dir: -1 }, retry: null };
+const etfS = { data: null, at: 0, grp: LS.get("etfGrp", "Tutti"), per: LS.get("etfPeriod", "r3m"), retry: null };
+etfS.sort = { key: etfS.per, dir: -1 };
+const ETF_PER = [["r1w", "1 settimana"], ["r2w", "2 settimane"], ["r1m", "1 mese"], ["r3m", "3 mesi"], ["r6m", "6 mesi"], ["r1y", "1 anno"], ["r3y", "3 anni"]];
+const ETF_PER_SHORT = { r1w: "1 s", r2w: "2 s", r1m: "1 m", r3m: "3 m", r6m: "6 m", r1y: "1 a", r3y: "3 a" };
+const ETF_PER_Y = { r1w: "2 giorni", r2w: "1 settimana", r1m: "1 settimana", r3m: "1 mese", r6m: "1 mese", r1y: "3 mesi", r3y: "6 mesi" };
+const TREND_CLS = { "Rialzista": "up", "Laterale": "flat", "Ribassista": "down" };
+const ETF_TREND_INFO = `<b>Trend</b> (regola approvata): <b>Rialzista</b> se il prezzo è sopra la media 50 e la media 50 è sopra la media 200; <b>Ribassista</b> se il prezzo è
+  sotto la media 50 e la media 50 è sotto la media 200; <b>Laterale</b> negli altri casi. Il mini-grafico mostra gli ultimi 6 mesi con la linea della media 200 (tratteggiata).
+  Descrive l'andamento: stare sopra la media 200 <b>non ha superato il test</b> come regola di acquisto (M2).`;
+const trendWord = r => r.trend ? `<span class="trend-w ${TREND_CLS[r.trend]}">${r.trend}</span>` : `<span class="muted small">—</span>`;
+// 6-month mini chart: closes and the 200-day average (dashed)
+function sparkSVG(sp, w = 90, h = 26) {
+  if (!sp?.p?.length) return "";
+  const vals = sp.p.concat(sp.ma200).filter(isNum), lo = Math.min(...vals), hi = Math.max(...vals), n = sp.p.length;
+  const X = i => (i / (n - 1)) * (w - 2) + 1, Y = v => h - 1 - ((v - lo) / (hi - lo || 1)) * (h - 2);
+  const line = arr => arr.map((v, i) => isNum(v) ? `${X(i).toFixed(1)},${Y(v).toFixed(1)}` : null).filter(Boolean).join(" ");
+  const up = sp.p[n - 1] >= sp.p[0];
+  return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Ultimi 6 mesi e media 200">
+    <polyline points="${line(sp.ma200)}" fill="none" stroke="${css("--ink-2")}" stroke-width="1" stroke-dasharray="3 2"/>
+    <polyline points="${line(sp.p)}" fill="none" stroke="${css(up ? "--up" : "--down")}" stroke-width="1.4"/></svg>`;
+}
+const BUY_INFO = `<b>Ha senso comprare?</b> Regole approvate, nell'ordine; la prima che vale decide: <b>E1</b> prodotto a leva → solo informazione; <b>E2</b> trend ribassista → Evita;
+  <b>E3</b> si sovrappone al tuo portafoglio → Evita; <b>E4</b> patrimonio sotto 100 milioni → Evita; <b>A0</b> trend non calcolabile → Attendi; <b>A1</b> trend laterale → Attendi;
+  <b>A2</b> TER sopra lo 0,50% → Attendi; <b>A3</b> «neutro» per il tuo portafoglio → Attendi; <b>R1</b> rischio di essere arrivati tardi alto → Entra su ritracciamento
+  (entrata alla media 50); altrimenti <b>Entra ora</b>. «Solo mercato» usa le stesse regole senza E3 e A3. Il momentum 12-1 è solo un'informazione.<br><br>
+  <b>Non verificato</b>: le regole di momentum e trend non hanno superato il test sulle categorie; ogni verdetto viene salvato nel diario degli ETF per misurarlo dal vivo.`;
+const buyBadge = (v, big) => v ? `<span class="act ${big ? "big " : ""}${VERDICT_CLS[v] || "hold"}">${esc(v)}</span>` : `<span class="muted small">—</span>`;
 const ETF_GROUPS = ["Tutti", "Globali", "Aree e paesi", "Settori", "Temi", "Stili e fattori", "Obbligazionari", "Oro e materie prime"];
 const FIT_CLS = { "diversifica": "acc", "neutro": "hold", "si sovrappone": "red" };
 const fitBadge = f => f ? `<span class="act ${FIT_CLS[f.verdict]}">${esc(f.verdict[0].toUpperCase() + f.verdict.slice(1))}</span>` : `<span class="muted small">—</span>`;
@@ -2370,43 +2396,56 @@ function renderEtf() {
   const el = $("#etfBody"), D = etfS.data;
   if (!D || D.status === "error") { el.innerHTML = `<div class="card empty">Dati degli ETF non disponibili al momento.</div>`; return; }
   if (D.status === "loading") { el.innerHTML = `<div class="card empty">Calcolo in corso: scarico i prezzi di 63 ETF e i dati degli ETF americani equivalenti (circa un minuto la prima volta al giorno)…</div>`; return; }
-  const T = D.test, R = D.radar, stale = D.rows.filter(r => r.stale).length;
+  const P = etfS.per, PL = ETF_PER.find(x => x[0] === P)[1], T = D.test, stale = D.rows.filter(r => r.stale).length;
+  const R = { strong: (D.radar[P]?.strong || []).map(x => ({ ...D.radarInfo[x.category], ...x })), weak: (D.radar[P]?.weak || []).map(x => ({ ...D.radarInfo[x.category], ...x })) };
+  const buy = isin => D.buy?.[isin];
   const rowsAll = D.rows.filter(r => etfS.grp === "Tutti" || r.group === etfS.grp);
   const { key, dir } = etfS.sort;
-  const val = (r, k) => k === "fit" ? ({ "diversifica": 1, "neutro": 0, "si sovrappone": -1 }[etfFit(r.isin)?.verdict] ?? -2) : k === "name" ? r.name : r[k];
+  const BUY_ORDER = { "Entra ora": 4, "Entra su ritracciamento": 3, "Attendi": 2, "Evita": 1, "Solo informazione": 0 };
+  const val = (r, k) => k === "fit" ? ({ "diversifica": 1, "neutro": 0, "si sovrappone": -1 }[etfFit(r.isin)?.verdict] ?? -2) : k === "name" ? r.name
+    : k === "trend" ? ({ "Rialzista": 1, "Laterale": 0, "Ribassista": -1 }[r.trend] ?? null) : k === "buy" ? (BUY_ORDER[buy(r.isin)?.verdict ?? buy(r.isin)?.market.verdict] ?? null) : r[k];
   const rows = rowsAll.slice().sort((a, b) => { const va = val(a, key), vb = val(b, key); if (va == null) return 1; if (vb == null) return -1; return (typeof va === "string" ? va.localeCompare(vb) : va - vb) * dir; });
   const pc = v => `<span class="${sign(v)}">${isNum(v) ? fPct(v, 1) : "—"}</span>`;
   const pcs = (r, k) => `${pc(r[k])}${r.fallback && isNum(r[k]) ? '<sup class="fb">*</sup>' : ""}`;
-  const tr = r => `${isNum(r.vs50) ? (r.vs50 >= 0 ? "▲" : "▼") : "—"}${isNum(r.vs200) ? (r.vs200 >= 0 ? "▲" : "▼") : "—"}`;
-  const cols = [["name", "ETF", "l"], ["r1m", "1 m"], ["r3m", "3 m"], ["r1y", "1 a"], ["r3y", "3 a"], ["mom12_1", "12-1"], ["vol", "Vol."], ["maxDD3y", "Perd. max 3 a"], ["vs200", "Trend 50/200"], ["ter", "TER"], ["fit", "Per il mio portafoglio", "l"]];
-  el.innerHTML = `<p class="warn-box"><b>Nessuna categoria è indicata come «favorevole» o «da comprare».</b> Le regole di momentum provate sulle categorie (${T ? `${dayIT(T.from)} – ${dayIT(T.to)}` : ""})
-      non hanno superato il test: momentum e trend sono informazioni <b>non verificate</b>. Rendimenti in euro, quello che guadagni tu. Non è una consulenza finanziaria.${stale ? ` <b>${stale} ETF hanno dati di justETF con più di 6 mesi</b>: rilancia etf_universe.py.` : ""}</p>
+  const fixed = ["r1w", "r1m", "r3m", "r1y"];
+  const cols = [["name", "ETF", "l"], ...fixed.concat(fixed.includes(P) ? [] : [P]).map(k => [k, ETF_PER_SHORT[k]]), ["mom12_1", "12-1"], ["vol", "Vol."], ["maxDD3y", "Perd. max 3 a"],
+    ["trend", "Trend", "l"], ["ter", "TER"], ["buy", "Ha senso comprare?", "l"], ["fit", "Per il mio portafoglio", "l"]];
+  const cell = (r, k) => k === "name" ? `<td class="l"><b>${esc(r.category)}</b><div class="muted small">${esc(r.name || "")}${state.watch.has(r.yahoo) ? " ★" : ""}${etfFit(r.isin)?.held ? " · <b>lo possiedi</b>" : ""}</div></td>`
+    : k === "vol" ? `<td>${isNum(r.vol) ? fNum(r.vol, 0) + "%" : "—"}</td>` : k === "maxDD3y" ? `<td class="down">${isNum(r.maxDD3y) ? fPct(r.maxDD3y, 0) : "—"}</td>`
+    : k === "trend" ? `<td class="l trend-c">${trendWord(r)}${sparkSVG(r.spark)}</td>` : k === "ter" ? `<td>${isNum(r.ter) ? fNum(r.ter, 2) + "%" : "—"}</td>`
+    : k === "buy" ? `<td class="l">${buyBadge(buy(r.isin)?.verdict)}${buy(r.isin) && buy(r.isin).verdict !== buy(r.isin).market.verdict ? `<div class="muted small">mercato: ${esc(buy(r.isin).market.verdict)}</div>` : ""}</td>`
+    : k === "fit" ? `<td class="l">${fitBadge(etfFit(r.isin))}</td>` : `<td>${pcs(r, k)}</td>`;
+  el.innerHTML = `<p class="warn-box"><b>I verdetti «Ha senso comprare?» seguono regole esplicite ma non verificate.</b> Le regole di momentum provate sulle categorie (${T ? `${dayIT(T.from)} – ${dayIT(T.to)}` : ""})
+      non hanno superato il test: momentum e trend sono informazioni <b>non verificate</b>, e i verdetti vengono salvati ogni giorno nel diario degli ETF per misurarli dal vivo.
+      Rendimenti in euro, quello che guadagni tu. Non è una consulenza finanziaria.${stale ? ` <b>${stale} ETF hanno dati di justETF con più di 6 mesi</b>: rilancia etf_universe.py.` : ""}</p>
+    <div class="chips etf-per"><span class="muted small">Periodo:</span>${ETF_PER.map(([k, l]) => `<button data-etfper="${k}" class="${k === P ? "on" : ""}">${l}</button>`).join("")}
+      <span class="muted small">decide l'ordine di radar, tabella e mappa di rotazione</span></div>
     ${diversifyHTML(D)}
-    <div class="card"><div class="card-h"><h2>Radar dei temi</h2><span class="card-meta">rendimento in euro a 3 mesi, una categoria per riga · dati del ${dayIT(D.generated.slice(0, 10))}</span></div>
+    <div class="card"><div class="card-h"><h2>Radar dei temi</h2><span class="card-meta">rendimento in euro a ${PL}, una categoria per riga · dati del ${dayIT(D.generated.slice(0, 10))}</span></div>
       <div class="rad-cols">
-        <div><h4 class="bt-h">Più forti</h4><table class="scr mini"><thead><tr><th class="l">Categoria</th><th>3 mesi</th><th>12-1</th></tr></thead><tbody>${R.strong.map(x => `<tr data-etf="${esc(x.isin)}"><td class="l">${esc(x.category)}</td><td>${pc(x.r3m)}</td><td>${pc(x.mom12_1)}</td></tr>`).join("")}</tbody></table></div>
-        <div><h4 class="bt-h">Più deboli</h4><table class="scr mini"><thead><tr><th class="l">Categoria</th><th>3 mesi</th><th>12-1</th></tr></thead><tbody>${R.weak.map(x => `<tr data-etf="${esc(x.isin)}"><td class="l">${esc(x.category)}</td><td>${pc(x.r3m)}</td><td>${pc(x.mom12_1)}</td></tr>`).join("")}</tbody></table></div>
+        <div><h4 class="bt-h">Più forti</h4><table class="scr mini"><thead><tr><th class="l">Categoria</th><th>${PL}</th><th>12-1</th></tr></thead><tbody>${R.strong.map(x => `<tr data-etf="${esc(x.isin)}"><td class="l">${esc(x.category)}</td><td>${pc(x.value)}</td><td>${pc(x.mom12_1)}</td></tr>`).join("")}</tbody></table></div>
+        <div><h4 class="bt-h">Più deboli</h4><table class="scr mini"><thead><tr><th class="l">Categoria</th><th>${PL}</th><th>12-1</th></tr></thead><tbody>${R.weak.map(x => `<tr data-etf="${esc(x.isin)}"><td class="l">${esc(x.category)}</td><td>${pc(x.value)}</td><td>${pc(x.mom12_1)}</td></tr>`).join("")}</tbody></table></div>
       </div>
       <ul class="rad-list">${R.strong.slice(0, 1).map(radarItem).join("")}</ul>
       <details class="fold"><summary><span class="small">Il «perché» delle altre ${R.strong.length + R.weak.length - 1} categorie del radar</span></summary><ul class="rad-list">${R.strong.slice(1).concat(R.weak).map(radarItem).join("")}</ul></details>
       <p class="muted small">Il «perché» è calcolato: contributo dei primi titoli dell'ETF americano equivalente al suo rendimento, correlazione degli ultimi 6 mesi con le altre categorie, titoli delle notizie quando Yahoo ne fornisce.
-        Il momentum 12-1 accanto ai 3 mesi mostra quando un tema sale di recente ma è nella media sull'anno.</p></div>
+        Il momentum 12-1 accanto al periodo scelto mostra quando un tema sale di recente ma è nella media sull'anno.</p></div>
     <div class="card"><div class="card-h"><h2>Tutti gli ETF</h2><span class="card-meta">${rows.length} ETF · clicca una riga per i dettagli</span></div>
       <div class="chips">${ETF_GROUPS.map(g => `<button data-etfgrp="${esc(g)}" class="${g === etfS.grp ? "on" : ""}">${esc(g)}</button>`).join("")}</div>
-      <div class="table-wrap"><table class="scr etf-tbl"><thead><tr>${cols.map(([k, l, c]) => `<th class="${c || ""} ${key === k ? "sorted" + (dir > 0 ? " asc" : "") : ""}" data-etfsort="${k}">${l}${k === "mom12_1" ? " " + info(ETF_MOM_INFO) : k === "fit" ? " " + info(ETF_FIT_INFO) : ""}</th>`).join("")}</tr></thead>
-        <tbody>${rows.map(r => `<tr data-etf="${esc(r.isin)}"><td class="l"><b>${esc(r.category)}</b><div class="muted small">${esc(r.name || "")}${state.watch.has(r.yahoo) ? " ★" : ""}${etfFit(r.isin)?.held ? " · <b>lo possiedi</b>" : ""}</div></td>
-          <td>${pcs(r, "r1m")}</td><td>${pcs(r, "r3m")}</td><td>${pcs(r, "r1y")}</td><td>${pcs(r, "r3y")}</td><td>${pcs(r, "mom12_1")}</td><td>${isNum(r.vol) ? fNum(r.vol, 0) + "%" : "—"}</td>
-          <td class="down">${isNum(r.maxDD3y) ? fPct(r.maxDD3y, 0) : "—"}</td><td title="sopra o sotto la media 50 e la media 200">${tr(r)}</td><td>${isNum(r.ter) ? fNum(r.ter, 2) + "%" : "—"}</td><td class="l">${fitBadge(etfFit(r.isin))}</td></tr>`).join("")}</tbody></table></div>
-      <p class="muted small"><b>*</b> = storico di ripiego ${info(ETF_FALLBACK_INFO)} · Rendimenti in euro, dividendi inclusi per gli ETF ad accumulazione. Trend: ▲▼ = sopra o sotto la media 50, poi la media 200. Volatilità a 1 anno.
+      <div class="table-wrap"><table class="scr etf-tbl"><thead><tr>${cols.map(([k, l, c]) => `<th class="${c || ""} ${key === k ? "sorted" + (dir > 0 ? " asc" : "") : ""}" data-etfsort="${k}">${l}${k === "mom12_1" ? " " + info(ETF_MOM_INFO) : k === "fit" ? " " + info(ETF_FIT_INFO) : k === "trend" ? " " + info(ETF_TREND_INFO) : k === "buy" ? " " + info(BUY_INFO) : ""}</th>`).join("")}</tr></thead>
+        <tbody>${rows.map(r => `<tr data-etf="${esc(r.isin)}">${cols.map(([k]) => cell(r, k)).join("")}</tr>`).join("")}</tbody></table></div>
+      <p class="muted small"><b>*</b> = storico di ripiego ${info(ETF_FALLBACK_INFO)} · Rendimenti in euro, dividendi inclusi per gli ETF ad accumulazione. Trend: <span class="trend-w up">Rialzista</span>
+        <span class="trend-w flat">Laterale</span> <span class="trend-w down">Ribassista</span>, mini-grafico di 6 mesi con la media 200 tratteggiata ${info(ETF_TREND_INFO)}. Volatilità a 1 anno.
+        «Ha senso comprare?»: verdetto per te (sotto, «mercato» se senza il tuo portafoglio sarebbe diverso), <b>non verificato</b> ${info(BUY_INFO)}.
         ${D.portfolioLoaded ? (!D.corrReady ? "Correlazione con il tuo portafoglio in calcolo (prezzi in scaricamento). "
           : D.pricesMissing ? "<b>Prezzi storici del portafoglio non disponibili al momento</b> (Yahoo): correlazione non calcolata, quindi nessun ETF può risultare «diversifica»; nuovo tentativo tra 15 minuti. " : "") : "Carica il portafoglio per la colonna «Per il mio portafoglio». "}
         ${D.fitMissing?.length ? `${D.fitMissing.length} dei tuoi fondi non hanno ancora una composizione (in scaricamento o non disponibile): i loro titoli non entrano nella sovrapposizione. ` : ""}</p></div>
-    <details class="card fold"><summary><span class="small"><b>Mappa di rotazione delle categorie</b> (rispetto all'All-World VWCE)</span></summary><div id="etfRrg" class="chart"></div>
+    <details class="card fold"><summary><span class="small"><b>Mappa di rotazione delle categorie</b> (rispetto all'All-World VWCE, ${PL} e ${ETF_PER_Y[P]})</span></summary><div id="etfRrg" class="chart"></div>
       <p class="muted small">Scritti i nomi delle 10 categorie del radar; le altre compaiono passando con il mouse sul punto.</p></details>
     <details class="card fold"><summary><span class="small"><b>Test delle regole di momentum</b>: M1 e M2 non superati</span></summary>${etfTestHTML(T)}</details>`;
   const rr = $("#etfRrg");
-  rr.closest("details").addEventListener("toggle", () => drawRRG(rr, D.rotation, d => `<div class="tip-h">Categoria</div><b>${esc(d.name)}</b> <span class="q ${d.quadrant}">${QLAB[d.quadrant]}</span>
-      <div class="tip-row"><span>vs All-World 1 mese / 1 settimana</span><b>${fChg(d.rs1m)} / ${fChg(d.rs1w)}</b></div>`, "Rendimento relativo a 1 mese vs All-World (punti) →",
+  rr.closest("details").addEventListener("toggle", () => drawRRG(rr, D.rotation[P], d => `<div class="tip-h">Categoria</div><b>${esc(d.name)}</b> <span class="q ${d.quadrant}">${QLAB[d.quadrant]}</span>
+      <div class="tip-row"><span>vs All-World ${PL} / ${ETF_PER_Y[P]}</span><b>${fChg(d.rs1m)} / ${fChg(d.rs1w)}</b></div>`, `Rendimento relativo a ${PL} vs All-World (punti) → · in verticale: ${ETF_PER_Y[P]}`,
       { fit: true, labels: new Set(R.strong.concat(R.weak).map(x => x.category)) }), { once: true });
 }
 const ETF_DIV_INFO = `<b>Cosa diversifica di più</b>: per ogni ETF calcola come cambierebbero tecnologia, USA e dollaro (stimato dagli USA) se investissi il 10% del
@@ -2448,7 +2487,7 @@ function openEtf(isin) {
   const f = etfFit(isin), J = r.justetf;
   state.detail = null; state.macro = null; state.panel = "etf"; etfS.open = isin;
   const pc = v => `<span class="${sign(v)}">${isNum(v) ? fPct(v, 1) : "—"}</span>`;
-  const H = ["r1m", "r3m", "r6m", "r1y", "r3y"], HL = { r1m: "1 mese", r3m: "3 mesi", r6m: "6 mesi", r1y: "1 anno", r3y: "3 anni" };
+  const H = ETF_PER.map(x => x[0]), HL = Object.fromEntries(ETF_PER), B = etfS.data.buy?.[isin];
   const loc = k => isNum(r[k]) && r.fx && isNum(r.fx[k]) ? ((1 + r[k] / 100) / (1 + r.fx[k] / 100) - 1) * 100 : null;
   const list = rows => rows?.length ? rows.map(([n, p]) => `${esc(etfIt(n))} <b>${fNum(p, 1)}%</b>`).join(" · ") : "—";
   const conc = f ? Object.keys(f.before).map(k => `<tr><td class="l">${esc(k)}</td><td>${fNum(f.before[k], 1)}%</td><td>${fNum(f.after[k], 1)}%</td><td class="${sign(f.after[k] - f.before[k])}">${fChg(f.after[k] - f.before[k])}</td></tr>`).join("") : "";
@@ -2461,18 +2500,20 @@ function openEtf(isin) {
       <div class="d-sec"><h3>Per il mio portafoglio ${info(ETF_FIT_INFO)}</h3>
         ${f ? `<p>${fitBadge(f)} <span class="muted">${esc(f.why)}</span></p>${f.held ? `<p><b>Lo possiedi</b> (${fNum(f.heldWeight, 1)}% del portafoglio). <button class="link-btn" data-pos="${esc(r.isin)}">Apri la sua posizione →</button></p>` : ""}
           ${f.notes.length ? `<p class="small">${f.notes.map(esc).join("<br>")}</p>` : ""}` : `<p class="muted">${etfS.data.portfolioLoaded ? "In calcolo." : "Portafoglio non caricato."}</p>`}</div>
+      ${buySection(r, B)}
       <div class="d-sec"><h3>Rendimenti in euro</h3>
         <div class="table-wrap"><table class="scr"><thead><tr><th class="l"></th>${H.map(k => `<th>${HL[k]}</th>`).join("")}</tr></thead><tbody>
           <tr><td class="l"><b>In euro</b></td>${H.map(k => `<td><b>${pc(r[k])}</b></td>`).join("")}</tr>
           ${r.fx ? `<tr><td class="l">di cui cambio</td>${H.map(k => `<td>${pc(r.fx[k])}</td>`).join("")}</tr><tr><td class="l">nella valuta del sottostante</td>${H.map(k => `<td>${pc(loc(k))}</td>`).join("")}</tr>` : ""}</tbody></table></div>
         <p class="muted small">${esc(r.fxNote || "")} · Storico: ${esc(r.historySource || "—")}${r.fallback ? ` <b>(ripiego: rendimenti con *)</b> ${info(ETF_FALLBACK_INFO)}` : ""}
           · ETF nato il ${r.launchIso ? dayIT(r.launchIso) : esc(etfIt(r.launch) || "—")}</p>
+        <div class="trend-big">${trendWord(r)} ${info(ETF_TREND_INFO)} ${sparkSVG(r.spark, 300, 70)}<span class="muted small">ultimi 6 mesi · media 200 tratteggiata</span></div>
         <p>Trend: ${isNum(r.vs50) ? `${fPct(r.vs50, 1)} dalla media 50` : "—"} · ${isNum(r.vs200) ? `${fPct(r.vs200, 1)} dalla media 200` : "—"} · momentum 12-1 ${pc(r.mom12_1)}
           (${momText(r.momTercile, r.momMonths)}) ${info(ETF_MOM_INFO)}<br>Volatilità ${isNum(r.vol) ? fNum(r.vol, 0) + "%" : "—"} · perdita massima 3 anni ${isNum(r.maxDD3y) ? fPct(r.maxDD3y, 0) : "—"}
           ${r.group === "Temi" ? ` · ${info(ETF_SAT_INFO)} satellite` : ""}</p></div>
-      <details class="d-sec fold"><summary><h3>Ha senso adesso?</h3></summary>
+      <details class="d-sec fold"><summary><h3>Arrivati tardi e storia</h3></summary>
         <p>${lateText(r.late)} ${info(ETF_LATE_INFO)}${isNum(r.maxDDhist) ? `. Perdita massima nella storia disponibile (${fNum(r.longYears, 0)} anni, ${esc(r.longSource || "")}): ${fPct(r.maxDDhist, 0)}` : ""}${(r.longYears || 0) < 5 ? ". <b>Tema giovane</b>: meno di 5 anni di storia" : ""}.</p>
-        <p class="small">Momentum (M1) e sopra la media 200 (M2) non hanno superato il test sulle categorie: <b>non verificati</b>. Non è un'indicazione di acquisto.</p></details>
+        <p class="small">Momentum (M1) e sopra la media 200 (M2) non hanno superato il test sulle categorie: <b>non verificati</b>.</p></details>
       <details class="d-sec fold"><summary><h3>Sovrapposizione, correlazione, concentrazione</h3></summary>
         ${f ? `<p>Sovrapposizione ${info(ETF_OVERLAP_INFO)}: <b>${isNum(f.overlap) ? fNum(f.overlap, 1) + " punti" : "non calcolabile (" + esc(r.holdings?.none || "composizione non disponibile") + ")"}</b>
             ${isNum(f.share) ? ` · quota dell'ETF in titoli che già possiedi ${info(ETF_SHARE_INFO)}: <b>${fNum(f.share, 0)}%</b>` : ""}</p>
@@ -2496,6 +2537,30 @@ function openEtf(isin) {
   drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); scrim.hidden = false;
   $("#dClose").onclick = closeDetail;
 }
+// "Ha senso comprare?" in the panel: verdict, the market-only line, every rule with ✅/❌, the plan
+function buySection(r, B) {
+  if (!B) return "";
+  const mk = B.market, ck = c => `<li>${c.ok ? "✅" : "❌"} <b>${c.id}</b> ${esc(c.label)}: ${esc(c.value)}${c.personal ? ` <span class="muted small">(tuo portafoglio)</span>` : ""}</li>`;
+  const p = B.plan;
+  const qtyTxt = q => !q ? "quantità non calcolabile (portafoglio non caricato)" : `${q.qty} quote ≈ ${fEur(q.eur)} (${fNum(q.weight, 1)}% del portafoglio)`;
+  const planHTML = !p ? (B.plan === null ? `<p class="muted small">Piano non disponibile: prezzi di Borsa Italiana insufficienti per entrata e stop.</p>` : "") : `
+      <h4 class="bt-h">Piano operativo ${p.kind === "now" ? "(Entra ora)" : "(Entra su ritracciamento)"}${B.planFor === "solo mercato" ? " · secondo il solo mercato" : ""}</h4>
+      <div class="d-stats">${[["Entrata", `${fNum(p.entry, 2)} € · ${esc(p.entryNote)}`], ["Stop", `${fNum(p.stop, 2)} €`], ["Obiettivo (2 volte il rischio)", `${fNum(p.target, 2)} €`],
+        ["Quantità", qtyTxt(p.qty)], ["Borsa", `${esc(r.planLevels.market)} (${esc(p.listing || "")}) · prezzi del ${dayIT(p.date)}`]].map(([l, v]) => `<div><span>${l}</span><span>${v}</span></div>`).join("")}</div>
+      ${isNum(r.planLevels.mismatch) ? `<p class="small down"><b>Attenzione:</b> nei dati di Yahoo l'ultimo prezzo di Borsa Italiana e quello di Xetra differiscono del ${fNum(Math.abs(r.planLevels.mismatch), 1)}%:
+        uno dei due è sbagliato. Il piano usa ${esc(r.planLevels.market)}; controlla il prezzo su Fineco prima di inserire l'ordine.</p>` : ""}
+      <p class="small">${p.qty ? esc(p.qty.sentence[0].toUpperCase() + p.qty.sentence.slice(1)) + ". " : ""}Stop: ${esc(p.opts.find(o => o.id === p.def).label)}, perché ${esc(p.why)} ${esc(p.spread)}.</p>
+      <details class="fold"><summary><span class="small">Altri stop possibili</span></summary><div class="table-wrap"><table class="scr mini"><thead><tr><th class="l">Stop</th><th>Livello</th><th>Obiettivo</th><th class="l">Quantità</th></tr></thead>
+        <tbody>${p.opts.map(o => `<tr${o.id === p.def ? ' class="on"' : ""}><td class="l">${esc(o.label)}</td><td>${fNum(o.v, 2)} €</td><td>${fNum(o.target, 2)} €</td><td class="l">${qtyTxt(o.qty)}</td></tr>`).join("")}</tbody></table></div></details>`;
+  return `<div class="d-sec buy-sec"><h3>Ha senso comprare? ${info(BUY_INFO)}</h3>
+      <p>${B.verdict ? buyBadge(B.verdict, true) : buyBadge(mk.verdict, true)} <span class="muted small">non verificato</span> · ${esc(B.verdict ? B.why : mk.why)}
+        <span class="muted small">(regola ${esc(B.verdict ? B.by : mk.by)})</span></p>
+      <p class="small muted">${B.verdict ? `Solo mercato (senza considerare il tuo portafoglio): <b>${esc(mk.verdict)}</b> · ${esc(mk.why)} (regola ${esc(mk.by)})`
+        : etfS.data.portfolioLoaded ? "Il verdetto per il tuo portafoglio è in calcolo (serve la correlazione): sopra c'è quello del solo mercato." : "Portafoglio non caricato: sopra c'è il verdetto del solo mercato."}</p>
+      <ul class="checks">${B.checks.map(ck).join("")}</ul>
+      <p class="small">Momentum 12-1: ${isNum(B.momentum) ? fPct(B.momentum, 1) : "—"} (${momText(r.momTercile, r.momMonths)}) ${info(ETF_MOM_INFO)} · solo informazione.</p>
+      ${planHTML}</div>`;
+}
 // ETFs I follow (★), shown under the stocks in Ricerca → In osservazione
 function renderWatchEtf() {
   const el = $("#myEtf");
@@ -2505,10 +2570,13 @@ function renderWatchEtf() {
   el.hidden = false;
   const pc = v => `<span class="${sign(v)}">${isNum(v) ? fPct(v, 1) : "—"}</span>`;
   el.innerHTML = `<div class="card-h"><h2>ETF in osservazione</h2><span class="card-meta">dalla scheda ETF · clicca per i dettagli</span></div>
-    <div class="table-wrap"><table class="scr"><thead><tr><th class="l">ETF</th><th>1 m</th><th>3 m</th><th>1 a</th><th>12-1</th><th class="l">Per il mio portafoglio</th></tr></thead>
-    <tbody>${mine.map(r => `<tr data-etf="${esc(r.isin)}"><td class="l"><b>${esc(r.category)}</b> <span class="muted small">${esc(r.yahoo)}</span></td><td>${pc(r.r1m)}</td><td>${pc(r.r3m)}</td><td>${pc(r.r1y)}</td><td>${pc(r.mom12_1)}</td><td class="l">${fitBadge(etfFit(r.isin))}</td></tr>`).join("")}</tbody></table></div>`;
+    <div class="table-wrap"><table class="scr"><thead><tr><th class="l">ETF</th><th>1 s</th><th>1 m</th><th>3 m</th><th>1 a</th><th class="l">Trend</th><th class="l">Ha senso comprare?</th><th class="l">Per il mio portafoglio</th></tr></thead>
+    <tbody>${mine.map(r => `<tr data-etf="${esc(r.isin)}"><td class="l"><b>${esc(r.category)}</b> <span class="muted small">${esc(r.yahoo)}</span></td><td>${pc(r.r1w)}</td><td>${pc(r.r1m)}</td><td>${pc(r.r3m)}</td><td>${pc(r.r1y)}</td>
+      <td class="l trend-c">${trendWord(r)}${sparkSVG(r.spark)}</td><td class="l">${buyBadge(etfS.data.buy?.[r.isin]?.verdict || etfS.data.buy?.[r.isin]?.market.verdict)}</td><td class="l">${fitBadge(etfFit(r.isin))}</td></tr>`).join("")}</tbody></table></div>`;
 }
 document.addEventListener("click", e => {
+  const per = e.target.closest("[data-etfper]");
+  if (per) { etfS.per = per.dataset.etfper; LS.set("etfPeriod", etfS.per); etfS.sort = { key: etfS.per, dir: -1 }; return renderEtf(); }
   const g = e.target.closest("[data-etfgrp]");
   if (g) { etfS.grp = g.dataset.etfgrp; LS.set("etfGrp", etfS.grp); return renderEtf(); }
   const s = e.target.closest("[data-etfsort]");
@@ -2560,7 +2628,23 @@ function renderDiary() {
           <td>${pp(r.excess)}</td><td>${fNum(r.beat, 1)}%</td><td><b>${pp(r.vsAll)}</b></td><td>${pp(r.vsAllMedian)}</td><td class="l">${r.enough ? "casi sufficienti" : "<b>troppo pochi casi</b>"}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
       <p class="muted small">Rendimento del titolo dalla chiusura del giorno del verdetto a ${H?.sessions || ""} sedute dopo; «extra vs tutti» = rendimento meno la media di tutti i titoli del Nasdaq-100 salvati lo stesso giorno, come nel test dei pattern.</p>
       <h4 class="bt-h">Limiti: leggili prima di fidarti dei numeri</h4><ul class="why bt-lim">${D.limits.map(l => `<li><b>${esc(l.title)}.</b> ${esc(l.text)}</li>`).join("")}</ul>
-      <p class="muted small">Dati salvati in <code>portafoglio/diario/</code>, un file per seduta, solo su questo Mac. Ogni giorno contiene, per ogni titolo: prezzo, verdetto, livelli del piano e regole soddisfatte o no.</p></div>`;
+      <p class="muted small">Dati salvati in <code>portafoglio/diario/</code>, un file per seduta, solo su questo Mac. Ogni giorno contiene, per ogni titolo: prezzo, verdetto, livelli del piano e regole soddisfatte o no.</p></div>
+    ${etfDiaryHTML(D.etf, hzLab[diary.hz])}`;
+}
+// ETF diary (etf_buy.py): both verdicts of every ETF, measured against all the ETFs of the same day
+function etfDiaryHTML(E, hz) {
+  if (!E) return "";
+  const pp = v => `<span class="${sign(v)}">${ptPts(v)}</span>`;
+  const tab = (title, S) => {
+    const rows = Object.entries(S?.[hz] || {});
+    return `<h4 class="bt-h">${title}</h4>${rows.length ? `<div class="table-wrap"><table class="scr mini"><thead><tr><th class="l">Verdetto</th><th>Casi</th><th>Giorni</th><th>Rendimento medio</th><th>Extra vs tutti gli ETF</th><th>% volte meglio</th><th class="l">Affidabilità</th></tr></thead>
+      <tbody>${rows.map(([v, r]) => `<tr class="${r.enough ? "" : "muted"}"><td class="l">${buyBadge(v)}</td><td>${r.cases}</td><td>${r.days}</td><td>${fPct(r.mean, 2)}</td><td><b>${pp(r.extra)}</b></td><td>${fNum(r.beat, 1)}%</td>
+        <td class="l">${r.enough ? "casi sufficienti" : "<b>troppo pochi casi</b>"}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted small">Nessun risultato a ${hz} ancora.</p>`}`;
+  };
+  return `<details class="card fold"><summary><span class="small"><b>Diario degli ETF</b> («Ha senso comprare?»): ${E.days} ${E.days === 1 ? "giorno salvato" : "giorni salvati"}</span></summary>
+    ${tab("Verdetto per il tuo portafoglio", E.personal)}${tab("Solo mercato (senza il tuo portafoglio)", E.market)}
+    <p class="muted small">Rendimento dell'ETF su Borsa Italiana dalla chiusura del giorno del verdetto a ${hz}; «extra» = meno la media di tutti gli ETF salvati lo stesso giorno.
+      Servono almeno 100 casi in almeno 20 giorni diversi. Dati in <code>portafoglio/diario_etf/</code>, un file per seduta, mai modificato dopo.</p></details>`;
 }
 document.addEventListener("click", e => { const b = e.target.closest("[data-dz]"); if (b) { diary.hz = b.dataset.dz; renderDiary(); } });
 

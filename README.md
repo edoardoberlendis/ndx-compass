@@ -151,8 +151,31 @@ ridosso del massimo"); gli avvisi di calendario dentro le card (ora una piccola 
   In ritardo; calcolata dalla dashboard con le ultime chiusure, prima era nel Report), rendimenti dei settori pesati per capitalizzazione e peso di ogni settore nell'indice. Clic su una riga:
   compaiono i titoli di quel settore; di nuovo sulla stessa riga (o "Tutti i settori") si torna a tutti.
 - **ETF** (Ricerca → ETF, Fase 24; `etf.py`, `/api/etf`): 63 ETF ed ETC UCITS quotati in Italia (`etf_universe.json`, elenco
-  approvato l'8 ottobre 2026). I dati si calcolano una volta al giorno in background (circa un minuto la prima volta).
-  - **Radar dei temi** (visibile): le 5 categorie più forti e le 5 più deboli sul rendimento in euro a 3 mesi, con
+  approvato l'8 ottobre 2026). I dati si calcolano una volta al giorno in background (qualche minuto la prima volta) e
+  ancora una volta dopo le 18:00, quando le chiusure di Borsa Italiana sono definitive.
+  - **Periodi di osservazione**: 1 settimana, 2 settimane, 1 mese, 3 mesi, 6 mesi, 1 anno, 3 anni (3 anni solo con uno
+    storico vero o di ripiego segnalato con *). Il selettore in cima decide l'ordine di radar, tabella e mappa di
+    rotazione; la tabella mostra sempre 1 settimana, 1 mese, 3 mesi e 1 anno più il periodo scelto; il pannello tutti.
+  - **Trend** (regola stretta approvata): Rialzista se il prezzo è sopra la media 50 e la media 50 sopra la media 200,
+    Ribassista se il prezzo è sotto la media 50 e la media 50 sotto la media 200, Laterale altrimenti; con un
+    mini-grafico di 6 mesi e la linea della media 200, in tabella e nel pannello.
+  - **Ha senso comprare?** (`etf_buy.py`): un verdetto per ogni ETF, Entra ora / Entra su ritracciamento / Attendi /
+    Evita (Solo informazione per i prodotti a leva), con le regole sotto il verdetto e ✅/❌: E1 leva, E2 trend
+    ribassista, E3 si sovrappone al portafoglio, E4 patrimonio sotto 100 milioni → Evita; A0 trend non calcolabile, A1
+    trend laterale, A2 TER sopra 0,50%, A3 «neutro» per il portafoglio → Attendi; R1 rischio di essere arrivati tardi
+    alto → Entra su ritracciamento (entrata alla media 50); altrimenti Entra ora. Una seconda riga, «Solo mercato»,
+    applica le stesse regole senza E3 e A3. Sempre «non verificato»; il momentum 12-1 è solo un'informazione.
+  - **Piano operativo**: entrata, stop con la stessa regola delle azioni (media 50 o ultimo minimo meno mezzo ATR,
+    altrimenti 2 ATR), obiettivo a 2 volte il rischio, quantità dal rischio per operazione con un **tetto del 10% del
+    portafoglio per ogni ETF** («quantità limitata al 10% del portafoglio: con questo stop l'1% di rischio
+    richiederebbe il X%», più il rischio effettivo). Il tetto vale solo per gli ETF. Prezzi della stessa borsa dello
+    storico (Borsa Italiana o Xetra, sempre in euro: nessuno spread); se Milano e Xetra differiscono di oltre il 2% nei
+    dati di Yahoo la pagina avvisa di controllare il prezzo su Fineco (oggi succede al Brasile).
+  - **Diario degli ETF**: dopo la chiusura di Borsa Italiana i due verdetti di ogni ETF vanno in
+    `portafoglio/diario_etf/AAAA-MM-GG.json` (un file per seduta, mai riscritto), solo con chiusure definitive e
+    con il confronto con il portafoglio completo (correlazione compresa); anche dal job serale. Il Diario dei segnali
+    mostra come è andato ogni verdetto a 1, 3 e 6 mesi contro tutti gli ETF dello stesso giorno.
+  - **Radar dei temi** (visibile): le 5 categorie più forti e le 5 più deboli sul rendimento in euro del periodo scelto, con
     accanto il momentum 12-1. Per ognuna c'è un «perché» calcolato: i due primi titoli dell'ETF americano equivalente
     che spiegano almeno il 10% del movimento, la categoria con cui si è mossa negli ultimi 6 mesi (correlazione) e i
     titoli delle notizie quando Yahoo li fornisce. «Si è mosso come» compare solo con correlazione almeno 0,70; sotto, la
@@ -162,8 +185,8 @@ ridosso del massimo"); gli avvisi di calendario dentro le card (ora una piccola 
     sotto), più la perdita massima della storia più lunga disponibile (con la sua fonte) e la nota «tema giovane» sotto i
     5 anni; (c) se ha senso per il mio
     portafoglio. Per i temi c'è una ⓘ «satellite».
-  - **Tabella** con filtro per gruppo e ordinamento. Colonne: 1 m, 3 m, 1 a, 3 a, 12-1, volatilità, perdita massima a 3
-    anni, trend 50/200, TER, «Per il mio portafoglio». Rendimenti in euro.
+  - **Tabella** con filtro per gruppo e ordinamento. Colonne: 1 s, 1 m, 3 m, 1 a (più il periodo scelto), 12-1,
+    volatilità, perdita massima a 3 anni, trend, TER, «Ha senso comprare?», «Per il mio portafoglio». Rendimenti in euro.
   - **Cosa diversifica di più il tuo portafoglio** (riquadro in cima): investendo il 10% del portafoglio, i 3 ETF azionari
     e i 3 obbligazionari o difensivi (oro compreso) che abbassano di più la concentrazione più alta tra tecnologia, USA e
     dollaro. Esclusi i temi, i prodotti a leva e chi farebbe salire anche una sola delle tre; a parità di effetto viene
@@ -494,6 +517,7 @@ consecutivi, sovrapposizione, regole «si sovrappone / diversifica / neutro»).
 | `themes.json` | Temi personalizzati (elenchi di ticker) |
 | `etf_universe.py`, `etf_universe.json` | Elenco dei 63 ETF ed ETC della scheda ETF con i dati di justETF (fonte e data); rilanciarlo quando i dati hanno più di 6 mesi |
 | `etf_holdings.py` | Primi 10 titoli degli ETF (file degli emittenti, ETF americano sullo stesso indice, justETF come ultima risorsa) e confronto dei titoli per ISIN o nome |
+| `etf_buy.py` | «Ha senso comprare?» per gli ETF: regole, piano con tetto del 10%, diario degli ETF in `portafoglio/diario_etf/` |
 | `etf.py` | Scheda Ricerca → ETF: rendimenti in euro, radar dei temi, rischio di essere arrivati tardi, «Ha senso per il mio portafoglio?» |
 | `etf_backtest.py` | Test delle regole di momentum sulle categorie (a mano, `reports/etf_momentum.json`) |
 | `static/` | La pagina web (HTML, CSS, JavaScript) |

@@ -827,6 +827,7 @@ def run_daily_job():
         snap, infos = store.snapshot, dict(store.infos)
     history.record(portfolio.snapshot(snap, infos))
     save_signal_diary()
+    save_etf_diary(wait=True)
     now = datetime.now(ET)
     rid = f"{now:%Y-%m-%d}_close"
     after_close = now.hour * 60 + now.minute >= market_calendar.close_minute(now)
@@ -930,6 +931,7 @@ def worker():
             store.build()
             portfolio.refresh()
             save_signal_diary()
+            save_etf_diary()
             macro_calendar.refresh()                             # does real work at most once a day (more on release days)
         except Exception:
             log.exception("refresh failed")
@@ -1362,18 +1364,30 @@ def api_earnings():
 
 @app.route("/api/etf")
 def api_etf():
-    """Ricerca → ETF (etf.py): public data of the day, plus "Ha senso per il mio portafoglio?" computed now in memory."""
+    """Ricerca → ETF (etf.py): public data of the day, plus "Ha senso per il mio portafoglio?" and "Ha senso comprare?"
+    computed now in memory."""
     import etf
-    import risk
     d = etf.public()
     if not d:
         return jsonify(status="loading", error=etf._state["error"])
     out = {k: v for k, v in d.items() if not k.startswith("_")}
-    pf = portfolio_view()
+    out.update(etf_personal(d, portfolio_view()))
+    out["status"] = "ok"
+    return app.response_class(json.dumps(out, default=clean), mimetype="application/json")
+
+
+def etf_personal(d, pf):
+    """The personal part of the ETF tab (memory only): fit, diversify, buy verdicts with plan and quantity."""
+    import etf
+    import etf_buy
+    import etf_holdings
+    import risk
+    out = {"portfolioLoaded": bool(pf.get("positions"))}
+    fits = {}
+    total = (pf.get("totals") or {}).get("value")
     if pf.get("positions") and not pf.get("error"):
         with store.lock:
             snap = store.snapshot
-        import etf_holdings
         idx = {r["ticker"]: (r.get("name") or r["ticker"], r.get("weight") or 0) for r in (snap or {}).get("stocks", [])}
         tickers = [p["ticker"] for p in pf["positions"] if p.get("ticker")]
         closes = risk.history(tickers)                    # may still be downloading: correlation then shown as "in calcolo"
@@ -1382,13 +1396,54 @@ def api_etf():
         my_funds = [p["isin"] for p in pf["positions"] if portfolio.is_fund(p["kind"])
                     and p.get("sector") != portfolio.LOOK_THROUGH_NDX and p.get("isin") not in listed]
         holdings = {**d["_holdings"], **etf_holdings.held(my_funds)}   # my funds outside the list: portafoglio/, background
-        out["fit"], out["fitMissing"] = etf.fit(d["rows"], pf, idx, port_w, d["_weekly"], holdings)
-        out["diversify"] = etf.diversify(d["rows"], out["fit"])
+        fits, out["fitMissing"] = etf.fit(d["rows"], pf, idx, port_w, d["_weekly"], holdings)
+        out["fit"] = fits
+        out["diversify"] = etf.diversify(d["rows"], fits)
         out["corrReady"] = closes is not None
         out["pricesMissing"] = closes is not None and len(port_w) <= 30   # downloaded but unusable: correlation not computed
-    out["status"] = "ok"
-    out["portfolioLoaded"] = bool(pf.get("positions"))
-    return app.response_class(json.dumps(out, default=clean), mimetype="application/json")
+    import rules
+    risk_pct = rules.load().get("tradeRisk") or 1.0
+    usable = out.get("corrReady") and not out.get("pricesMissing")       # without correlation the fit is not complete
+    out["buy"] = {r["isin"]: etf_buy.decide(r, fits.get(r["isin"]) if usable else None, total, risk_pct) for r in d["rows"]}
+    out["fitComplete"] = bool(usable)
+    return out
+
+
+def save_etf_diary(wait=False):
+    """After the close of Borsa Italiana: both verdicts of every ETF in portafoglio/diario_etf/ (etf_buy.py), once per
+    session and never rewritten. Only with final closes and a complete "per il mio portafoglio" (correlation included);
+    otherwise it tries again at the next round. wait=True (evening job): build the data now and wait for the prices."""
+    try:
+        import etf
+        import etf_buy
+        d = etf.public()
+        if wait:
+            for _ in range(60):
+                d = etf.public()
+                if d and (d.get("session") or {}).get("closed") and not etf._state["running"]:
+                    break
+                time.sleep(5)
+        if not d or not (d.get("session") or {}).get("closed"):
+            return
+        day = d["session"]["day"]
+        if etf_buy.exists(day):
+            return
+        pf = portfolio_view()
+        if pf.get("resolving"):
+            return
+        for _ in range(36 if wait else 1):
+            p = etf_personal(d, pf)
+            if p.get("fitComplete") or not p["portfolioLoaded"]:
+                break
+            time.sleep(5)
+        if p["portfolioLoaded"] and not p.get("fitComplete"):
+            log.info("ETF diary: correlation with my portfolio not ready yet, retry later")
+            return
+        entries = [etf_buy.entry(r, p["buy"][r["isin"]]) for r in d["rows"] if r.get("planLevels")]
+        if etf_buy.save(day, entries):
+            log.info("ETF diary: %d ETFs saved for %s", len(entries), day)
+    except Exception:
+        log.exception("ETF diary not saved")
 
 
 @app.route("/api/diary")
@@ -1404,6 +1459,11 @@ def api_diary():
     closes = {t: daily[t]["Close"].dropna() for t in tickers if t in daily}
     res = diary.results(closes, bench["Close"].dropna())
     res["missing"] = diary.missing(last_closed_session())
+    import etf
+    import etf_buy
+    e = etf._state.get("data") or {}
+    res["etf"] = {"days": len(etf_buy.days()), "personal": etf_buy.stats(e.get("_close") or {}, "verdict"),
+                  "market": etf_buy.stats(e.get("_close") or {}, "market")}
     return app.response_class(json.dumps(res, default=clean), mimetype="application/json")
 
 
