@@ -41,7 +41,8 @@ LIMITS = [
 ]
 
 _lock = threading.Lock()
-_hist = {"day": None, "tickers": None, "closes": {}, "loading": False, "error": None}
+_hist = {"day": None, "tickers": None, "closes": {}, "loading": False, "error": None, "failedAt": 0.0}
+RETRY_MIN = 15            # an empty or almost empty download is tried again after 15 minutes, not kept for the whole day
 
 
 # ---------------------------------------------------------------- prices (memory only)
@@ -52,8 +53,13 @@ def _load_history(tickers):
         t0 = time.time()
         data = download(tickers + [portfolio.FX, BENCH], period="2y", interval="1d")
         closes = {t: df["Close"].dropna() for t, df in data.items() if "Close" in df and len(df["Close"].dropna())}
-        with _lock:
-            _hist.update(day=datetime.now().date(), tickers=tuple(tickers), closes=closes, error=None)
+        if usable(closes, tickers):
+            with _lock:
+                _hist.update(day=datetime.now().date(), tickers=tuple(tickers), closes=closes, error=None, failedAt=0.0)
+        else:
+            with _lock:
+                _hist.update(error=f"prezzi scaricati per {len(closes)} titoli su {len(tickers) + 2}", failedAt=time.time())
+            log.warning("portfolio risk: only %d price series of %d, trying again in %d minutes", len(closes), len(tickers) + 2, RETRY_MIN)
         log.info("portfolio risk: %d price series in %.1fs", len(closes), time.time() - t0)
     except Exception as e:
         log.exception("portfolio risk history failed")
@@ -64,13 +70,21 @@ def _load_history(tickers):
             _hist["loading"] = False
 
 
+def usable(closes, tickers):
+    """A download is kept for the day only if it has the exchange rate, QQQ and at least half of the positions."""
+    return portfolio.FX in closes and BENCH in closes and sum(t in closes for t in tickers) >= max(1, len(tickers) / 2)
+
+
 def history(tickers):
-    """{ticker: closes} for today, or None while the download runs in the background (once a day, or when positions change)."""
+    """{ticker: closes} for today, or None while the download runs in the background (once a day, or when positions
+    change). After an empty or incomplete download: {} (prices not available) until the new try 15 minutes later."""
     tickers = sorted(set(tickers))
     with _lock:
         fresh = _hist["day"] == datetime.now().date() and _hist["tickers"] == tuple(tickers)
         if fresh:
             return _hist["closes"]
+        if _hist["failedAt"] and time.time() - _hist["failedAt"] < RETRY_MIN * 60:
+            return {}
         if not _hist["loading"]:
             _hist["loading"] = True
             threading.Thread(target=_load_history, args=(tickers,), daemon=True).start()
@@ -215,6 +229,8 @@ def snapshot(pf):
     closes = history(tickers)
     if closes is None:
         return {"status": "loading"}
+    if not closes:
+        return {"status": "error", "error": f"prezzi storici non disponibili da Yahoo, nuovo tentativo tra {RETRY_MIN} minuti"}
     try:
         return compute(pf, closes)
     except Exception as e:

@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 
 import etf
+import etf_holdings
 
 
 def days(n, end=None):
@@ -80,9 +81,71 @@ def test_terciles_and_months_in_tercile():
     assert etf.months_in_tercile(hist, "Z") == 0
 
 
-def test_overlap_takes_the_smaller_weight_and_matches_foreign_listings():
-    pts, common = etf.overlap({"NVDA": 0.10, "ASML.AS": 0.05, "XYZ": 0.20}, {"NVDA": 0.04, "ASML": 0.08})
-    assert round(pts, 6) == 9.0 and common == ["NVDA", "ASML"]
+def test_overlap_takes_the_smaller_weight_and_gives_the_share_already_owned():
+    top = [{"key": "nvidia", "name": "NVIDIA", "weight": 0.10}, {"key": "asml", "name": "ASML", "weight": 0.05},
+           {"key": "xyz", "name": "XYZ", "weight": 0.20}]
+    pts, share, common = etf.overlap(top, {"nvidia": 0.04, "asml": 0.08})
+    assert round(pts, 6) == 9.0 and round(share, 6) == 15.0
+    assert [c["name"] for c in common] == ["NVIDIA", "ASML"] and round(common[0]["mine"], 6) == 4.0
+
+
+def test_company_key_matches_names_of_different_sources():
+    k = etf_holdings.company_key
+    assert k("Samsung Electronics Co., Ltd.") == k("SAMSUNG ELECTRONICS LTD") == k("SAMSUNG ELECTRONICS NON VOTING PRE") == "samsung electronics"
+    assert k("ALPHABET INC CLASS A") == k("Alphabet Inc. Class C") == "alphabet"
+    assert k("NVIDIA Corp") == k("NVIDIA") == "nvidia"
+    assert k("SIEMENS N AG") == "siemens"
+    assert k("Taiwan Semiconductor Manufacturing Co Ltd ADR") == k("TAIWAN SEMICONDUCTOR MANUFACTURING") == "taiwan semiconductor"
+    assert k("Petróleo Brasileiro SA") == "petroleo brasileiro"
+
+
+def test_share_classes_of_one_company_are_merged():
+    rows = [{"name": "Samsung Electronics Co., Ltd.", "isin": "KR1", "weight": 0.25},
+            {"name": "SK hynix, Inc.", "isin": "KR2", "weight": 0.16},
+            {"name": "Samsung Electronics Co., Ltd. Pref", "isin": "KR3", "weight": 0.03}]
+    m = etf_holdings.merge_classes(rows)
+    assert [x["key"] for x in m] == ["samsung electronics", "sk hynix"]
+    assert round(m[0]["weight"], 6) == 0.28 and m[0]["isins"] == ["KR1", "KR3"]
+
+
+def test_lookthrough_by_isin_name_index_and_leverage():
+    import portfolio
+    pf = {"totals": {"value": 1000}, "positions": [
+        {"isin": "KR1", "name": "SAMSUNG ELEC", "kind": "Azione", "value": 100},                       # direct stock: matched by ISIN
+        {"isin": "IE0", "name": "Fondo finto", "kind": "ETF", "value": 200, "leverage": 3},            # fund with holdings, 3x
+        {"isin": "IE9", "name": "Fondo senza dati", "kind": "ETF", "value": 100},
+        {"isin": "IE5", "name": "Nasdaq finto", "kind": "ETF", "value": 600, "sector": portfolio.LOOK_THROUGH_NDX}]}
+    holdings = {"IE0": {"top": [{"key": "sk hynix", "name": "SK hynix", "weight": 0.5, "isins": ["KR2"]},
+                                {"key": "samsung electronics", "name": "Samsung", "weight": 0.1, "isins": ["KR1"]}]}}
+    mine, missing = etf.my_lookthrough(pf, {"NVDA": ("NVIDIA Corp", 10.0)}, holdings)
+    assert round(mine["samsung electronics"], 6) == round(0.1 + 0.2 * 3 * 0.1, 6)
+    assert round(mine["sk hynix"], 6) == 0.3 and round(mine["nvidia"], 6) == 0.06
+    assert missing == ["IE9"]
+
+
+def test_moves_with_only_above_070():
+    assert etf.moves_with_text("Messico", 0.72).startswith("negli ultimi 6 mesi si è mosso come Messico")
+    assert etf.moves_with_text("Messico", 0.39) == "non si muove in modo simile a nessun'altra categoria (correlazione massima 0,39 con Messico)"
+
+
+def test_diversify_rules():
+    before = conc(60, 70)
+    def fit(tech, usa, usd):
+        return {"before": before, "after": {"tecnologia": 0.9 * 60 + 0.1 * tech, "USA": 0.9 * 70 + 0.1 * usa, "dollaro (stima)": 0.9 * 70 + 0.1 * usd}}
+    rows = [{"isin": "A", "category": "Europa", "group": "Aree e paesi", "ter": 0.12},
+            {"isin": "B", "category": "Giappone", "group": "Aree e paesi", "ter": 0.20},
+            {"isin": "C", "category": "Sanità USA", "group": "Settori", "ter": 0.15},           # raises USA: out
+            {"isin": "D", "category": "Robotica", "group": "Temi", "ter": 0.40},                # theme: out
+            {"isin": "E", "category": "Monetario euro", "group": "Obbligazionari", "ter": 0.10},
+            {"isin": "F", "category": "Oro (ETC)", "group": "Oro e materie prime", "ter": 0.12},  # raises the dollar: out
+            {"isin": "G", "category": "Argento (ETC)", "group": "Oro e materie prime", "ter": 0.20},
+            {"isin": "H", "category": "Europa", "group": "Aree e paesi", "ter": 0.07}]           # same category as A
+    fits = {"A": fit(5, 0, 0), "B": fit(10, 0, 0), "C": fit(0, 100, 100), "D": fit(0, 0, 0), "E": fit(0, 0, 0),
+            "F": fit(0, 0, 100), "G": fit(0, 0, 0), "H": fit(5, 10, 10)}
+    out = etf.diversify(rows, fits)
+    assert [x["isin"] for x in out["equity"]] == ["A", "B"]          # A lowers USA and dollar more than H, same tech
+    assert [x["isin"] for x in out["defensive"]] == ["E"]            # gold raises the dollar; silver is not defensive
+    assert out["equity"][0]["top"] == "USA"
 
 
 def conc(tech, usa):
@@ -99,3 +162,29 @@ def test_fit_verdict_rules():
     assert etf.fit_verdict(5, 0.5, before, conc(40.8, 66))[0] == "neutro"                 # tech rises by more than 0.5
     verdict, why = etf.fit_verdict(None, None, before, before)
     assert verdict == "neutro" and "non calcolabile" in why
+
+
+def test_holdings_entries_are_refreshed_by_source_age():
+    from datetime import date
+    today = date(2026, 10, 10)
+    assert etf_holdings.stale(None, today)
+    assert not etf_holdings.stale({"fetched": "2026-09-20", "kind": "emittente"}, today)
+    assert etf_holdings.stale({"fetched": "2026-09-01", "kind": "emittente"}, today)
+    assert not etf_holdings.stale({"fetched": "2026-06-01", "kind": "justETF"}, today)
+    assert not etf_holdings.stale({"fetched": "2026-01-01", "none": etf_holdings.NO_STOCKS_REASON}, today)
+    assert etf_holdings.stale({"fetched": "2026-10-01", "none": "composizione non disponibile"}, today)
+
+
+def test_xlsx_reader_reads_shared_strings_and_numbers():
+    import io, zipfile
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, "w") as z:
+        z.writestr("xl/sharedStrings.xml", "<sst><si><t>ISIN</t></si><si><t>Percent of Fund</t></si><si><t>US0000000001</t></si></sst>")
+        z.writestr("xl/worksheets/sheet1.xml", '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>'
+                                               '<row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2"><v>1.25</v></c></row></sheetData></worksheet>')
+    assert etf_holdings.xlsx_rows(b.getvalue()) == [["ISIN", "Percent of Fund"], ["US0000000001", "1.25"]]
+
+
+def test_launch_date_and_italian_dates():
+    assert etf.launch_iso("24 October 2018") == "2018-10-24" and etf.launch_iso(None) is None
+    assert etf_holdings._it_date("08/10/2026") == "2026-10-08" == etf_holdings._it_date("08-Oct-2026")

@@ -13,6 +13,7 @@ def private_folder(tmp_path, monkeypatch):
     """portafoglio/ is replaced by an empty temporary folder in every test."""
     import actions
     import diary
+    import etf_holdings
     import history
     import portfolio
     import rules
@@ -24,4 +25,6 @@ def private_folder(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "FLOWS", str(tmp_path / "storico" / "flussi.json"))
     monkeypatch.setattr(diary, "DIR", str(tmp_path / "diario"))
     monkeypatch.setattr(diary, "EXCLUDED", str(tmp_path / "diario" / "esclusi.json"))
+    monkeypatch.setattr(etf_holdings, "PRIVATE", str(tmp_path / "etf_composizioni.json"))
+    monkeypatch.setattr(etf_holdings, "PUBLIC", str(tmp_path / "etf_holdings.json"))
     return tmp_path

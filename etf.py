@@ -34,6 +34,7 @@ H = {"r1m": 21, "r3m": 63, "r6m": 126, "r1y": 252, "r3y": 756}
 LATE_DAYS = 1260                 # history for the "arrived late" percentile: the last 5 years (or what is available)
 LATE_HIGH, LATE_MID = 90, 70     # percentiles of the distance from the 200-day average (approved by the user)
 YOUNG_YEARS = 5
+MOVES_WITH = 0.70               # "si è mosso come" only with a correlation of at least 0.70 (approved)
 MIN_SHARE = 10.0                 # the radar names the first two holdings only if they explain at least 10% of the move
 FIT_SHARE = 0.10                 # "if I invested 10% of the portfolio"
 OVERLAP_HIGH, OVERLAP_LOW = 25.0, 10.0      # points (approved)
@@ -91,6 +92,14 @@ def pick_history(mi, de, proxy_eur, labels):
         if s is not None and len(s.dropna()) > 60:
             return s.dropna(), lab + " (storico incompleto)"
     return None, None
+
+
+def launch_iso(text):
+    """'24 October 2018' (justETF) -> '2018-10-24', or None."""
+    try:
+        return datetime.strptime(str(text).strip(), "%d %B %Y").date().isoformat()
+    except (TypeError, ValueError):
+        return None
 
 
 def ret(s, n):
@@ -156,15 +165,25 @@ def base(sym):
 
 
 def overlap(etf_top, mine):
-    """Sum over the ETF's top holdings of min(weight in the ETF, weight in my portfolio), in points.
-    etf_top: {symbol: weight 0-1}; mine: {base symbol: weight 0-1}. Returns (points, [common symbols])."""
-    pts, common = 0.0, []
-    for sym, w in etf_top.items():
-        m = mine.get(base(sym), 0.0)
+    """Over the ETF's first 10 holdings: sum of min(weight in the ETF, weight in my portfolio) in points (the rule), and
+    the share of the ETF made of companies I already own (information only, approved as option (a)).
+    etf_top: [{"key", "name", "weight" 0-1}]; mine: {company key: weight 0-1}.
+    Returns (points, share %, [{"name", "etf" %, "mine" %}])."""
+    pts, share, common = 0.0, 0.0, []
+    for h in etf_top:
+        m = mine.get(h["key"], 0.0)
         if m > 0:
-            pts += min(w, m)
-            common.append(base(sym))
-    return pts * 100, common
+            pts += min(h["weight"], m)
+            share += h["weight"]
+            common.append({"name": h["name"], "etf": h["weight"] * 100, "mine": m * 100})
+    return pts * 100, share * 100, common
+
+
+def moves_with_text(category, c):
+    """The radar sentence on the most similar category of the last 6 months (threshold MOVES_WITH)."""
+    if round(c, 2) >= MOVES_WITH:                 # compared as shown (0,698 is written 0,70)
+        return f"negli ultimi 6 mesi si è mosso come {category} (correlazione {it(c, 2)})"
+    return f"non si muove in modo simile a nessun'altra categoria (correlazione massima {it(c, 2)} con {category})"
 
 
 def fit_verdict(ov, corr, before, after):
@@ -225,6 +244,12 @@ def build_public():
     for s in close.values():
         s.index = pd.to_datetime(s.index).tz_localize(None).normalize()
     eurusd = close.get("EURUSD=X")
+    import etf_holdings
+    try:
+        hold = etf_holdings.public(U)
+    except Exception:
+        log.exception("ETF holdings failed")
+        hold = {}
     pinfo = {}
     for p in proxies:
         pinfo[p] = _proxy_info(p)
@@ -239,6 +264,7 @@ def build_public():
         s, src = pick_history(s_mi, s_de, prox_eur, (f"Borsa Italiana ({j.get('tickerMI')}.MI)", f"Xetra ({j.get('tickerDE')}.DE)",
                                                      f"ETF americano {e.get('usProxy')} convertito in euro con il cambio giornaliero"))
         longest = max([x for x in (s, prox_eur) if x is not None], key=len, default=None)
+        long_src = (f"ETF americano {e.get('usProxy')} in euro" if longest is prox_eur and longest is not s else src)
         r = {"isin": e["isin"], "name": j.get("name"), "category": e["category"], "group": e["group"], "yahoo": e.get("yahoo"),
              "historySource": src, "usProxy": e.get("usProxy"), "underlyingCurrency": e["underlyingCurrency"], "note": e.get("note"),
              "ter": j.get("ter"), "sizeEurM": j.get("sizeEurM"), "distribution": j.get("distribution"), "replication": j.get("replication"),
@@ -247,7 +273,10 @@ def build_public():
                          "top10": j.get("top10"), "countries": j.get("countries"), "sectors": j.get("sectors")},
              "stale": (date.today() - date.fromisoformat(j["date"])).days > STALE_DAYS if j.get("date") else True,
              "pe": (pinfo.get(e.get("usProxy")) or {}).get("pe"),
-             "historyYears": round(len(longest) / 252, 1) if longest is not None else None}
+             "historyYears": round(len(s) / 252, 1) if s is not None else None,               # this ETF (or its fallback)
+             "fallback": bool(src) and not src.startswith("Borsa Italiana") or "incompleto" in (src or ""),
+             "launchIso": launch_iso(j.get("launch")),
+             "longYears": round(len(longest) / 252, 1) if longest is not None else None, "longSource": long_src}
         if s is not None:
             r.update({k: ret(s, n) for k, n in H.items()})
             r["mom12_1"] = momentum_12_1(s)
@@ -268,7 +297,9 @@ def build_public():
         tech = next((p for n, p in j.get("sectors") or [] if n == "Technology"), 0.0)
         usa = next((p for n, p in j.get("countries") or [] if n == "United States"), 0.0)
         r["mix"] = {"tech": tech, "usa": usa, "usd": 0.0 if "hedged" in e["underlyingCurrency"] else (100.0 if e["underlyingCurrency"] == "USD" else usa)}
-        r["top"] = (pinfo.get(e.get("usProxy")) or {}).get("top") or {}
+        h = hold.get(e["isin"]) or {}
+        r["holdings"] = {k: h.get(k) for k in ("label", "source", "asOf", "fetched", "none", "top")}
+        r["top"] = (pinfo.get(e.get("usProxy")) or {}).get("top") or {}     # US equivalent: only for the radar's "why"
         r["topNames"] = (pinfo.get(e.get("usProxy")) or {}).get("names") or {}
         rows.append(r)
     # ---- categories: the first ETF of each category represents it
@@ -306,7 +337,7 @@ def build_public():
             radar[side].append(_radar_item(c, rep[c], corr, close, news))
     out = {"generated": datetime.now().isoformat(timespec="seconds"), "rows": rows, "radar": radar, "rotation": rot,
            "test": _test_summary(), "universeDate": max((r["justetf"]["date"] or "") for r in rows), "elapsed": round(time.time() - t0, 1),
-           "_weekly": weekly_eur(series)}               # kept in memory for the correlation with my portfolio (not sent)
+           "_weekly": weekly_eur(series), "_holdings": hold}               # kept in memory for the correlation with my portfolio (not sent)
     return out
 
 
@@ -316,7 +347,8 @@ def _radar_item(cat, r, corr, close, news):
     from server import download
     item = {"category": cat, "isin": r["isin"], "r3m": r["r3m"], "mom12_1": r.get("mom12_1"), "momTercile": r.get("momTercile"),
             "momMonths": r.get("momMonths"), "late": r.get("late"), "maxDDhist": r.get("maxDDhist"),
-            "young": (r.get("historyYears") or 0) < YOUNG_YEARS, "historyYears": r.get("historyYears"), "group": r["group"]}
+            "young": (r.get("longYears") or 0) < YOUNG_YEARS, "longYears": r.get("longYears"), "longSource": r.get("longSource"),
+            "fallback": r.get("fallback"), "group": r["group"]}
     parts = [f"{cat}: {sgn(r['r3m'])} in 3 mesi"]
     if r.get("mom12_1") is not None:
         parts[0] += f" (12-1 mesi: {sgn(r['mom12_1'])})"
@@ -348,7 +380,7 @@ def _radar_item(cat, r, corr, close, news):
         others = corr[cat].drop(cat).dropna().sort_values(ascending=False)
         if len(others):
             item["movesWith"] = {"category": others.index[0], "corr": float(others.iloc[0])}
-            parts.append(f"negli ultimi 6 mesi si è mosso come {others.index[0]} (correlazione {it(float(others.iloc[0]), 2)})")
+            parts.append(moves_with_text(others.index[0], float(others.iloc[0])))
     item["sentence"] = ". ".join(p[:1].upper() + p[1:] for p in parts) + "."
     return item
 
@@ -393,40 +425,48 @@ def _job():
 
 # ---------------------------------------------------------------- personal part: "Ha senso per il mio portafoglio?"
 
-def my_lookthrough(pf, index_weights, universe_tops):
-    """{base symbol: weight 0-1} of my portfolio looking inside the funds: direct stocks; ETFs on the Nasdaq-100 with the
-    index weights (leverage counted); my other ETFs of the list through their first 10 holdings."""
+def my_lookthrough(pf, index, holdings):
+    """({company key: weight 0-1}, [ISIN of my funds without a composition]) of my portfolio looking inside the funds:
+    direct stocks (by ISIN when an ETF lists the same ISIN, otherwise by name); ETFs on the Nasdaq-100 with the index
+    weights; every other fund through its first 10 holdings (etf_holdings.py). Leverage counted.
+    index: {ticker: (name, weight %)}; holdings: {isin: entry of etf_holdings}."""
     import portfolio
+    from etf_holdings import company_key
     total = (pf.get("totals") or {}).get("value") or 0
-    out = {}
+    out, missing = {}, []
     if not total:
-        return out
+        return out, missing
+    by_isin = {i: h["key"] for e in holdings.values() for h in e.get("top") or [] for i in h.get("isins") or []}
+    add = lambda k, v: out.__setitem__(k, out.get(k, 0) + v) if k else None
     for p in pf.get("positions") or []:
         w = p["value"] / total * (p.get("leverage") or 1)
         if p.get("sector") == portfolio.LOOK_THROUGH_NDX:
-            for t, iw in index_weights.items():
-                out[base(t)] = out.get(base(t), 0) + w * iw / 100
-        elif p.get("isin") in universe_tops:
-            for s, iw in universe_tops[p["isin"]].items():
-                out[base(s)] = out.get(base(s), 0) + w * iw
-        elif not portfolio.is_fund(p["kind"]) and p.get("ticker"):
-            out[base(p["ticker"])] = out.get(base(p["ticker"]), 0) + w
-    return out
+            for name, iw in index.values():
+                add(company_key(name), w * iw / 100)
+        elif portfolio.is_fund(p["kind"]):
+            top = (holdings.get(p.get("isin")) or {}).get("top")
+            if top:
+                for h in top:
+                    add(h["key"], w * h["weight"])
+            elif not (holdings.get(p.get("isin")) or {}).get("none", "").startswith("nessuna azione"):
+                missing.append(p.get("isin"))
+        else:
+            add(by_isin.get(p.get("isin")) or company_key(p.get("name") or p.get("ticker")), w)
+    return out, missing
 
 
-def fit(rows, pf, index_weights, port_weekly, etf_weekly):
-    """{isin: {...}} "Ha senso per il mio portafoglio?" for every ETF."""
+def fit(rows, pf, index, port_weekly, etf_weekly, holdings):
+    """{isin: {...}} "Ha senso per il mio portafoglio?" for every ETF, and the ISINs of my funds without a composition."""
     conc = (pf.get("concentration") or {})
     pick = lambda dim, name: next((r.get("expPct") or 0 for r in conc.get(dim, []) if r["name"] == name), 0.0)
     before = {"tecnologia": pick("sector", "Tecnologia"), "USA": pick("country", "USA")}
     before["dollaro (stima)"] = before["USA"]            # approximation: the dollar share follows the US share
-    tops = {r["isin"]: r.get("top") or {} for r in rows}
-    mine = my_lookthrough(pf, index_weights, tops)
+    mine, missing = my_lookthrough(pf, index, holdings)
     held = {p["isin"]: p for p in pf.get("positions") or []}
     out = {}
     for r in rows:
-        top = r.get("top") or {}
-        ov, common = overlap(top, mine) if top else (None, [])
+        top = (holdings.get(r["isin"]) or {}).get("top")
+        ov, share, common = overlap(top, mine) if top else (None, None, [])
         c = None
         w = etf_weekly.get(r["isin"])
         if w is not None and len(port_weekly) > 30:
@@ -443,9 +483,45 @@ def fit(rows, pf, index_weights, port_weekly, etf_weekly):
             notes.append(f"costoso: TER {it(r['ter'], 2)}%, sopra lo {it(TER_HIGH, 2)}%")
         if r.get("sizeEurM") is not None and r["sizeEurM"] < SIZE_SMALL:
             notes.append("patrimonio sotto i 100 milioni: rischio di chiusura e spread più alti")
-        out[r["isin"]] = {"verdict": verdict, "why": why, "overlap": ov, "common": common[:10], "corr": c,
+        out[r["isin"]] = {"verdict": verdict, "why": why, "overlap": ov, "share": share, "common": common, "corr": c,
                           "before": before, "after": after, "notes": notes, "held": r["isin"] in held,
                           "heldWeight": held[r["isin"]]["value"] / ((pf.get("totals") or {}).get("value") or 1) * 100 if r["isin"] in held else None}
+    return out, missing
+
+
+EQUITY_GROUPS = ("Globali", "Aree e paesi", "Settori", "Stili e fattori")
+DEFENSIVE = lambda r: r["group"] == "Obbligazionari" or r["category"].startswith("Oro")
+DIVERSIFY_N = 3
+
+
+def diversify(rows, fits):
+    """"Cosa diversifica di più il tuo portafoglio" (rules approved by the user): investing 10% of the portfolio, the ETFs
+    that lower most the highest of tecnologia / USA / dollaro. Left out: themes, leveraged products, and every ETF that
+    would raise any of the three. Same effect on the highest (to 0.1 points) -> the one lowering more the other two,
+    then the lower TER. One ETF per category. Two lists: 3 equity ETFs, 3 bond or defensive ones (gold included).
+    An effect on the portfolio, not a forecast of returns."""
+    cands = []
+    for r in rows:
+        f = fits.get(r["isin"])
+        if not f or r["group"] == "Temi" or (r.get("leverage") or 1) != 1:
+            continue
+        d = {k: f["after"][k] - f["before"][k] for k in f["before"]}
+        if any(v > 0 for v in d.values()):
+            continue
+        top = max(f["before"], key=f["before"].get)
+        cands.append((round(d[top], 1), round(sum(v for k, v in d.items() if k != top), 1), r.get("ter") or 9, r, d, top, f))
+    cands.sort(key=lambda c: c[:3])
+    out = {"equity": [], "defensive": []}
+    seen = set()
+    for _, _, _, r, d, top, f in cands:
+        side = "equity" if r["group"] in EQUITY_GROUPS else "defensive" if DEFENSIVE(r) else None
+        if not side or r["category"] in seen or len(out[side]) >= DIVERSIFY_N:
+            continue
+        seen.add(r["category"])
+        parts = [f"{k} da {it(f['before'][k])}% a {it(f['after'][k])}%" for k in f["before"]]
+        out[side].append({"isin": r["isin"], "category": r["category"], "name": r.get("name"), "delta": d, "top": top,
+                          "ter": r.get("ter"), "sizeEurM": r.get("sizeEurM"),
+                          "sentence": f"Con il 10% del portafoglio in questo ETF: {', '.join(parts)}."})
     return out
 
 

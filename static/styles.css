@@ -817,3 +817,6 @@ table.pf tr.lev td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 .etf-tbl td, .etf-tbl th { white-space: nowrap; }
 .etf-tbl td.l { white-space: normal; min-width: 220px; }
 .etf-d p { line-height: 1.6; }
+.fb { color: var(--ink-2); font-weight: 700; margin-left: 1px; }
+.div-tbl td.l { min-width: 240px; white-space: normal; }
+.div-tbl tbody tr { cursor: pointer; }

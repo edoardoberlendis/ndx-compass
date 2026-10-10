@@ -1373,12 +1373,19 @@ def api_etf():
     if pf.get("positions") and not pf.get("error"):
         with store.lock:
             snap = store.snapshot
-        idx = {r["ticker"]: r.get("weight") or 0 for r in (snap or {}).get("stocks", [])}
+        import etf_holdings
+        idx = {r["ticker"]: (r.get("name") or r["ticker"], r.get("weight") or 0) for r in (snap or {}).get("stocks", [])}
         tickers = [p["ticker"] for p in pf["positions"] if p.get("ticker")]
         closes = risk.history(tickers)                    # may still be downloading: correlation then shown as "in calcolo"
         port_w = risk.portfolio_weekly(pf, closes) if closes else pd.Series(dtype=float)
-        out["fit"] = etf.fit(d["rows"], pf, idx, port_w, d["_weekly"])
+        listed = {r["isin"] for r in d["rows"]}
+        my_funds = [p["isin"] for p in pf["positions"] if portfolio.is_fund(p["kind"])
+                    and p.get("sector") != portfolio.LOOK_THROUGH_NDX and p.get("isin") not in listed]
+        holdings = {**d["_holdings"], **etf_holdings.held(my_funds)}   # my funds outside the list: portafoglio/, background
+        out["fit"], out["fitMissing"] = etf.fit(d["rows"], pf, idx, port_w, d["_weekly"], holdings)
+        out["diversify"] = etf.diversify(d["rows"], out["fit"])
         out["corrReady"] = closes is not None
+        out["pricesMissing"] = closes is not None and len(port_w) <= 30   # downloaded but unusable: correlation not computed
     out["status"] = "ok"
     out["portfolioLoaded"] = bool(pf.get("positions"))
     return app.response_class(json.dumps(out, default=clean), mimetype="application/json")

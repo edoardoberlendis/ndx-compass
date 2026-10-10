@@ -155,17 +155,30 @@ ridosso del massimo"); gli avvisi di calendario dentro le card (ora una piccola 
   - **Radar dei temi** (visibile): le 5 categorie più forti e le 5 più deboli sul rendimento in euro a 3 mesi, con
     accanto il momentum 12-1. Per ognuna c'è un «perché» calcolato: i due primi titoli dell'ETF americano equivalente
     che spiegano almeno il 10% del movimento, la categoria con cui si è mossa negli ultimi 6 mesi (correlazione) e i
-    titoli delle notizie quando Yahoo li fornisce. C'è poi un verdetto in tre parti: (a) momentum forte, medio o debole
+    titoli delle notizie quando Yahoo li fornisce. «Si è mosso come» compare solo con correlazione almeno 0,70; sotto, la
+    pagina scrive «non si muove in modo simile a nessun'altra categoria (correlazione massima X con Y)». C'è poi un verdetto in tre parti: (a) momentum forte, medio o debole
     (terzo delle categorie) e da quanti mesi, **non verificato**; (b) rischio di essere arrivati tardi, cioè il percentile
     della distanza di oggi dalla media 200 nei giorni degli ultimi 5 anni (alto sopra il 90°, medio tra 70° e 90°, basso
-    sotto), più la perdita massima storica e la nota «tema giovane» sotto i 5 anni; (c) se ha senso per il mio
+    sotto), più la perdita massima della storia più lunga disponibile (con la sua fonte) e la nota «tema giovane» sotto i
+    5 anni; (c) se ha senso per il mio
     portafoglio. Per i temi c'è una ⓘ «satellite».
   - **Tabella** con filtro per gruppo e ordinamento. Colonne: 1 m, 3 m, 1 a, 3 a, 12-1, volatilità, perdita massima a 3
     anni, trend 50/200, TER, «Per il mio portafoglio». Rendimenti in euro.
+  - **Cosa diversifica di più il tuo portafoglio** (riquadro in cima): investendo il 10% del portafoglio, i 3 ETF azionari
+    e i 3 obbligazionari o difensivi (oro compreso) che abbassano di più la concentrazione più alta tra tecnologia, USA e
+    dollaro. Esclusi i temi, i prodotti a leva e chi farebbe salire anche una sola delle tre; a parità di effetto viene
+    prima chi abbassa di più le altre due, poi il TER più basso; un ETF per categoria. È una misura dell'effetto sul
+    portafoglio, non una previsione di rendimento.
   - **Storico dei prezzi**: Borsa Italiana se completo, altrimenti Xetra, altrimenti l'ETF americano convertito in euro
-    con il cambio di ogni giorno; la fonte è scritta nel pannello dell'ETF.
+    con il cambio di ogni giorno. I rendimenti calcolati con uno storico di ripiego hanno un asterisco in tabella (con la
+    spiegazione nella ⓘ); il pannello indica la fonte e la data di nascita dell'ETF.
   - **Ha senso per il mio portafoglio?** Regole: sovrapposizione sui primi 10 titoli (somma dei pesi minori, guardando
-    dentro i miei fondi; per gli ETF molto ampi il valore reale è più alto); correlazione settimanale in euro su 2 anni;
+    dentro i miei fondi; per gli ETF molto ampi il valore reale è più alto); accanto, solo come informazione, la «quota
+    dell'ETF in titoli che già possiedi» con l'elenco dei titoli in comune. I primi 10 titoli vengono da `etf_holdings.py`:
+    prima i file delle composizioni degli emittenti (iShares, Xtrackers, SPDR), poi l'ETF americano sullo stesso indice,
+    infine justETF (al massimo una volta ogni 6 mesi per ETF, con una pausa tra le richieste e stop al primo rifiuto); fonte
+    e data nel pannello. I titoli si confrontano per ISIN o per nome della società (le classi di azioni della stessa
+    società contano come una); correlazione settimanale in euro su 2 anni;
     concentrazione in tecnologia, USA e dollaro (stimato dagli USA) se investissi il 10%. **Si sovrappone** se la
     sovrapposizione è almeno 25 punti, o la correlazione almeno 0,85, o la concentrazione più alta sale di almeno 1 punto.
     **Diversifica** se la sovrapposizione è sotto 10, la correlazione sotto 0,60 e una concentrazione scende di almeno 1
@@ -176,7 +189,10 @@ ridosso del massimo"); gli avvisi di calendario dentro le card (ora una piccola 
     della sovrapposizione, composizione e dati di justETF con fonte e data (avviso se hanno più di 6 mesi), P/E
     dell'ETF americano equivalente, ⓘ sulle tasse, ★ per metterlo In osservazione e link alla posizione se lo possiedo.
     Gli ETF americani sono solo fonti di dati, mai prodotti da comprare.
-  - **Sezioni chiuse**: mappa di rotazione delle categorie rispetto all'All-World (VWCE) e test delle regole di momentum.
+  - **Sezioni chiuse**: mappa di rotazione delle categorie rispetto all'All-World (VWCE), con la scala adattata ai dati e
+    i nomi scritti solo per le 10 categorie del radar (le altre al passaggio del mouse), e test delle regole di momentum.
+  - Se i prezzi storici del portafoglio non arrivano da Yahoo, la dashboard riprova dopo 15 minuti (prima restavano vuoti
+    fino al giorno dopo) e la pagina lo scrive, invece di mostrare verdetti senza correlazione.
   - Gli ETF con la ★ compaiono in Ricerca → In osservazione, sotto i titoli.
 - **Diario dei segnali** (Ricerca → Diario, visibile solo con almeno 63 sedute, circa 3 mesi; prima registra in
   background): analisti, valutazione e notizie non si possono provare sul passato, quindi
@@ -423,6 +439,9 @@ meccanico perché nei mesi sotto la media si sta fuori. Quindi la protezione è 
 (Nasdaq da −83% a −45%, Finanziari da −83% a −36%) ma non in quelli rapidi (Oro da −46% a −42%, Sanità da −39% a −41%),
 e riduce il rendimento annuo in molte categorie (Mondo da 11,6% a 7,4%).
 
+In parole semplici: il momentum ha mostrato un vantaggio coerente ma piccolo (+0,37 punti ogni 3 mesi, circa 1,5% l'anno
+prima dei costi), sotto la soglia fissata prima del test: resta non verificato.
+
 **Regola della dashboard:** nella scheda ETF momentum e trend sono informazioni **non verificate**: niente «favorevole
 adesso» né «investi». Limiti: le categorie sono misurate con ETF americani in dollari, nessun costo, test multipli.
 
@@ -474,6 +493,7 @@ consecutivi, sovrapposizione, regole «si sovrappone / diversifica / neutro»).
 | `market_calendar.py` | Festività e chiusure anticipate della borsa USA (da aggiornare ogni anno) |
 | `themes.json` | Temi personalizzati (elenchi di ticker) |
 | `etf_universe.py`, `etf_universe.json` | Elenco dei 63 ETF ed ETC della scheda ETF con i dati di justETF (fonte e data); rilanciarlo quando i dati hanno più di 6 mesi |
+| `etf_holdings.py` | Primi 10 titoli degli ETF (file degli emittenti, ETF americano sullo stesso indice, justETF come ultima risorsa) e confronto dei titoli per ISIN o nome |
 | `etf.py` | Scheda Ricerca → ETF: rendimenti in euro, radar dei temi, rischio di essere arrivati tardi, «Ha senso per il mio portafoglio?» |
 | `etf_backtest.py` | Test delle regole di momentum sulle categorie (a mano, `reports/etf_momentum.json`) |
 | `static/` | La pagina web (HTML, CSS, JavaScript) |
