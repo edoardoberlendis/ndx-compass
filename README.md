@@ -25,12 +25,18 @@ La dashboard ha **tre schede** (Fase 21); ognuna raggruppa le pagine descritte s
 |---|---|---|
 | **Mercato** | Cosa sta succedendo? | Oggi (con eventi macro USA e trimestrali) · Settori (con la mappa di rotazione) |
 | **Portafoglio** | Cosa ho e come sta andando? | Posizioni · Performance · Concentrazione · Rischio |
-| **Ricerca** | Cosa potrei comprare? | Screener · ETF (Fase 24) · In osservazione (i preferiti ★) · Diario dei segnali (compare quando ha almeno 3 mesi di dati); da qui si apre la scheda del titolo con la sezione Decisione |
+| **Azioni** | Quali azioni del Nasdaq-100 potrei comprare? | Screener · In osservazione (i preferiti ★) · Diario dei segnali (compare quando ha almeno 3 mesi di dati); da qui si apre la scheda del titolo con la sezione Decisione |
+| **ETF** | Quali ETF potrei comprare? | Una sola pagina (Fase 24): vedi sotto |
 
 I vecchi link portano alla pagina più vicina: `#overview` → Oggi, `#sectors` e `#ideas` (il vecchio Report) → Settori,
 `#portfolio` e `#rules` → Posizioni, `#screener` e `#trade` (i vecchi Pattern tecnici) → Screener, `#watch` → In
-osservazione, `#diary` → Diario se visibile, altrimenti Screener. `#mercato`, `#portafoglio` e `#ricerca` aprono la
-scheda sull'ultima pagina usata.
+osservazione, `#diary` → Diario se visibile, altrimenti Screener. `#mercato`, `#portafoglio` e `#azioni` aprono la
+scheda sull'ultima pagina usata; `#ricerca` (la vecchia scheda) porta allo Screener, `#etf` alla scheda ETF.
+
+**Server con codice vecchio.** Ogni risposta del server dice la versione del codice (`DASHBOARD_VERSION` in `server.py`);
+la pagina la confronta con la sua (`PAGE_VERSION` in `static/app.js`) e, se sono diverse, mostra in alto «Il server usa una
+versione vecchia del codice: riavvialo». Per riavviare: apri l'app **Nasdaq-100 Monitor** e scegli **Riavvia server**
+(il 10 ottobre 2026 la dashboard era rimasta accesa da giorni con il codice vecchio: «Apri dashboard» non riavvia).
 
 **Tolto nella Fase 21** (per una dashboard più semplice; i calcoli che restano non dipendono da queste parti):
 la scheda Metodo con Report, Pattern tecnici, Diario e Le mie regole (i risultati dei backtest sono più sotto in
@@ -150,12 +156,16 @@ ridosso del massimo"); gli avvisi di calendario dentro le card (ora una piccola 
 - **Settori**: **mappa di rotazione** di temi e settori rispetto a QQQ (Leader, In miglioramento, In indebolimento,
   In ritardo; calcolata dalla dashboard con le ultime chiusure, prima era nel Report), rendimenti dei settori pesati per capitalizzazione e peso di ogni settore nell'indice. Clic su una riga:
   compaiono i titoli di quel settore; di nuovo sulla stessa riga (o "Tutti i settori") si torna a tutti.
-- **ETF** (Ricerca → ETF, Fase 24; `etf.py`, `/api/etf`): 63 ETF ed ETC UCITS quotati in Italia (`etf_universe.json`, elenco
+- **ETF** (scheda principale ETF, Fase 24; `etf.py`, `/api/etf`): 63 ETF ed ETC UCITS quotati in Italia (`etf_universe.json`, elenco
   approvato l'8 ottobre 2026). I dati si calcolano una volta al giorno in background (qualche minuto la prima volta) e
   ancora una volta dopo le 18:00, quando le chiusure di Borsa Italiana sono definitive.
+  - **Dati mancanti detti a parole**: se Yahoo non dà i prezzi degli ETF la pagina scrive «prezzi non disponibili» con
+    l'ora del nuovo tentativo (ogni 15 minuti) e mostra i dati dell'ultimo giorno buono con la data; una riga senza
+    prezzi lo dice; se mancano i prezzi del portafoglio «Per il mio portafoglio» resta «in attesa» (con l'ora del nuovo
+    tentativo) e si vede il verdetto del solo mercato. Mai trattini o verdetti incompleti.
   - **Periodi di osservazione**: 1 settimana, 2 settimane, 1 mese, 3 mesi, 6 mesi, 1 anno, 3 anni (3 anni solo con uno
-    storico vero o di ripiego segnalato con *). Il selettore in cima decide l'ordine di radar, tabella e mappa di
-    rotazione; la tabella mostra sempre 1 settimana, 1 mese, 3 mesi e 1 anno più il periodo scelto; il pannello tutti.
+    storico vero o di ripiego segnalato con *). La tabella mostra 1 settimana, 1 mese, 3 mesi, 1 anno e 3 anni; l'ordine si
+    sceglie cliccando le intestazioni; 2 settimane, 6 mesi, volatilità, perdita massima e momentum 12-1 sono nel pannello.
   - **Trend** (regola stretta approvata): Rialzista se il prezzo è sopra la media 50 e la media 50 sopra la media 200,
     Ribassista se il prezzo è sotto la media 50 e la media 50 sotto la media 200, Laterale altrimenti; con un
     mini-grafico di 6 mesi e la linea della media 200, in tabella e nel pannello.
@@ -173,20 +183,11 @@ ridosso del massimo"); gli avvisi di calendario dentro le card (ora una piccola 
     dati di Yahoo la pagina avvisa di controllare il prezzo su Fineco (oggi succede al Brasile).
   - **Diario degli ETF**: dopo la chiusura di Borsa Italiana i due verdetti di ogni ETF vanno in
     `portafoglio/diario_etf/AAAA-MM-GG.json` (un file per seduta, mai riscritto), solo con chiusure definitive e
-    con il confronto con il portafoglio completo (correlazione compresa); anche dal job serale. Il Diario dei segnali
-    mostra come è andato ogni verdetto a 1, 3 e 6 mesi contro tutti gli ETF dello stesso giorno.
-  - **Radar dei temi** (visibile): le 5 categorie più forti e le 5 più deboli sul rendimento in euro del periodo scelto, con
-    accanto il momentum 12-1. Per ognuna c'è un «perché» calcolato: i due primi titoli dell'ETF americano equivalente
-    che spiegano almeno il 10% del movimento, la categoria con cui si è mossa negli ultimi 6 mesi (correlazione) e i
-    titoli delle notizie quando Yahoo li fornisce. «Si è mosso come» compare solo con correlazione almeno 0,70; sotto, la
-    pagina scrive «non si muove in modo simile a nessun'altra categoria (correlazione massima X con Y)». C'è poi un verdetto in tre parti: (a) momentum forte, medio o debole
-    (terzo delle categorie) e da quanti mesi, **non verificato**; (b) rischio di essere arrivati tardi, cioè il percentile
-    della distanza di oggi dalla media 200 nei giorni degli ultimi 5 anni (alto sopra il 90°, medio tra 70° e 90°, basso
-    sotto), più la perdita massima della storia più lunga disponibile (con la sua fonte) e la nota «tema giovane» sotto i
-    5 anni; (c) se ha senso per il mio
-    portafoglio. Per i temi c'è una ⓘ «satellite».
-  - **Tabella** con filtro per gruppo e ordinamento. Colonne: 1 s, 1 m, 3 m, 1 a (più il periodo scelto), 12-1,
-    volatilità, perdita massima a 3 anni, trend, TER, «Ha senso comprare?», «Per il mio portafoglio». Rendimenti in euro.
+    con il confronto con il portafoglio completo (correlazione compresa); anche dal job serale. Una sezione chiusa della
+    scheda ETF (`/api/etf/diary`) mostra come è andato ogni verdetto a 1, 3 e 6 mesi contro tutti gli ETF dello stesso giorno.
+  - **Tabella** con filtro per gruppo e ordinamento dalle intestazioni. Colonne: nome, 1 settimana, 1 mese, 3 mesi, 1 anno,
+    3 anni, trend (parola e mini-grafico), TER, «Ha senso comprare?», «Per il mio portafoglio». Sta nella larghezza della
+    pagina; su schermi stretti scorre solo la tabella, con il nome fermo. Rendimenti in euro.
   - **Cosa diversifica di più il tuo portafoglio** (riquadro in cima): investendo il 10% del portafoglio, i 3 ETF azionari
     e i 3 obbligazionari o difensivi (oro compreso) che abbassano di più la concentrazione più alta tra tecnologia, USA e
     dollaro. Esclusi i temi, i prodotti a leva e chi farebbe salire anche una sola delle tre; a parità di effetto viene
@@ -207,16 +208,20 @@ ridosso del massimo"); gli avvisi di calendario dentro le card (ora una piccola 
     **Diversifica** se la sovrapposizione è sotto 10, la correlazione sotto 0,60 e una concentrazione scende di almeno 1
     senza che nessuna salga di più di 0,5. Altrimenti **neutro**. Note «costoso» con TER sopra lo 0,50% e «patrimonio
     piccolo» sotto i 100 milioni.
-  - **Pannello dell'ETF**: rendimenti in euro con la parte dovuta al cambio (per i sottostanti in una sola valuta), trend,
-    «Ha senso adesso?» (solo rischio di essere arrivati tardi e «non verificato»: mai «favorevole» o «investi»), dettagli
+  - **Pannello dell'ETF**: «Perché si muove» in vista (calcolato all'apertura, `/api/etf/why/<isin>`: i due primi titoli
+    dell'ETF americano equivalente che spiegano almeno il 10% del movimento a 1 mese, 3 mesi e 1 anno, oltre il 100%
+    spiegato a parole; «si muove come» con correlazione almeno 0,70, altrimenti «non si muove in modo simile a nessun'altra
+    categoria (correlazione massima X con Y)»; notizie sui due primi titoli), rendimenti in euro con la parte dovuta al
+    cambio (per i sottostanti in una sola valuta), trend, rischio di essere arrivati tardi, dettagli
     della sovrapposizione, composizione e dati di justETF con fonte e data (avviso se hanno più di 6 mesi), P/E
     dell'ETF americano equivalente, ⓘ sulle tasse, ★ per metterlo In osservazione e link alla posizione se lo possiedo.
     Gli ETF americani sono solo fonti di dati, mai prodotti da comprare.
-  - **Sezioni chiuse**: mappa di rotazione delle categorie rispetto all'All-World (VWCE), con la scala adattata ai dati e
-    i nomi scritti solo per le 10 categorie del radar (le altre al passaggio del mouse), e test delle regole di momentum.
+  - **Sezioni chiuse**: ETF in osservazione (solo con almeno una ★), mappa di rotazione delle categorie rispetto
+    all'All-World (VWCE; segue la colonna ordinata, 3 mesi se non è un rendimento; nomi scritti per le 5 categorie più
+    avanti e le 5 più indietro), diario degli ETF. Il radar dei temi e la sezione del test sono stati tolti il 10 ottobre
+    2026: il «perché» è nel pannello, i risultati del test sono qui sotto e in una ⓘ dell'avviso in alto.
   - Se i prezzi storici del portafoglio non arrivano da Yahoo, la dashboard riprova dopo 15 minuti (prima restavano vuoti
     fino al giorno dopo) e la pagina lo scrive, invece di mostrare verdetti senza correlazione.
-  - Gli ETF con la ★ compaiono in Ricerca → In osservazione, sotto i titoli.
 - **Diario dei segnali** (Ricerca → Diario, visibile solo con almeno 63 sedute, circa 3 mesi; prima registra in
   background): analisti, valutazione e notizie non si possono provare sul passato, quindi
   i verdetti della sezione Decisione si verificano da oggi in avanti. Dopo ogni chiusura (o al primo avvio prima
@@ -518,7 +523,7 @@ consecutivi, sovrapposizione, regole «si sovrappone / diversifica / neutro»).
 | `etf_universe.py`, `etf_universe.json` | Elenco dei 63 ETF ed ETC della scheda ETF con i dati di justETF (fonte e data); rilanciarlo quando i dati hanno più di 6 mesi |
 | `etf_holdings.py` | Primi 10 titoli degli ETF (file degli emittenti, ETF americano sullo stesso indice, justETF come ultima risorsa) e confronto dei titoli per ISIN o nome |
 | `etf_buy.py` | «Ha senso comprare?» per gli ETF: regole, piano con tetto del 10%, diario degli ETF in `portafoglio/diario_etf/` |
-| `etf.py` | Scheda Ricerca → ETF: rendimenti in euro, radar dei temi, rischio di essere arrivati tardi, «Ha senso per il mio portafoglio?» |
+| `etf.py` | Scheda ETF: rendimenti in euro, trend, «perché si muove», rischio di essere arrivati tardi, «Ha senso per il mio portafoglio?» |
 | `etf_backtest.py` | Test delle regole di momentum sulle categorie (a mano, `reports/etf_momentum.json`) |
 | `static/` | La pagina web (HTML, CSS, JavaScript) |
 | `requirements.txt` | Librerie Python necessarie |

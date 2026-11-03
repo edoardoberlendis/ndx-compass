@@ -128,3 +128,9 @@ def test_plan_listing_follows_the_history_and_flags_price_mismatch():
 
 def test_percentile_text_near_thresholds():
     assert etf_buy.pct_text(90.4) == "90,4" and etf_buy.pct_text(79.2) == "79" and etf_buy.pct_text(69.6) == "69,6"
+
+
+def test_contribution_sentence_above_100_percent():
+    t = etf.contribution_text(["SK hynix (000660)", "Samsung (005930)"], 121.0, 80.0, "1 anno", "EWY")
+    assert "più dell'intero rialzo in 1 anno (121%)" in t and "senso opposto" in t
+    assert etf.contribution_text(["A (A)"], 40.0, -5.0, "1 mese", "XYZ").startswith("A (A) spiegano il 40% del ribasso in 1 mese")

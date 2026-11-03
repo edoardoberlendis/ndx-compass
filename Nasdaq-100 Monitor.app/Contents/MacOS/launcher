@@ -18,14 +18,22 @@ alert() { /usr/bin/osascript -e "display alert \"Nasdaq-100 Monitor\" message \"
 up() { /usr/bin/curl -s -o /dev/null --max-time 1 "$URL"; }
 
 if up; then
-  choice=$(/usr/bin/osascript -e 'button returned of (display dialog "Il server della dashboard è acceso." buttons {"Ferma server", "Apri dashboard"} default button "Apri dashboard" with title "Nasdaq-100 Monitor")' 2>/dev/null)
-  if [ "$choice" = "Ferma server" ]; then
+  # "Riavvia server": stop it and go on below to start it again with the current code (a server left on keeps the old code)
+  choice=$(/usr/bin/osascript -e 'button returned of (display dialog "Il server della dashboard è acceso. Dopo un aggiornamento del codice scegli «Riavvia server»." buttons {"Ferma server", "Riavvia server", "Apri dashboard"} default button "Apri dashboard" with title "Nasdaq-100 Monitor")' 2>/dev/null)
+  if [ "$choice" = "Ferma server" ] || [ "$choice" = "Riavvia server" ]; then
     /usr/sbin/lsof -ti tcp:$PORT | xargs kill 2>/dev/null
-    /usr/bin/osascript -e 'display notification "Server fermato" with title "Nasdaq-100 Monitor"'
+    for i in $(seq 1 20); do up || break; sleep 0.5; done
+    if [ "$choice" = "Ferma server" ]; then
+      /usr/bin/osascript -e 'display notification "Server fermato" with title "Nasdaq-100 Monitor"'
+      exit 0
+    fi
+    if up; then alert "Non riesco a fermare il server: riprova tra qualche secondo."; exit 1; fi
   elif [ -n "$choice" ]; then
     open "$PAGE_URL"
+    exit 0
+  else
+    exit 0
   fi
-  exit 0
 fi
 
 if [ ! -f "$DIR/server.py" ]; then

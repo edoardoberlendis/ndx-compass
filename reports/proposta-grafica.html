@@ -1,0 +1,554 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Proposta grafica</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..700&family=Source+Sans+3:wght@400..700&family=Source+Serif+4:opsz,wght@8..60,400..700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Pagina di prova (Fase G1). Dati tutti inventati.
+   Ogni direzione ha i suoi "token" (variabili CSS) in un solo punto:
+   i componenti sotto usano solo le variabili.
+   ============================================================ */
+
+/* ---------- pagina che contiene le due proposte (neutra) */
+:root { color-scheme: light; --p-bg: #f2f3f4; --p-ink: #1a1d21; --p-ink2: #555c64; --p-line: #d9dde1; --p-card: #fff; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { color-scheme: dark; --p-bg: #121518; --p-ink: #e6e9ec; --p-ink2: #a4acb4; --p-line: #2b3238; --p-card: #181c20; }
+}
+:root[data-theme="dark"] { color-scheme: dark; --p-bg: #121518; --p-ink: #e6e9ec; --p-ink2: #a4acb4; --p-line: #2b3238; --p-card: #181c20; }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--p-bg); color: var(--p-ink); font: 15px/1.55 "Source Sans 3", system-ui, sans-serif; }
+.wrap { max-width: 1240px; margin: 0 auto; padding: 32px 16px 80px; }
+.intro h1 { font: 600 28px/1.2 "Source Sans 3", sans-serif; margin: 0 0 8px; }
+.intro p { max-width: 70ch; color: var(--p-ink2); margin: 0 0 12px; }
+.intro h2 { font: 600 20px/1.3 "Source Sans 3", sans-serif; margin: 40px 0 8px; }
+.analysis { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-top: 12px; }
+.analysis section { background: var(--p-card); border: 1px solid var(--p-line); border-radius: 8px; padding: 14px 16px; }
+.analysis h3 { font-size: 16px; margin: 0 0 6px; }
+.analysis ul { margin: 0; padding-left: 18px; color: var(--p-ink2); font-size: 14px; }
+.analysis li { margin: 3px 0; }
+.analysis li b { color: var(--p-ink); font-weight: 600; }
+
+.dir-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; margin: 56px 0 10px; }
+.dir-head h2 { font: 600 24px/1.2 "Source Sans 3", sans-serif; margin: 0; }
+.dir-head p { margin: 0; color: var(--p-ink2); max-width: 72ch; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+.controls .grp { display: inline-flex; border: 1px solid var(--p-line); border-radius: 6px; overflow: hidden; background: var(--p-card); }
+.controls button { border: 0; background: none; padding: 6px 12px; font: inherit; font-size: 14px; color: var(--p-ink2); cursor: pointer; }
+.controls button[aria-pressed="true"] { background: var(--p-ink); color: var(--p-bg); }
+.controls button:focus-visible { outline: 2px solid #3b78c4; outline-offset: -2px; }
+.stage { display: flex; justify-content: center; }
+.notes { margin: 12px 0 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; font-size: 14px; color: var(--p-ink2); }
+.notes b { color: var(--p-ink); }
+.notes div { background: var(--p-card); border: 1px solid var(--p-line); border-radius: 8px; padding: 12px 14px; }
+
+/* ============================================================
+   DIREZIONE A — "Registro"
+   ============================================================ */
+.dA {
+  --bg: #f3f4f5; --surface: #ffffff; --surface-2: #f0f2f4; --surface-3: #e5e8eb;
+  --line: #dde1e5; --line-strong: #b8bfc6;
+  --ink: #14191f; --ink-2: #47515b; --ink-3: #6b7580;
+  --accent: #1f4e8c; --accent-soft: #e3ebf5;
+  --pos: #0a7650; --pos-soft: #e1f1ea;
+  --neg: #c0392b; --neg-soft: #f8e5e2;
+  --warn: #9a5c00; --warn-soft: #f7ecd9;
+  --info: #3d5a80; --info-soft: #e6ecf3;
+  --font-ui: "Archivo", system-ui, sans-serif; --font-num: "Archivo", system-ui, sans-serif; --font-title: "Archivo", system-ui, sans-serif;
+  --wdth-title: 87; --wdth-body: 100;
+  --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13px; --fs-md: 15px; --fs-lg: 18px; --fs-xl: 26px;
+  --lh: 1.4;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+  --row-h: 34px;
+  --r-panel: 4px; --r-ctrl: 3px; --r-tag: 2px;
+  --shadow-float: 0 12px 32px rgba(20, 25, 31, .18);
+  --panel-border: 1px solid var(--line);
+}
+.dA[data-theme="dark"] {
+  --bg: #101418; --surface: #171c21; --surface-2: #1c2228; --surface-3: #252c33;
+  --line: #2a3138; --line-strong: #46505a;
+  --ink: #e8ecef; --ink-2: #adb6bf; --ink-3: #848e98;
+  --accent: #8fb3e3; --accent-soft: #1f2d3f;
+  --pos: #4cc493; --pos-soft: #143026;
+  --neg: #f2806f; --neg-soft: #3a1d1a;
+  --warn: #e3a94a; --warn-soft: #362812;
+  --info: #9db4d4; --info-soft: #1e2835;
+  --shadow-float: 0 12px 32px rgba(0, 0, 0, .5);
+}
+
+/* ============================================================
+   DIREZIONE B — "Rendiconto"
+   ============================================================ */
+.dB {
+  --bg: #edf0ef; --surface: #fbfcfc; --surface-2: #f2f5f4; --surface-3: #e6ebe9;
+  --line: #d6dcda; --line-strong: #b3bdba;
+  --ink: #1b2422; --ink-2: #4a5654; --ink-3: #6c7876;
+  --accent: #24505a; --accent-soft: #e0ebec;
+  --pos: #1b7a4d; --pos-soft: #e2f0e8;
+  --neg: #b53d2c; --neg-soft: #f6e4e0;
+  --warn: #945f05; --warn-soft: #f5ebd7;
+  --info: #3f5f68; --info-soft: #e5edee;
+  --font-ui: "Source Sans 3", system-ui, sans-serif; --font-num: "Source Sans 3", system-ui, sans-serif; --font-title: "Source Serif 4", Georgia, serif;
+  --wdth-title: 100; --wdth-body: 100;
+  --fs-xs: 12px; --fs-sm: 13px; --fs-base: 14px; --fs-md: 17px; --fs-lg: 20px; --fs-xl: 30px;
+  --lh: 1.45;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+  --row-h: 42px;
+  --r-panel: 10px; --r-ctrl: 6px; --r-tag: 4px;
+  --shadow-float: 0 16px 40px rgba(27, 36, 34, .16);
+  --panel-border: 1px solid var(--line);
+}
+.dB[data-theme="dark"] {
+  --bg: #111615; --surface: #182020; --surface-2: #1d2625; --surface-3: #26302f;
+  --line: #2a3433; --line-strong: #485452;
+  --ink: #e6ecea; --ink-2: #aab6b3; --ink-3: #838f8c;
+  --accent: #86bcc6; --accent-soft: #1b2f33;
+  --pos: #5cc48f; --pos-soft: #16302a;
+  --neg: #ef8471; --neg-soft: #3a1f1b;
+  --warn: #dfab4f; --warn-soft: #352914;
+  --info: #9fbcc2; --info-soft: #1d2b2d;
+  --shadow-float: 0 16px 40px rgba(0, 0, 0, .5);
+}
+
+/* ============================================================
+   COMPONENTI (uguali per le due direzioni, usano solo i token)
+   ============================================================ */
+.frame {
+  container-type: inline-size; width: 100%; max-width: 1240px; min-width: 0;
+  background: var(--bg); color: var(--ink); border: 1px solid var(--p-line); border-radius: 10px; overflow: hidden;
+  font: var(--fs-base)/var(--lh) var(--font-ui); font-variation-settings: "wdth" var(--wdth-body);
+  -webkit-font-smoothing: antialiased; transition: max-width .25s ease;
+}
+.frame.phone { max-width: 390px; }
+@media (prefers-reduced-motion: reduce) { .frame { transition: none; } }
+.frame * { font-variant-numeric: tabular-nums lining-nums; }
+.frame button { font: inherit; color: inherit; cursor: pointer; }
+.frame :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* barra in alto */
+.bar { display: flex; align-items: center; gap: var(--sp-4); padding: var(--sp-2) var(--sp-4); background: var(--surface); border-bottom: 1px solid var(--line); }
+.brand { font: 600 var(--fs-md)/1 var(--font-title); font-variation-settings: "wdth" var(--wdth-title); white-space: nowrap; }
+.brand span { color: var(--ink-3); font-weight: 400; }
+/* whole items only: those that do not fit wrap onto a hidden second line, never cut in half */
+.tape { display: flex; flex-wrap: wrap; gap: 0 var(--sp-5); flex: 1; min-width: 0; height: 1.5em; overflow: hidden; line-height: 1.5em; }
+.tape div { white-space: nowrap; font-size: var(--fs-sm); }
+.tape .l { color: var(--ink-3); margin-right: var(--sp-1); }
+.search { width: 220px; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--r-ctrl); background: var(--surface-2); color: var(--ink-3); font-size: var(--fs-sm); }
+
+.tabs { display: flex; align-items: flex-end; gap: var(--sp-5); padding: 0 var(--sp-4); background: var(--surface); border-bottom: 1px solid var(--line); }
+.tab { border: 0; background: none; padding: var(--sp-3) 0 calc(var(--sp-3) - 2px); color: var(--ink-2); font-weight: 500; border-bottom: 2px solid transparent; }
+.tab[aria-selected="true"] { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent); }
+.status { margin-left: auto; align-self: center; font-size: var(--fs-sm); color: var(--ink-3); white-space: nowrap; }
+.status .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--pos); margin-right: 6px; vertical-align: 1px; }
+.subtabs { display: flex; gap: var(--sp-1); padding: var(--sp-2) var(--sp-4); background: var(--bg); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.sub { border: 0; background: none; padding: 4px 10px; border-radius: var(--r-ctrl); color: var(--ink-2); }
+.sub[aria-selected="true"] { background: var(--surface-3); color: var(--ink); font-weight: 600; }
+
+.body { padding: var(--sp-4); display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); }
+.panel { background: var(--surface); border: var(--panel-border); border-radius: var(--r-panel); }
+.panel-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2) var(--sp-3); padding: var(--sp-3) var(--sp-4); }
+.panel-h h3 { margin: 0; font: 600 var(--fs-md)/1.25 var(--font-title); font-variation-settings: "wdth" var(--wdth-title); }
+.panel-h .meta { color: var(--ink-3); font-size: var(--fs-sm); }
+.panel-h .end { margin-left: auto; }
+
+/* riquadri dei numeri principali */
+.kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; }
+.kpi { padding: var(--sp-3) var(--sp-4); border-right: 1px solid var(--line); min-width: 0; }
+.kpi:last-child { border-right: 0; }
+.kpi .l { color: var(--ink-2); font-size: var(--fs-sm); }
+.kpi .v { font: 600 var(--fs-xl)/1.15 var(--font-num); margin: 2px 0; letter-spacing: -.01em; }
+.kpi .s { color: var(--ink-3); font-size: var(--fs-sm); }
+
+/* numeri con segno */
+.up { color: var(--pos); }
+.down { color: var(--neg); }
+.flat { color: var(--ink-3); }
+
+/* tabelle */
+.tbl { width: 100%; border-collapse: collapse; table-layout: auto; }
+.tbl th, .tbl td { padding: 0 var(--sp-3); height: var(--row-h); text-align: left; white-space: nowrap; }
+.tbl th { font-weight: 600; font-size: var(--fs-sm); color: var(--ink-2); background: var(--surface-2); border-bottom: 1px solid var(--line-strong); height: 30px; }
+.tbl td { border-bottom: 1px solid var(--line); }
+.tbl tr:last-child td { border-bottom: 0; }
+.tbl .n { text-align: right; }
+.tbl th.sorted { color: var(--ink); }
+.tbl th.sorted::after { content: " ↓"; color: var(--accent); }
+.tbl tbody tr:hover td { background: var(--surface-2); }
+.tbl .t { white-space: normal; padding-top: 6px; padding-bottom: 6px; }
+.tbl .t b { display: block; font-weight: 600; }
+.tbl .t small { color: var(--ink-3); font-size: var(--fs-xs); }
+.tbl .gp .sub2 { display: none; }
+.tbl .t .act-in { display: none; margin-top: 4px; }
+.dB .tbl .t { padding-top: 10px; padding-bottom: 10px; }
+.tbl tr.lev td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+
+/* avviso */
+.notice { display: flex; gap: var(--sp-2); margin: 0 var(--sp-4) var(--sp-3); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-ctrl); background: var(--warn-soft); color: var(--ink); font-size: var(--fs-sm); }
+.notice .ic { color: var(--warn); font-weight: 700; }
+.foot-note { color: var(--ink-3); font-size: var(--fs-sm); padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--line); margin: 0; }
+
+/* etichette dei verdetti: colore + simbolo, mai solo il colore */
+.tag { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-sm); font-weight: 600; line-height: 1; white-space: nowrap; border-radius: var(--r-tag); }
+.tag i { font-style: normal; display: inline-grid; place-items: center; width: 14px; height: 14px; font-size: 10px; font-weight: 700; border-radius: var(--r-tag); }
+.tag.fav { color: var(--pos); }  .tag.fav i { background: var(--pos); color: var(--surface); }
+.tag.neu { color: var(--ink-2); } .tag.neu i { background: var(--surface-3); color: var(--ink-2); }
+.tag.att { color: var(--warn); } .tag.att i { background: var(--warn); color: var(--surface); }
+.tag.unf { color: var(--neg); }  .tag.unf i { background: var(--neg); color: var(--surface); }
+.tag.inf { color: var(--info); } .tag.inf i { background: none; border: 1px solid var(--info); color: var(--info); }
+.tag.na  { color: var(--ink-3); font-weight: 500; } .tag.na i { background: none; border: 1px dashed var(--ink-3); color: var(--ink-3); }
+/* "forte" (Molto positivo, verdetto principale): riquadro pieno */
+.tag.strong { padding: 5px 8px 5px 6px; }
+.tag.strong.fav { background: var(--pos); color: var(--surface); } .tag.strong.fav i { background: var(--surface); color: var(--pos); }
+.tag.strong.unf { background: var(--neg); color: var(--surface); } .tag.strong.unf i { background: var(--surface); color: var(--neg); }
+.tag.strong.att { background: var(--warn-soft); color: var(--warn); }
+.tag.strong.neu { background: var(--surface-3); color: var(--ink); }
+
+/* B: etichette con bordo (stile "timbro") */
+.dB .tag:not(.strong) { padding: 4px 8px 4px 5px; border: 1px solid currentColor; background: var(--surface); }
+.dB .tag.neu:not(.strong) { border-color: var(--line-strong); }
+.dB .tag.na:not(.strong) { border-style: dashed; }
+.dB .tag i { border-radius: 50%; }
+
+/* pulsanti */
+.btn { border: 1px solid var(--line-strong); background: var(--surface); border-radius: var(--r-ctrl); padding: 6px 12px; font-weight: 500; }
+.btn:hover { background: var(--surface-2); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.btn.ghost { border-color: transparent; background: none; color: var(--accent); padding-left: 4px; padding-right: 4px; text-decoration: underline; text-underline-offset: 3px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r-ctrl); background: var(--surface-2); padding: 2px; }
+.seg button { border: 0; background: none; padding: 3px 10px; border-radius: calc(var(--r-ctrl) - 1px); color: var(--ink-2); font-size: var(--fs-sm); }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--line); }
+
+/* riquadro Analisi (pannello laterale) */
+.two { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: var(--sp-4); align-items: start; }
+.drawer { box-shadow: var(--shadow-float); }
+.d-head { padding: var(--sp-4); border-bottom: 1px solid var(--line); }
+.d-head .tk { font: 600 var(--fs-lg)/1.1 var(--font-title); font-variation-settings: "wdth" var(--wdth-title); }
+.d-head .nm { color: var(--ink-2); }
+.d-head .px { font: 600 var(--fs-xl)/1.1 var(--font-num); margin-top: var(--sp-2); }
+.d-head .px span { font-size: var(--fs-base); font-weight: 600; margin-left: var(--sp-2); }
+.d-head .px small { font: 400 var(--fs-sm) var(--font-ui); color: var(--ink-3); margin-left: var(--sp-2); }
+.d-sec { padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--line); }
+.d-sec:last-child { border-bottom: 0; }
+.d-sec h4 { margin: 0 0 var(--sp-2); font-size: var(--fs-sm); font-weight: 600; color: var(--ink-2); }
+.d-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); }
+.d-row .score { font-weight: 600; }
+.d-row .help { color: var(--ink-3); font-size: var(--fs-sm); }
+.rules { list-style: none; margin: var(--sp-2) 0 0; padding: 0; }
+.rules li { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: var(--sp-2); padding: 6px 0; border-top: 1px solid var(--line); align-items: baseline; }
+.rules .ok { color: var(--pos); font-weight: 700; }
+.rules .ko { color: var(--neg); font-weight: 700; }
+.rules .m { color: var(--ink-2); font-size: var(--fs-sm); text-align: right; }
+.missing { color: var(--ink-2); font-size: var(--fs-sm); padding: var(--sp-2) var(--sp-3); border: 1px dashed var(--line-strong); border-radius: var(--r-ctrl); }
+.d-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+
+/* catalogo delle etichette */
+.gallery { padding: 0 var(--sp-4) var(--sp-4); display: grid; gap: var(--sp-3); }
+.gallery .g { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: var(--sp-3); align-items: center; }
+.gallery .g > span { color: var(--ink-2); font-size: var(--fs-sm); }
+.gallery .g > div { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-3); }
+.sw { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: var(--sp-2); padding: 0 var(--sp-4) var(--sp-4); }
+.sw div { border: 1px solid var(--line); border-radius: var(--r-ctrl); overflow: hidden; font-size: var(--fs-xs); }
+.sw b { display: block; height: 30px; }
+.sw span { display: block; padding: 4px 6px; color: var(--ink-2); }
+
+/* ---------- direzione A: KPI dentro una sola fascia, intestazioni compatte */
+.dA .kpi .v { font-variation-settings: "wdth" 88; font-weight: 650; }
+.dA .tbl .t b { font-variation-settings: "wdth" 92; }
+.dA .panel-h { border-bottom: 1px solid var(--line); }
+
+/* ---------- direzione B: più aria, titoli e totali in carattere con grazie */
+.dB .kpis { gap: var(--sp-3); background: none; border: 0; }
+.dB .kpi { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-panel); }
+.dB .kpi .v { font-family: var(--font-title); font-weight: 600; }
+.dB .panel-h { padding: var(--sp-4) var(--sp-4) var(--sp-3); }
+.dB .tbl th { background: none; border-bottom: 1px solid var(--ink-3); color: var(--ink-3); font-weight: 600; }
+.dB .tbl th, .dB .tbl td { padding: 0 var(--sp-3); }
+.dB .tbl th:first-child, .dB .tbl td:first-child { padding-left: var(--sp-4); }
+.dB .tbl th:last-child, .dB .tbl td:last-child { padding-right: var(--sp-4); }
+.dB .d-head .px { font-family: var(--font-title); }
+
+/* ---------- telefono e finestre strette: niente scorrimento orizzontale */
+@container (max-width: 900px) {
+  .tbl .c-cost, .tbl .c-day { display: none; }
+  .two { grid-template-columns: minmax(0, 1fr); }
+}
+@container (max-width: 640px) {
+  .bar { flex-wrap: wrap; gap: var(--sp-2) var(--sp-3); }
+  .tape { order: 3; flex-basis: 100%; gap: var(--sp-4); }
+  .search { width: auto; flex: 1; }
+  .tabs { gap: var(--sp-4); }
+  .status { display: none; }
+  .body { padding: var(--sp-3); gap: var(--sp-3); }
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dA .kpi:nth-child(2) { border-right: 0; }
+  .dA .kpi:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+  .kpi .v { font-size: var(--fs-lg); }
+  .tbl .c-q, .tbl .c-px, .tbl .c-pct, .tbl .c-w { display: none; }
+  .tbl .gp .sub2 { display: block; font-size: var(--fs-xs); }
+  .tbl th, .tbl td { padding: 0 var(--sp-2); }
+  .dB .tbl th:first-child, .dB .tbl td:first-child { padding-left: var(--sp-3); }
+  .dB .tbl th:last-child, .dB .tbl td:last-child { padding-right: var(--sp-3); }
+  .tbl .t { white-space: normal; }
+  .tbl .c-act { display: none; }
+  .tbl .t .act-in { display: block; }
+  .rules li { grid-template-columns: 18px minmax(0, 1fr); }
+  .rules .m { grid-column: 2; text-align: left; }
+  .gallery .g { grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="intro">
+    <h1>Proposta grafica della dashboard</h1>
+    <p>Fase G1: solo una prova, la dashboard non è stata toccata. Tutti i numeri e i titoli qui sotto sono inventati e non hanno niente a che fare con il tuo portafoglio.</p>
+    <p>Sotto trovi prima cosa non funziona oggi, poi due direzioni con la stessa porzione di dashboard: barra in alto, numeri principali, tabella delle posizioni, riquadro Analisi del titolo, etichette e pulsanti. Per ognuna puoi passare da tema chiaro a scuro e vedere la larghezza di un telefono.</p>
+
+    <h2>Cosa non funziona oggi</h2>
+    <div class="analysis">
+      <section><h3>In tutte le schede</h3><ul>
+        <li><b>Troppe etichette colorate diverse</b>: almeno 6 stili (segnale, azione, verdetto, sovrapposizione, trend, leva), con verde, rosa, arancio, blu e grigio usati con significati diversi.</li>
+        <li><b>Il verde vuol dire due cose</b>: "guadagno" nei numeri e "favorevole" nei verdetti; il blu è usato per link, ordinamento, barre e per «Entra su ritracciamento».</li>
+        <li><b>Gerarchia piatta</b>: titoli dei riquadri e nomi dei numeri principali sono tutti in maiuscolo, piccoli e grigi; nel CSS ci sono 16 dimensioni di carattere diverse (da 10 a 30 px) e 12 raggi diversi.</li>
+        <li><b>Testi di aiuto lunghi</b> nelle intestazioni dei riquadri (con tanti «·») che competono con i dati.</li>
+        <li><b>Segno meno</b>: è il trattino corto della tastiera (-), più stretto del +; lo zero appare come «0%» o «0» senza decimali, quindi la colonna non è allineata.</li>
+        <li><b>Punto delle migliaia</b>: Chrome in italiano non lo mette nei numeri da 1.000 a 9.999, quindi nella stessa pagina si legge «2458,53 €» e «31.925 €», «circa -3965 €» nel Rischio.</li>
+        <li><b>La barra degli indici</b> viene tagliata a destra («Dollaro 101,83 +0,07…»).</li>
+      </ul></section>
+      <section><h3>Portafoglio</h3><ul>
+        <li>«Rivedi la tesi» in arancio pieno su più di metà delle righe: diventa rumore e non attira più l'attenzione.</li>
+        <li>«senza tesi» ripetuto in grigio su ogni riga.</li>
+        <li>Tre avvisi in arancio con percorsi di file prima della tabella: spingono in basso i dati.</li>
+        <li>Nel Rischio i riquadri sono dentro un riquadro.</li>
+        <li>Al telefono la tabella e i riquadri in alto escono dallo schermo: la pagina scorre di lato.</li>
+      </ul></section>
+      <section><h3>Mercato</h3><ul>
+        <li>Mappa e tabella dei rendimenti dei settori usano fondi rossi e verdi saturi: molto pesanti, e il grigio scuro vicino allo zero sembra un dato mancante.</li>
+        <li>Nella mappa di rotazione i nomi dei gruppi si sovrappongono.</li>
+        <li>«Chi si è mosso e perché»: ogni titolo ha tre righe (nome, etichetta, frase) anche quando la frase è sempre la stessa.</li>
+      </ul></section>
+      <section><h3>Azioni (Screener)</h3><ul>
+        <li>Le colonne non stanno nella pagina: «Volume» è tagliato e la tabella scorre di lato.</li>
+        <li>Capitalizzazione e volume cambiano unità nella stessa colonna (5,03T / 997Mld; 33,0Mln / 582K), quindi i numeri non si confrontano a colpo d'occhio.</li>
+        <li>Il «≈» davanti al peso sposta le cifre rispetto alle righe senza.</li>
+        <li>I filtri rapidi occupano 6 righe prima della tabella.</li>
+      </ul></section>
+      <section><h3>ETF</h3><ul>
+        <li>«Cosa diversifica» ripete la stessa frase lunga per ogni ETF e le colonne hanno gli stessi numeri.</li>
+        <li>Nella tabella ci sono tre etichette per riga (trend, verdetto, portafoglio) più la riga «mercato: …»: troppi colori insieme.</li>
+        <li>Gli asterischi dopo le percentuali spostano l'allineamento delle cifre.</li>
+        <li>I mini-grafici sono quasi tutti verdi, anche quando il trend è «Laterale».</li>
+      </ul></section>
+      <section><h3>Pannello del titolo e dell'ETF</h3><ul>
+        <li>Molto lungo e denso: «In sintesi», grafico, Decisione, Analisi e i blocchi numerati sono tutti allo stesso livello visivo.</li>
+        <li>Il verdetto principale ha lo stesso peso di un'etichetta qualunque.</li>
+        <li>Triangoli ▲▼ colorati, segni, emoji ✅/❌ e badge pieni insieme nella stessa schermata.</li>
+        <li>Grassetto usato in tanti punti del commento, quindi non si capisce cosa conta di più.</li>
+      </ul></section>
+    </div>
+  </div>
+
+  <div class="dir-head"><h2>Direzione A — Registro</h2>
+    <p>Il libro mastro di un ufficio titoli: carattere grottesco stretto (Archivo), righe compatte, struttura data da linee e fasce grigie invece che da riquadri separati. Più dati per schermata.</p></div>
+  <div class="controls" data-for="A"></div>
+  <div class="stage"><div class="frame dA" id="A" data-theme="light"></div></div>
+  <div class="notes">
+    <div><b>Caratteri</b>: Archivo per tutto, più stretto per titoli e nomi dei titoli (così i nomi lunghi degli ETF stanno su una riga), normale per il testo. Cifre a larghezza fissa ovunque.</div>
+    <div><b>Colori</b>: fondo grigio freddo, testo quasi nero, un solo blu inchiostro per ciò che si clicca (scheda attiva, pulsante principale, ordinamento). Verde, rosso e ambra solo per guadagno/perdita, verdetti e avvisi.</div>
+    <div><b>Forme</b>: raggi piccoli (4 px riquadri, 3 px controlli), nessuna ombra tranne il pannello laterale. Righe da 34 px.</div>
+  </div>
+
+  <div class="dir-head"><h2>Direzione B — Rendiconto</h2>
+    <p>Il rendiconto trimestrale che una banca privata manda al cliente: titoli e totali in carattere con grazie (Source Serif), dati in Source Sans, più spazio tra le righe, riquadri morbidi. Più calma, meno dati per schermata.</p></div>
+  <div class="controls" data-for="B"></div>
+  <div class="stage"><div class="frame dB" id="B" data-theme="light"></div></div>
+  <div class="notes">
+    <div><b>Caratteri</b>: Source Serif 4 per titoli dei riquadri, totali e prezzo del titolo; Source Sans 3 per tabelle e testo. Base 14 px invece di 13.</div>
+    <div><b>Colori</b>: fondo grigio-verde chiaro, un solo petrolio scuro per ciò che si clicca. Verde, rosso e ambra solo con un significato.</div>
+    <div><b>Forme</b>: raggi più grandi e su tre livelli (10 px riquadri, 6 px controlli, 4 px etichette), etichette con bordo e simbolo. Righe da 42 px.</div>
+  </div>
+
+  <div class="intro">
+    <h2>In comune alle due direzioni</h2>
+    <div class="analysis">
+      <section><h3>Numeri</h3><ul>
+        <li>Cifre a larghezza fissa, allineate a destra, stessi decimali nella stessa colonna.</li>
+        <li>Segno sempre visibile: <b>+</b> e <b>−</b> (il meno tipografico, largo come il +); lo zero scritto con i decimali della colonna («0,00 €»), in grigio.</li>
+        <li>Punto delle migliaia sempre, anche tra 1.000 e 9.999.</li>
+        <li>Una sola unità per colonna (per esempio capitalizzazione sempre in miliardi).</li>
+      </ul></section>
+      <section><h3>Etichette dei verdetti: 4 toni, ognuno con un simbolo</h3><ul>
+        <li><b>✓ favorevole</b> (verde): Entra ora, Accumula, Positivo, Diversifica.</li>
+        <li><b>– neutro</b> (grigio): Mantieni, Attendi, Neutro, Entra su ritracciamento (oggi è blu).</li>
+        <li><b>! attenzione</b> (ambra): Rivedi la tesi, leva.</li>
+        <li><b>✕ sfavorevole</b> (rosso): Evita, Negativo, Si sovrappone.</li>
+        <li>Riquadro pieno solo per i casi forti («Molto positivo») e per il verdetto principale nel pannello. In tabella solo simbolo e testo.</li>
+      </ul></section>
+      <section><h3>Telefono e tabelle</h3><ul>
+        <li>Nessuna tabella scorre di lato: sotto una certa larghezza le colonne secondarie si nascondono e guadagno € e % vanno su due righe nella stessa cella.</li>
+        <li>I caratteri verrebbero salvati in <code>static/fonts/</code>, così la dashboard non chiede niente a Google e funziona anche senza rete.</li>
+        <li>Tutti i colori, i caratteri, le dimensioni, le spaziature, i raggi e le ombre in un solo file, <code>static/tokens.css</code>, letto per primo.</li>
+      </ul></section>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------- dati inventati per la prova
+const ROWS = [
+  { n: "Vanguard FTSE All-World UCITS ETF (Acc)", t: "VWCE.DE", k: "ETF", c: "EUR", q: 30, cost: 118.20, px: 131.05, val: 3931.50, gp: 385.50, pct: 10.9, day: 14.70, w: 20.2, act: "Mantieni" },
+  { n: "iShares Core MSCI EM IMI UCITS ETF", t: "EIMI.MI", k: "ETF", c: "EUR", q: 60, cost: 32.85, px: 31.90, val: 1914.00, gp: -57.00, pct: -2.9, day: -6.60, w: 9.8, act: "Mantieni" },
+  { n: "Apple", t: "AAPL", k: "Azione", c: "USD", q: 10, cost: 182.40, px: 228.15, val: 1906.32, gp: 377.60, pct: 24.7, day: -12.45, w: 9.8, act: "Mantieni" },
+  { n: "Microsoft", t: "MSFT", k: "Azione", c: "USD", q: 5, cost: 402.10, px: 431.80, val: 1803.74, gp: 91.25, pct: 5.3, day: 8.30, w: 9.3, act: "Accumula" },
+  { n: "Costco Wholesale", t: "COST", k: "Azione", c: "USD", q: 2, cost: 905.30, px: 958.10, val: 1600.95, gp: 71.40, pct: 4.3, day: 0, w: 8.2, act: "Mantieni" },
+  { n: "ASML Holding", t: "ASML.AS", k: "Azione", c: "EUR", q: 2, cost: 865.00, px: 702.40, val: 1404.80, gp: -325.20, pct: -18.8, day: 21.60, w: 7.2, act: "Rivedi la tesi" },
+  { n: "Esempio Nasdaq-100 3x Daily Leveraged", t: "QQQ3.MI", k: "ETC", c: "EUR", q: 15, cost: 62.40, px: 48.10, val: 721.50, gp: -214.50, pct: -22.9, day: 9.15, w: 3.7, act: "Rivedi la tesi", lev: 3 },
+];
+const TONE = { "Mantieni": "neu", "Accumula": "fav", "Rivedi la tesi": "att" };
+const GLYPH = { fav: "✓", neu: "–", att: "!", unf: "✕", inf: "i", na: "?" };
+
+// numbers: Italian separators, fixed decimals, true minus sign, zero without sign
+const nf = (v, d) => Math.abs(v).toLocaleString("it-IT", { minimumFractionDigits: d, maximumFractionDigits: d, useGrouping: "always" });
+const zero = (v, d) => Math.abs(v) < 0.5 * 10 ** -d;
+const sgn = (v, d, unit = "") => zero(v, d) ? `<span class="flat">${nf(0, d)}${unit}</span>`
+  : `<span class="${v > 0 ? "up" : "down"}">${v > 0 ? "+" : "−"}${nf(v, d)}${unit}</span>`;
+const plain = (v, d, unit = "") => nf(v, d) + unit;
+const tag = (tone, text, strong) => `<span class="tag ${tone}${strong ? " strong" : ""}"><i aria-hidden="true">${GLYPH[tone]}</i><span>${text}</span></span>`;
+
+function frameHTML() {
+  const rows = ROWS.map(r => `
+    <tr${r.lev ? ' class="lev"' : ""}>
+      <td class="t"><b>${r.n}</b><small>${r.t} · ${r.k} · ${r.c}</small>${r.lev ? ` <small>${tag("att", "leva " + r.lev + "x")}</small>` : ""}<span class="act-in">${tag(TONE[r.act], r.act)}</span></td>
+      <td class="n c-q">${r.q}</td>
+      <td class="n c-cost">${plain(r.cost, 2)}</td>
+      <td class="n c-px">${plain(r.px, 2)}</td>
+      <td class="n">${plain(r.val, 2, " €")}</td>
+      <td class="n gp">${sgn(r.gp, 2, " €")}<span class="sub2">${sgn(r.pct, 1, "%")}</span></td>
+      <td class="n c-pct">${sgn(r.pct, 1, "%")}</td>
+      <td class="n c-day">${sgn(r.day, 2, " €")}</td>
+      <td class="n c-w">${plain(r.w, 1, "%")}</td>
+      <td class="c-act">${tag(TONE[r.act], r.act)}</td>
+    </tr>`).join("");
+  return `
+  <div class="bar">
+    <div class="brand">Nasdaq-100 <span>Monitor</span></div>
+    <div class="tape">
+      <div><span class="l">Nasdaq-100</span>21.480,35 ${sgn(0.62, 2, "%")}</div>
+      <div><span class="l">S&amp;P 500</span>6.105,12 ${sgn(0.31, 2, "%")}</div>
+      <div><span class="l">VIX</span>16,40 ${sgn(-4.10, 2, "%")}</div>
+      <div><span class="l">EUR/USD</span>1,1650 ${sgn(0, 2, "%")}</div>
+      <div><span class="l">Treasury 10 anni</span>4,215 ${sgn(-0.48, 2, "%")}</div>
+    </div>
+    <div class="search">Cerca ticker o società</div>
+  </div>
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab">Mercato</button><button class="tab" role="tab" aria-selected="true">Portafoglio</button><button class="tab" role="tab">Azioni</button><button class="tab" role="tab">ETF</button>
+    <span class="status"><span class="dot"></span>Mercato aperto · aggiornato alle 16:42</span>
+  </div>
+  <div class="subtabs" role="tablist">
+    <button class="sub" aria-selected="true">Posizioni</button><button class="sub">Performance</button><button class="sub">Concentrazione</button><button class="sub">Rischio</button>
+  </div>
+  <div class="body">
+    <div class="panel kpis">
+      <div class="kpi"><div class="l">Valore attuale</div><div class="v">19.482 €</div><div class="s">costo 18.734 €</div></div>
+      <div class="kpi"><div class="l">Guadagno / perdita</div><div class="v">${sgn(748, 0, " €")}</div><div class="s">${sgn(4.0, 1, "%")} sul costo</div></div>
+      <div class="kpi"><div class="l">Di cui effetto cambio</div><div class="v">${sgn(-112, 0, " €")}</div><div class="s">EUR/USD oggi 1,1650</div></div>
+      <div class="kpi"><div class="l">Oggi</div><div class="v">${sgn(35, 0, " €")}</div><div class="s">rispetto alla chiusura precedente</div></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-h"><h3>Posizioni</h3><span class="meta">7 posizioni · prezzi delle 16:42</span>
+        <span class="end seg" role="group"><button aria-pressed="true">Valori</button><button>Dati della dashboard</button></span></div>
+      <div class="notice"><span class="ic" aria-hidden="true">!</span><span>1 prodotto a leva: 3,7% del valore, ma 10,5% dell'esposizione effettiva.</span></div>
+      <table class="tbl">
+        <thead><tr>
+          <th>Titolo</th><th class="n c-q">Quantità</th><th class="n c-cost">Prezzo di carico</th><th class="n c-px">Prezzo</th>
+          <th class="n sorted">Valore</th><th class="n">Guadagno / perdita</th><th class="n c-pct">%</th><th class="n c-day">Oggi</th><th class="n c-w">Peso</th><th class="c-act">Azione</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <p class="foot-note">Valori in euro con le stesse formule di Fineco: quantità × prezzo ÷ cambio EUR/USD.</p>
+    </div>
+
+    <div class="two">
+      <div class="panel">
+        <div class="panel-h"><h3>Etichette</h3><span class="meta">colore + simbolo: si leggono anche senza distinguere i colori</span></div>
+        <div class="gallery">
+          <div class="g"><span>Segnale</span><div>${tag("fav", "Molto positivo", 1)}${tag("fav", "Positivo")}${tag("neu", "Neutro")}${tag("unf", "Negativo")}${tag("unf", "Molto negativo", 1)}${tag("na", "Dati insufficienti")}</div></div>
+          <div class="g"><span>Azione sulle posizioni</span><div>${tag("fav", "Accumula")}${tag("neu", "Mantieni")}${tag("att", "Rivedi la tesi")}</div></div>
+          <div class="g"><span>Verdetto (azioni ed ETF)</span><div>${tag("fav", "Entra ora")}${tag("neu", "Entra su ritracciamento")}${tag("neu", "Attendi")}${tag("unf", "Evita")}</div></div>
+          <div class="g"><span>Per il mio portafoglio</span><div>${tag("fav", "Diversifica")}${tag("neu", "Neutro")}${tag("unf", "Si sovrappone")}</div></div>
+          <div class="g"><span>Altre</span><div>${tag("inf", "non verificato")}${tag("att", "leva 3x")}</div></div>
+          <div class="g"><span>Pulsanti</span><div class="d-actions"><button class="btn primary">Salva la tesi</button><button class="btn">Ho rivisto la tesi</button><button class="btn ghost">Annulla</button>
+            <span class="seg" role="group"><button aria-pressed="true">1G</button><button>1S</button><button>1M</button><button>3M</button></span></div></div>
+        </div>
+        <div class="panel-h"><h3>Colori</h3><span class="meta">i soli colori della pagina</span></div>
+        <div class="sw">
+          <div><b style="background:var(--bg)"></b><span>fondo</span></div>
+          <div><b style="background:var(--surface)"></b><span>riquadro</span></div>
+          <div><b style="background:var(--ink)"></b><span>testo</span></div>
+          <div><b style="background:var(--ink-3)"></b><span>testo secondario</span></div>
+          <div><b style="background:var(--accent)"></b><span>cliccabile</span></div>
+          <div><b style="background:var(--pos)"></b><span>guadagno, favorevole</span></div>
+          <div><b style="background:var(--neg)"></b><span>perdita, sfavorevole</span></div>
+          <div><b style="background:var(--warn)"></b><span>attenzione</span></div>
+        </div>
+      </div>
+
+      <div class="panel drawer">
+        <div class="d-head">
+          <div class="tk">MSFT</div><div class="nm">Microsoft Corporation · dati di esempio</div>
+          <div class="px">431,80 $ ${sgn(3.25, 2)}<span>${sgn(0.76, 2, "%")}</span><small>alle 16:42 ora di New York</small></div>
+        </div>
+        <div class="d-sec"><h4>Analisi</h4>
+          <div class="d-row">${tag("neu", "Attendi: a ridosso del massimo", 1)}<span class="help">da oggi</span></div>
+          <div class="d-row" style="margin-top:8px">${tag("fav", "Positivo")}<span class="score">${sgn(34, 0)}</span><span class="help">segnale da −100 a +100</span></div>
+          <ul class="rules">
+            <li><span class="ok" aria-label="sì">✓</span><span>Segnale almeno positivo</span><span class="m">+34 ≥ +20</span></li>
+            <li><span class="ko" aria-label="no">✕</span><span>Prezzo lontano dal massimo a 52 settimane</span><span class="m">−1,2% · serve oltre −3,0%</span></li>
+            <li><span class="ok" aria-label="sì">✓</span><span>Rischio per operazione entro il limite</span><span class="m">1,0% ≤ 1,0%</span></li>
+          </ul>
+        </div>
+        <div class="d-sec"><h4>Livelli</h4>
+          <table class="tbl">
+            <tbody>
+              <tr><td>Supporto più vicino</td><td class="n">418,60 $</td><td class="n">${sgn(-3.06, 2, "%")}</td></tr>
+              <tr><td>Resistenza più vicina</td><td class="n">440,00 $</td><td class="n">${sgn(1.90, 2, "%")}</td></tr>
+              <tr><td>Rottura del massimo ${tag("inf", "non verificato")}</td><td class="n">441,20 $</td><td class="n">${sgn(2.18, 2, "%")}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="d-sec">
+          <div class="missing">Stime degli analisti non ancora disponibili: nuovo tentativo alle 18:15.</div>
+        </div>
+        <div class="d-sec d-actions"><button class="btn primary">Salva la tesi</button><button class="btn">Ho rivisto la tesi</button></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ---------- toggles (theme and phone width) for each frame
+for (const id of ["A", "B"]) {
+  const f = document.getElementById(id);
+  f.innerHTML = frameHTML();
+  const c = document.querySelector(`.controls[data-for="${id}"]`);
+  c.innerHTML = `<span class="grp" role="group" aria-label="Tema"><button data-t="light" aria-pressed="true">Chiaro</button><button data-t="dark" aria-pressed="false">Scuro</button></span>
+    <span class="grp" role="group" aria-label="Larghezza"><button data-w="desk" aria-pressed="true">Computer</button><button data-w="phone" aria-pressed="false">Telefono</button></span>`;
+  c.addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b) return;
+    b.parentElement.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === b));
+    if (b.dataset.t) f.dataset.theme = b.dataset.t;
+    if (b.dataset.w) f.classList.toggle("phone", b.dataset.w === "phone");
+  });
+  // "#telefono" opens both proposals at phone width; "#scuro" in dark theme
+  if (location.hash.includes("telefono")) c.querySelector('[data-w="phone"]').click();
+  if (location.hash.includes("scuro")) c.querySelector('[data-t="dark"]').click();
+}
+</script>
+</body>
+</html>

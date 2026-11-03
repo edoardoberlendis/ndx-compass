@@ -57,7 +57,7 @@ COUNTRY_IT = {"United States": "USA", "Japan": "Giappone", "United Kingdom": "Re
               "Mexico": "Messico", "Italy": "Italia", "Netherlands": "Paesi Bassi", "Canada": "Canada", "Spain": "Spagna"}
 
 _lock = threading.Lock()
-_state = {"day": None, "running": False, "data": None, "error": None}
+_state = {"day": None, "running": False, "data": None, "error": None, "failedAt": 0.0}
 
 
 def it(x, d=1):
@@ -302,9 +302,84 @@ def _proxy_info(sym):
     return out
 
 
+class PricesMissing(Exception):
+    """Yahoo gave no (or too few) prices: the page says so and the data is computed again RETRY_MIN minutes later."""
+
+
+RETRY_MIN = 15
+MIN_PRICED = 0.5                 # at least half of the ETFs must have prices, otherwise the day is not computed
+
+
+def history_labels(e):
+    j = e["justetf"]
+    return (f"Borsa Italiana ({j.get('tickerMI')}.MI)", f"Xetra ({j.get('tickerDE')}.DE)",
+            f"ETF americano {e.get('usProxy')} convertito in euro con il cambio giornaliero")
+
+
+def make_row(e, data, close, eurusd, hold=None, pinfo=None):
+    """(row, price history, closes of the listing for the plan) of one ETF of the list. Pure on its inputs, so the
+    tests can check it with made-up prices: with a usable history, trend, returns and plan levels must be there."""
+    hold, pinfo = hold or {}, pinfo or {}
+    j = e["justetf"]
+    s_mi = close.get(j["tickerMI"] + ".MI") if j.get("tickerMI") else None
+    s_de = close.get(j["tickerDE"] + ".DE") if j.get("tickerDE") else None
+    prox = close.get(e["usProxy"]) if e.get("usProxy") else None
+    prox_eur = to_eur(prox, eurusd) if prox is not None and eurusd is not None else None
+    s, src = pick_history(s_mi, s_de, prox_eur, history_labels(e))
+    longest = max([x for x in (s, prox_eur) if x is not None], key=len, default=None)
+    long_src = (f"ETF americano {e.get('usProxy')} in euro" if longest is prox_eur and longest is not s else src)
+    pi = pinfo.get(e.get("usProxy")) or {}
+    r = {"isin": e["isin"], "name": j.get("name"), "category": e["category"], "group": e["group"], "yahoo": e.get("yahoo"),
+         "historySource": src, "usProxy": e.get("usProxy"), "underlyingCurrency": e["underlyingCurrency"], "note": e.get("note"),
+         "ter": j.get("ter"), "sizeEurM": j.get("sizeEurM"), "distribution": j.get("distribution"), "replication": j.get("replication"),
+         "hedge": j.get("hedge"), "launch": j.get("launch"), "legal": j.get("legal"), "provider": j.get("provider"), "index": j.get("index"),
+         "justetf": {"source": j.get("source"), "date": j.get("date"), "holdingsDate": j.get("holdingsDate"), "replicationMethod": j.get("replicationMethod"),
+                     "top10": j.get("top10"), "countries": j.get("countries"), "sectors": j.get("sectors")},
+         "stale": (date.today() - date.fromisoformat(j["date"])).days > STALE_DAYS if j.get("date") else True,
+         "pe": pi.get("pe"), "noPrices": s is None,
+         "historyYears": round(len(s) / 252, 1) if s is not None else None,               # this ETF (or its fallback)
+         "fallback": bool(src) and not src.startswith("Borsa Italiana") or "incompleto" in (src or ""),
+         "launchIso": launch_iso(j.get("launch")),
+         "longYears": round(len(longest) / 252, 1) if longest is not None else None, "longSource": long_src}
+    if s is not None:
+        r.update({k: ret(s, n) for k, n in H.items()})
+        r["mom12_1"] = momentum_12_1(s)
+        r["vol"] = float(s.pct_change().iloc[-252:].std() * math.sqrt(252) * 100) if len(s) > 60 else None
+        r["maxDD3y"] = max_drawdown(s.iloc[-756:])
+        r["maxDDhist"] = max_drawdown(longest) if longest is not None else None
+        sma50, sma200 = s.rolling(50).mean().iloc[-1], s.rolling(200).mean().iloc[-1]
+        r["vs50"] = float(s.iloc[-1] / sma50 - 1) * 100 if not math.isnan(sma50) else None
+        r["vs200"] = float(s.iloc[-1] / sma200 - 1) * 100 if not math.isnan(sma200) else None
+        r["trend"] = trend_word(float(s.iloc[-1]), float(sma50), float(sma200))
+        r["spark"] = spark(s)
+        r["late"] = late_risk(s)
+        cur = e["underlyingCurrency"]
+        pair = close.get(FX_PAIR.get(cur, ""))
+        r["fx"] = {k: fx_effect(pair, n) for k, n in H.items()} if pair is not None and "hedged" not in cur else None
+        r["fxNote"] = ("cambio coperto (hedged): effetto cambio circa zero" if "hedged" in cur
+                       else "sottostante in più valute: effetto cambio non separabile" if r["fx"] is None else f"effetto cambio EUR/{cur}")
+    tech = next((p for n, p in j.get("sectors") or [] if n == "Technology"), 0.0)
+    usa = next((p for n, p in j.get("countries") or [] if n == "United States"), 0.0)
+    lst, lv_df = plan_listing(src, j, data)
+    r["planLevels"] = plan_levels(lv_df)
+    plan_series = None
+    if r["planLevels"]:
+        r["planLevels"]["listing"] = lst
+        r["planLevels"]["market"] = "Borsa Italiana" if lst.endswith(".MI") else "Xetra"
+        r["planLevels"]["mismatch"] = listing_mismatch(close, j)
+        plan_series = lv_df["Close"].dropna()
+    r["mix"] = {"tech": tech, "usa": usa, "usd": 0.0 if "hedged" in e["underlyingCurrency"] else (100.0 if e["underlyingCurrency"] == "USD" else usa)}
+    h = hold.get(e["isin"]) or {}
+    r["holdings"] = {k: h.get(k) for k in ("label", "source", "asOf", "fetched", "none", "top")}
+    r["top"] = pi.get("top") or {}               # US equivalent: only for "Perché si muove" in the panel
+    r["topNames"] = pi.get("names") or {}
+    return r, s, plan_series
+
+
 def build_public():
-    """Everything public of the ETF tab (a few minutes the first time each day)."""
-    from server import download, news           # local import: server imports this module's users
+    """Everything public of the ETF tab (a few minutes the first time each day). Raises PricesMissing when Yahoo gives
+    prices for fewer than half of the ETFs (network down, Yahoo not answering)."""
+    from server import download                 # local import: server imports this module's users
     U = _universe()
     t0 = time.time()
     mi = [e["justetf"]["tickerMI"] + ".MI" for e in U if e["justetf"].get("tickerMI")]
@@ -313,8 +388,12 @@ def build_public():
     fxs = sorted(set(FX_PAIR.values()))
     data = download(mi + de + proxies + fxs, period="7y", interval="1d")
     close = {t: df["Close"].dropna() for t, df in data.items() if "Close" in df and len(df["Close"].dropna())}
-    for s in close.values():
-        s.index = pd.to_datetime(s.index).tz_localize(None).normalize()
+    for x in close.values():
+        x.index = pd.to_datetime(x.index).tz_localize(None).normalize()
+    priced = sum(1 for e in U if any(close.get(t) is not None for t in (
+        (e["justetf"].get("tickerMI") or "~") + ".MI", (e["justetf"].get("tickerDE") or "~") + ".DE", e.get("usProxy") or "~")))
+    if priced < MIN_PRICED * len(U):
+        raise PricesMissing(f"Yahoo ha dato prezzi per {priced} ETF su {len(U)}")
     eurusd = close.get("EURUSD=X")
     import etf_holdings
     try:
@@ -328,60 +407,11 @@ def build_public():
         time.sleep(0.3)
     rows, series, plan_close = [], {}, {}
     for e in U:
-        j = e["justetf"]
-        s_mi = close.get(j["tickerMI"] + ".MI") if j.get("tickerMI") else None
-        s_de = close.get(j["tickerDE"] + ".DE") if j.get("tickerDE") else None
-        prox = close.get(e["usProxy"]) if e.get("usProxy") else None
-        prox_eur = to_eur(prox, eurusd) if prox is not None and eurusd is not None else None
-        s, src = pick_history(s_mi, s_de, prox_eur, (f"Borsa Italiana ({j.get('tickerMI')}.MI)", f"Xetra ({j.get('tickerDE')}.DE)",
-                                                     f"ETF americano {e.get('usProxy')} convertito in euro con il cambio giornaliero"))
-        longest = max([x for x in (s, prox_eur) if x is not None], key=len, default=None)
-        long_src = (f"ETF americano {e.get('usProxy')} in euro" if longest is prox_eur and longest is not s else src)
-        r = {"isin": e["isin"], "name": j.get("name"), "category": e["category"], "group": e["group"], "yahoo": e.get("yahoo"),
-             "historySource": src, "usProxy": e.get("usProxy"), "underlyingCurrency": e["underlyingCurrency"], "note": e.get("note"),
-             "ter": j.get("ter"), "sizeEurM": j.get("sizeEurM"), "distribution": j.get("distribution"), "replication": j.get("replication"),
-             "hedge": j.get("hedge"), "launch": j.get("launch"), "legal": j.get("legal"), "provider": j.get("provider"), "index": j.get("index"),
-             "justetf": {"source": j.get("source"), "date": j.get("date"), "holdingsDate": j.get("holdingsDate"), "replicationMethod": j.get("replicationMethod"),
-                         "top10": j.get("top10"), "countries": j.get("countries"), "sectors": j.get("sectors")},
-             "stale": (date.today() - date.fromisoformat(j["date"])).days > STALE_DAYS if j.get("date") else True,
-             "pe": (pinfo.get(e.get("usProxy")) or {}).get("pe"),
-             "historyYears": round(len(s) / 252, 1) if s is not None else None,               # this ETF (or its fallback)
-             "fallback": bool(src) and not src.startswith("Borsa Italiana") or "incompleto" in (src or ""),
-             "launchIso": launch_iso(j.get("launch")),
-             "longYears": round(len(longest) / 252, 1) if longest is not None else None, "longSource": long_src}
+        r, s, ps = make_row(e, data, close, eurusd, hold, pinfo)
         if s is not None:
-            r.update({k: ret(s, n) for k, n in H.items()})
-            r["mom12_1"] = momentum_12_1(s)
-            last3 = s.iloc[-756:]
-            r["vol"] = float(s.pct_change().iloc[-252:].std() * math.sqrt(252) * 100) if len(s) > 60 else None
-            r["maxDD3y"] = max_drawdown(last3)
-            r["maxDDhist"] = max_drawdown(longest) if longest is not None else None
-            sma50, sma200 = s.rolling(50).mean().iloc[-1], s.rolling(200).mean().iloc[-1]
-            r["vs50"] = float(s.iloc[-1] / sma50 - 1) * 100 if not math.isnan(sma50) else None
-            r["vs200"] = float(s.iloc[-1] / sma200 - 1) * 100 if not math.isnan(sma200) else None
-            r["trend"] = trend_word(float(s.iloc[-1]), float(sma50), float(sma200))
-            r["spark"] = spark(s)
-            r["late"] = late_risk(s)
-            cur = e["underlyingCurrency"]
-            pair = close.get(FX_PAIR.get(cur, ""))
-            r["fx"] = {k: fx_effect(pair, n) for k, n in H.items()} if pair is not None and "hedged" not in cur else None
-            r["fxNote"] = ("cambio coperto (hedged): effetto cambio circa zero" if "hedged" in cur
-                           else "sottostante in più valute: effetto cambio non separabile" if r["fx"] is None else f"effetto cambio EUR/{cur}")
             series[e["isin"]] = s
-        tech = next((p for n, p in j.get("sectors") or [] if n == "Technology"), 0.0)
-        usa = next((p for n, p in j.get("countries") or [] if n == "United States"), 0.0)
-        lst, lv_df = plan_listing(src, j, data)
-        r["planLevels"] = plan_levels(lv_df)
-        if r["planLevels"]:
-            r["planLevels"]["listing"] = lst
-            r["planLevels"]["market"] = "Borsa Italiana" if lst.endswith(".MI") else "Xetra"
-            r["planLevels"]["mismatch"] = listing_mismatch(close, j)
-            plan_close[e["isin"]] = lv_df["Close"].dropna()
-        r["mix"] = {"tech": tech, "usa": usa, "usd": 0.0 if "hedged" in e["underlyingCurrency"] else (100.0 if e["underlyingCurrency"] == "USD" else usa)}
-        h = hold.get(e["isin"]) or {}
-        r["holdings"] = {k: h.get(k) for k in ("label", "source", "asOf", "fetched", "none", "top")}
-        r["top"] = (pinfo.get(e.get("usProxy")) or {}).get("top") or {}     # US equivalent: only for the radar's "why"
-        r["topNames"] = (pinfo.get(e.get("usProxy")) or {}).get("names") or {}
+        if ps is not None:
+            plan_close[e["isin"]] = ps
         rows.append(r)
     # ---- categories: the first ETF of each category represents it
     rep = {}
@@ -390,16 +420,21 @@ def build_public():
             rep.setdefault(r["category"], r)
     cats = list(rep)
     px = pd.DataFrame({c: series[rep[c]["isin"]] for c in cats}).sort_index().ffill()
-    # momentum terciles month by month (for "da quanti mesi"), newest first
-    months = px.index.to_series().groupby([px.index.year, px.index.month]).last().values[-37:]
     hist = []
-    for d in reversed(months):
-        sub = px.loc[:d]
-        hist.append(terciles({c: momentum_12_1(sub[c]) for c in cats}))
-    corr = px.pct_change().iloc[-126:].corr()
+    if len(px):                                          # momentum terciles month by month (for "da quanti mesi"), newest first
+        months = px.index.to_series().groupby([px.index.year, px.index.month]).last().values[-37:]
+        for d in reversed(months):
+            sub = px.loc[:d]
+            hist.append(terciles({c: momentum_12_1(sub[c]) for c in cats}))
+    corr = px.pct_change().iloc[-126:].corr() if len(px) else pd.DataFrame()
+    moves = {}
+    for c in cats:                                       # the most similar category of the last 6 months
+        others = corr[c].drop(c).dropna().sort_values(ascending=False) if c in corr else pd.Series(dtype=float)
+        if len(others):
+            moves[c] = {"category": others.index[0], "corr": float(others.iloc[0]), "text": moves_with_text(others.index[0], float(others.iloc[0]))}
     vwce = next((r for r in rows if r["isin"] == "IE00BK5BQT80"), None)
     rot = {}
-    for k, n in H.items():                               # x: the chosen period vs All-World; y: a shorter one (SHORTER)
+    for k, n in H.items():                               # x: the period of the sorted column vs All-World; y: a shorter one
         rot[k] = []
         b_x = (vwce or {}).get(k)
         b_y = ret(series[vwce["isin"]], SHORTER[k]) if vwce and vwce["isin"] in series else None
@@ -410,63 +445,66 @@ def build_public():
                 x, y = r[k] - b_x, ry - b_y
                 rot[k].append({"name": c, "kind": "category", "n": 1, "rs1m": x, "rs1w": y,
                                "quadrant": ("Leading" if y >= 0 else "Weakening") if x >= 0 else ("Improving" if y >= 0 else "Lagging")})
-    for r in rows:                                       # tercile and months for every ETF, from its category
+    for r in rows:                                       # tercile, months and "si muove come" for every ETF, from its category
         r["momTercile"] = hist[0].get(r["category"]) if hist else None
         r["momMonths"] = months_in_tercile(hist, r["category"])
-    # ---- radar: for every period the 5 strongest and 5 weakest categories (return in EUR), with the computed "why"
-    lists = {}
-    for k in H:
-        ranked = sorted((c for c in cats if rep[c].get(k) is not None), key=lambda c: -rep[c][k])
-        lists[k] = {"strong": ranked[:5], "weak": ranked[-5:][::-1] if len(ranked) >= 10 else []}
-    need = sorted({c for v in lists.values() for side in v.values() for c in side})
-    hold_px = _holding_prices([rep[c] for c in need])
-    info = {c: _radar_info(c, rep[c], corr, news, hold_px) for c in need}
-    radar = {k: {side: [_radar_item(c, rep[c], k, info[c], hold_px) for c in names] for side, names in v.items()} for k, v in lists.items()}
+        r["movesWith"] = moves.get(r["category"])
     now = datetime.now(ROME)
     session = str(plan_close["IE00BK5BQT80"].index[-1].date()) if "IE00BK5BQT80" in plan_close else None
-    out = {"generated": datetime.now().isoformat(timespec="seconds"), "rows": rows, "radar": radar, "radarInfo": info, "rotation": rot,
-           "periods": PERIOD_IT, "session": {"day": session, "closed": session_closed(session, now)},
-           "test": _test_summary(), "universeDate": max((r["justetf"]["date"] or "") for r in rows), "elapsed": round(time.time() - t0, 1),
-           "_weekly": weekly_eur(series), "_holdings": hold, "_close": plan_close}               # kept in memory for the correlation with my portfolio (not sent)
+    return {"generated": datetime.now().isoformat(timespec="seconds"), "rows": rows, "rotation": rot,
+            "periods": PERIOD_IT, "session": {"day": session, "closed": session_closed(session, now)},
+            "priced": priced, "universeDate": max((r["justetf"]["date"] or "") for r in rows), "elapsed": round(time.time() - t0, 1),
+            "_weekly": weekly_eur(series), "_holdings": hold, "_close": plan_close}   # kept in memory (not sent)
+
+
+_why = {}
+
+
+def why(isin):
+    """"Perché si muove" of one ETF, computed when its panel is opened and kept for the day: the two holdings of the US
+    equivalent that explain most of its move over 1 month, 3 months and 1 year, and headlines on its two largest holdings."""
+    from server import download, news
+    key = (isin, date.today().isoformat())
+    if key in _why:
+        return _why[key]
+    d = _state.get("data") or {}
+    r = next((x for x in d.get("rows") or [] if x["isin"] == isin), None)
+    if not r:
+        return None
+    out = {"contrib": {}, "news": [], "proxy": r.get("usProxy")}
+    top = r.get("top") or {}
+    if top and r.get("usProxy"):
+        try:
+            px = download(list(top)[:10] + [r["usProxy"]], period="2y", interval="1d")
+            prices = {k: v["Close"].dropna() for k, v in px.items() if "Close" in v}
+            names = r.get("topNames") or {}
+            for k in ("r1m", "r3m", "r1y"):
+                c = contribution(top, prices, r["usProxy"], H[k])
+                if c:
+                    two, share, p_all = c
+                    out["contrib"][k] = {"names": [f"{names.get(x, base(x))} ({base(x)})" for x in two], "share": share, "move": p_all,
+                                         "text": contribution_text([f"{names.get(x, base(x))} ({base(x)})" for x in two], share, p_all, PERIOD_IT[k], r["usProxy"])}
+        except Exception:
+            log.exception("why %s", isin)
+        for sym in list(top)[:2]:
+            try:
+                for n in (news(sym, 3) or [])[:1]:
+                    if n.get("title"):
+                        out["news"].append({"symbol": base(sym), "title": n["title"], "publisher": n.get("publisher"), "url": n.get("url")})
+            except Exception:
+                pass
+    _why[key] = out
     return out
 
 
-def _holding_prices(reps):
-    """Daily closes (3 years) of the first 10 holdings of the US equivalents of the radar categories: one download."""
-    from server import download
-    syms = sorted({x for r in reps if r.get("usProxy") for x in list(r.get("top") or {})[:10]} | {r["usProxy"] for r in reps if r.get("usProxy")})
-    if not syms:
-        return {}
-    try:
-        d = download(syms, period="3y", interval="1d")
-        return {k: v["Close"].dropna() for k, v in d.items() if "Close" in v}
-    except Exception:
-        log.exception("radar: holding prices")
-        return {}
-
-
-def _radar_info(cat, r, corr, news, px):
-    """What does not depend on the period: momentum, late risk, history, the most similar category, headlines on the two
-    largest holdings of the US equivalent."""
-    item = {"isin": r["isin"], "mom12_1": r.get("mom12_1"), "momTercile": r.get("momTercile"), "momMonths": r.get("momMonths"),
-            "late": r.get("late"), "maxDDhist": r.get("maxDDhist"), "young": (r.get("longYears") or 0) < YOUNG_YEARS,
-            "longYears": r.get("longYears"), "longSource": r.get("longSource"), "fallback": r.get("fallback"), "group": r["group"]}
-    if cat in corr:
-        others = corr[cat].drop(cat).dropna().sort_values(ascending=False)
-        if len(others):
-            item["movesWith"] = {"category": others.index[0], "corr": float(others.iloc[0]),
-                                 "text": moves_with_text(others.index[0], float(others.iloc[0]))}
-    top = list(r.get("top") or {})[:2]
-    heads = []
-    for sym in top:
-        try:
-            for n in (news(sym, 3) or [])[:1]:
-                if n.get("title"):
-                    heads.append({"symbol": base(sym), "title": n["title"], "publisher": n.get("publisher"), "url": n.get("url")})
-        except Exception:
-            pass
-    item["news"] = heads
-    return item
+def contribution_text(names, share, move, period, proxy):
+    """The sentence of the contribution; above 100% the other holdings together moved the other way."""
+    what = "rialzo" if move > 0 else "ribasso"
+    who = " e ".join(names)
+    if share > 100:
+        return (f"{who} spiegano da soli più dell'intero {what} in {period} ({it(share, 0)}%): gli altri titoli, insieme, hanno pesato "
+                f"in senso opposto (calcolato sull'ETF americano equivalente {proxy})")
+    return f"{who} spiegano il {it(share, 0)}% del {what} in {period} (calcolato sull'ETF americano equivalente {proxy})"
 
 
 def contribution(top, prices, proxy, n):
@@ -483,27 +521,6 @@ def contribution(top, prices, proxy, n):
     return (two, share, p_all) if share >= MIN_SHARE else None
 
 
-def _radar_item(cat, r, k, info, px):
-    """The data-derived sentence of one radar category for the period k."""
-    label = PERIOD_IT[k]
-    parts = [f"{cat}: {sgn(r[k])} in {label}"]
-    if r.get("mom12_1") is not None:
-        parts[0] += f" (12-1 mesi: {sgn(r['mom12_1'])})"
-    item = {"category": cat, "value": r[k]}
-    if r.get("top") and r.get("usProxy"):
-        c = contribution(r["top"], px, r["usProxy"], H[k])
-        if c:
-            two, share, p_all = c
-            names = r.get("topNames") or {}
-            item["contrib"] = {"names": [names.get(x, base(x)) for x in two], "share": share, "proxy": r["usProxy"]}
-            parts.append(f"{' e '.join(f'{names.get(x, base(x))} ({base(x)})' for x in two)} spiegano il {it(share, 0)}% del "
-                         f"{'rialzo' if p_all > 0 else 'ribasso'} (calcolato sull'ETF americano equivalente {r['usProxy']})")
-    if info.get("movesWith"):
-        parts.append(info["movesWith"]["text"])
-    item["sentence"] = ". ".join(p[:1].upper() + p[1:] for p in parts) + "."
-    return item
-
-
 def session_closed(day, now):
     """True when the closes of `day` are final: an earlier day, or the same day after 18:00 in Rome."""
     if not day:
@@ -512,43 +529,47 @@ def session_closed(day, now):
     return day < today or (day == today and (now.hour, now.minute) >= CLOSE_ROME)
 
 
-def _test_summary():
-    try:
-        with open(TEST) as f:
-            t = json.load(f)
-    except Exception:
-        return None
-    return {"from": t["from"], "to": t["to"], "conditions": t["conditions"], "control": t["control"],
-            "rules": {k: {x: v[x] for x in ("n", "mean3", "median3", "mean6", "checks", "pass", "yearsPositive", "yearsCounted", "firstHalf", "secondHalf", "beatAll")}
-                      for k, v in t["rules"].items()},
-            "m2Protection": {k: t["m2Protection"][k] for k in ("n", "ddCutCount", "volLowerCount", "verified", "rule")}}
-
-
 def public():
-    """Today's public data, or None while it is being computed in the background (status in _state)."""
+    """The public data (today's, or the last good day's while today's is computed or failed), or None. After a failure
+    the computation is tried again RETRY_MIN minutes later, not at every request."""
     with _lock:
-        if _state["day"] == date.today().isoformat() and _state["data"]:
+        today = date.today().isoformat()
+        if _state["day"] == today and _state["data"]:
             sess = _state["data"].get("session") or {}
-            if not sess.get("closed") and session_closed(date.today().isoformat(), datetime.now(ROME)) and not _state["running"]:
+            if not sess.get("closed") and session_closed(today, datetime.now(ROME)) and not _state["running"]:
                 _state["running"] = True                 # built during the session: once more after the close (kept meanwhile)
                 threading.Thread(target=_job, daemon=True).start()
             return _state["data"]
-        if not _state["running"]:
+        waiting = _state["failedAt"] and time.time() - _state["failedAt"] < RETRY_MIN * 60
+        if not _state["running"] and not waiting:
             _state["running"] = True
             threading.Thread(target=_job, daemon=True).start()
-        return _state["data"]                      # yesterday's copy while today's is computed
+        return _state["data"]                      # the last good day's copy while today's is computed
+
+
+def status():
+    """For the page: is the data of today, when was it computed, what went wrong and when is the next try."""
+    with _lock:
+        d, err, failed = _state["data"], _state["error"], _state["failedAt"]
+        return {"dataDay": (d or {}).get("generated", "")[:10] or None, "today": _state["day"] == date.today().isoformat(),
+                "running": _state["running"], "error": err,
+                "retryAt": datetime.fromtimestamp(failed + RETRY_MIN * 60).isoformat(timespec="minutes") if err and failed else None}
 
 
 def _job():
     try:
         d = build_public()
         with _lock:
-            _state.update(day=date.today().isoformat(), data=d, error=None)
+            _state.update(day=date.today().isoformat(), data=d, error=None, failedAt=0.0)
         log.info("ETF tab: %d ETFs in %.0fs", len(d["rows"]), d["elapsed"])
+    except PricesMissing as e:
+        log.warning("ETF tab: %s, new try in %d minutes", e, RETRY_MIN)
+        with _lock:
+            _state.update(error=f"prezzi non disponibili ({e})", failedAt=time.time())
     except Exception as e:
         log.exception("ETF tab data failed")
         with _lock:
-            _state["error"] = str(e)
+            _state.update(error=str(e), failedAt=time.time())
     finally:
         with _lock:
             _state["running"] = False

@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Nasdaq-100 Monitor</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='1' y='1' width='8' height='9' fill='%231f9d55'/><rect x='10' y='1' width='5' height='5' fill='%23d6393b'/><rect x='10' y='7' width='5' height='3' fill='%231f9d55'/><rect x='1' y='11' width='14' height='4' fill='%23555'/></svg>">
+<link rel="preload" href="/static/fonts/source-sans-3.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/static/fonts/source-serif-4.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/tokens.css">
 <link rel="stylesheet" href="/static/styles.css">
 <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
 </head>
@@ -29,13 +32,15 @@
   <div class="tablist" role="tablist">
     <button class="tab" data-main="mercato" title="Cosa sta succedendo?">Mercato</button>
     <button class="tab" data-main="portafoglio" title="Cosa ho e come sta andando?">Portafoglio</button>
-    <button class="tab" data-main="ricerca" title="Cosa potrei comprare?">Ricerca</button>
+    <button class="tab" data-main="azioni" title="Quali azioni del Nasdaq-100 potrei comprare?">Azioni</button>
+    <button class="tab" data-main="etf" title="Quali ETF potrei comprare?">ETF</button>
   </div>
   <div class="updated"><span class="status" id="status"></span><span class="info cal-warn" id="calWarn" tabindex="0" role="button" aria-label="Avvisi da controllare" data-info="" hidden>⚠</span><span id="updated"></span></div>
   <div class="subtabs" id="subtabs" hidden></div>
 </nav>
 
 <main>
+  <div id="verBanner" class="warn-box ver-banner" hidden></div>
   <div id="loading" class="loading"><div class="spinner"></div><p>Caricamento dati di mercato…</p><small>Il primo caricamento scarica circa 110 serie da Yahoo Finance e richiede una decina di secondi (meno se riavvii il server nello stesso giorno).</small></div>
 
   <!-- TODAY (view id "overview" kept for saved links) -->
@@ -88,7 +93,6 @@
       <div id="myNewsOpts"></div>
       <div class="table-wrap"><table class="scr my" id="myTbl"></table></div>
     </div>
-    <div class="card" id="myEtf" hidden></div>
   </section>
 
   <!-- ETF (Ricerca → ETF, etf.py) -->

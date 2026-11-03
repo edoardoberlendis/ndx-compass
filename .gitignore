@@ -10,3 +10,6 @@ portafoglio/
 
 # archivi del progetto (non vanno nel repository)
 *.zip
+
+# pagine salvate a mano dai siti di borse ed emittenti (Fase 25): fuori da Git
+fonti/

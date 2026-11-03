@@ -70,6 +70,13 @@ def _load_history(tickers):
             _hist["loading"] = False
 
 
+def retry_at():
+    """When the portfolio prices will be downloaded again after an empty download (ISO time), or None."""
+    with _lock:
+        f = _hist["failedAt"]
+    return datetime.fromtimestamp(f + RETRY_MIN * 60).isoformat(timespec="minutes") if f else None
+
+
 def usable(closes, tickers):
     """A download is kept for the day only if it has the exchange rate, QQQ and at least half of the positions."""
     return portfolio.FX in closes and BENCH in closes and sum(t in closes for t in tickers) >= max(1, len(tickers) / 2)

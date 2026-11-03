@@ -1,0 +1,127 @@
+/* ============================================================
+   Sistema di design della dashboard (direzione B "Rendiconto", Fase G2).
+   L'unico punto con colori, caratteri, dimensioni, spaziature, raggi e ombre:
+   styles.css usa solo queste variabili. Caricato prima di styles.css.
+   ============================================================ */
+
+/* Caratteri salvati in static/fonts (licenza SIL Open Font License 1.1, vedi static/fonts/LICENZA.txt):
+   nessuna richiesta a Google, la dashboard funziona anche senza rete. */
+@font-face {
+  font-family: "Source Sans 3"; font-style: normal; font-weight: 400 700; font-display: swap;
+  src: url("/static/fonts/source-sans-3.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Source Sans 3"; font-style: italic; font-weight: 400 700; font-display: swap;
+  src: url("/static/fonts/source-sans-3-italic.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Source Serif 4"; font-style: normal; font-weight: 500 700; font-display: swap;
+  src: url("/static/fonts/source-serif-4.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root {
+  color-scheme: light;
+
+  /* ---------- colori: neutri */
+  --bg: #edf0ef;            /* fondo della pagina */
+  --surface: #fbfcfc;       /* riquadri */
+  --surface-2: #f2f5f4;     /* righe al passaggio del mouse, riquadri interni */
+  --surface-3: #e6ebe9;     /* elemento selezionato, binari delle barre */
+  --line: #d6dcda;          /* linee tra le righe e bordi */
+  --line-strong: #b3bdba;   /* bordi dei controlli */
+  --ink: #1b2422;           /* testo */
+  --ink-2: #4a5654;         /* testo secondario */
+  --ink-3: #6c7876;         /* note, unità, intestazioni delle colonne */
+
+  /* ---------- colori: solo con un significato */
+  --accent: #24505a;        /* ciò che si clicca: scheda attiva, pulsante principale, ordinamento */
+  --accent-soft: #e0ebec;
+  --pos: #1b7a4d;           /* guadagno, favorevole (sempre con + o ✓) */
+  --pos-soft: #e2f0e8;
+  --neg: #b53d2c;           /* perdita, sfavorevole (sempre con − o ✕) */
+  --neg-soft: #f6e4e0;
+  --warn: #945f05;          /* attenzione (sempre con !) */
+  --warn-soft: #f5ebd7;
+  --info: #3f5f68;          /* "non verificato", fonti */
+  --info-soft: #e5edee;
+  --on-strong: #ffffff;     /* testo sopra un colore pieno */
+
+  /* ---------- colori dei grafici (serie distinte, non giudizi) */
+  --series-1: #2f6f86;
+  --series-2: #c06a2b;
+  --series-3: #3d8a6e;
+  --series-4: #7a5aa6;
+  --map-bg: #26302f;
+
+  /* ---------- caratteri */
+  --font-ui: "Source Sans 3", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-title: "Source Serif 4", Georgia, "Times New Roman", serif;
+
+  /* scala (px): 12 · 13 · 14 · 17 · 20 · 30 */
+  --fs-xs: 12px;            /* note, etichette */
+  --fs-sm: 13px;            /* intestazioni delle colonne, testo secondario */
+  --fs-base: 14px;          /* testo e tabelle */
+  --fs-md: 17px;            /* titoli dei riquadri */
+  --fs-lg: 20px;            /* titolo del pannello */
+  --fs-xl: 30px;            /* numeri principali, prezzo */
+  --lh: 1.45;
+  --lh-text: 1.55;          /* paragrafi di spiegazione */
+
+  /* ---------- spaziature (px) */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --cell-y: 9px;            /* spazio sopra e sotto nelle celle delle tabelle */
+  --cell-x: 12px;
+
+  /* ---------- raggi: tre livelli */
+  --r-panel: 10px;          /* riquadri, pannello */
+  --r-ctrl: 6px;            /* pulsanti, campi, avvisi */
+  --r-tag: 4px;             /* etichette */
+
+  /* ---------- ombre: solo per ciò che sta sopra la pagina (pannello laterale, suggerimenti) */
+  --shadow-float: 0 16px 40px rgba(27, 36, 34, .16), 0 1px 3px rgba(27, 36, 34, .08);
+  --scrim: rgba(27, 36, 34, .32);
+}
+
+/* tema scuro: segue il Mac, salvo scelta diversa con il pulsante */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #111615; --surface: #182020; --surface-2: #1d2625; --surface-3: #26302f;
+    --line: #2a3433; --line-strong: #485452;
+    --ink: #e6ecea; --ink-2: #aab6b3; --ink-3: #838f8c;
+    --accent: #86bcc6; --accent-soft: #1b2f33;
+    --pos: #5cc48f; --pos-soft: #16302a;
+    --neg: #ef8471; --neg-soft: #3a1f1b;
+    --warn: #dfab4f; --warn-soft: #352914;
+    --info: #9fbcc2; --info-soft: #1d2b2d;
+    --on-strong: #111615;
+    --series-1: #6fb0c8; --series-2: #e0935a; --series-3: #6cc19f; --series-4: #ab8ad6;
+    --map-bg: #111615;
+    --shadow-float: 0 16px 40px rgba(0, 0, 0, .55), 0 1px 3px rgba(0, 0, 0, .4);
+    --scrim: rgba(0, 0, 0, .5);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111615; --surface: #182020; --surface-2: #1d2625; --surface-3: #26302f;
+  --line: #2a3433; --line-strong: #485452;
+  --ink: #e6ecea; --ink-2: #aab6b3; --ink-3: #838f8c;
+  --accent: #86bcc6; --accent-soft: #1b2f33;
+  --pos: #5cc48f; --pos-soft: #16302a;
+  --neg: #ef8471; --neg-soft: #3a1f1b;
+  --warn: #dfab4f; --warn-soft: #352914;
+  --info: #9fbcc2; --info-soft: #1d2b2d;
+  --on-strong: #111615;
+  --series-1: #6fb0c8; --series-2: #e0935a; --series-3: #6cc19f; --series-4: #ab8ad6;
+  --map-bg: #111615;
+  --shadow-float: 0 16px 40px rgba(0, 0, 0, .55), 0 1px 3px rgba(0, 0, 0, .4);
+  --scrim: rgba(0, 0, 0, .5);
+}

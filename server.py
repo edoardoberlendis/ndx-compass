@@ -1140,6 +1140,9 @@ def movers_why(n=8):
 # ---------------------------------------------------------------- web
 
 app = Flask(__name__, static_folder=None)
+# version of the code that serves the page: change it together with PAGE_VERSION in static/app.js whenever the data
+# sent to the page changes, so that a server left running with old code is noticed (the page asks to restart it)
+DASHBOARD_VERSION = "2026-10-10b"
 
 
 @app.route("/")
@@ -1362,17 +1365,45 @@ def api_earnings():
     return jsonify(loading=True, data=_earn["data"])
 
 
+@app.after_request
+def version_header(resp):
+    """Every answer says which version of the code the server runs: the page compares it with its own and asks to
+    restart the server when they differ (a server left running with old code: 10 Oct 2026)."""
+    resp.headers["X-Dashboard-Version"] = DASHBOARD_VERSION
+    return resp
+
+
+@app.route("/api/etf/diary")
+def api_etf_diary():
+    """The ETF diary (etf_buy.py): how each verdict did after 1, 3 and 6 months. Personal data, local only."""
+    import etf
+    import etf_buy
+    e = etf._state.get("data") or {}
+    return app.response_class(json.dumps({"days": len(etf_buy.days()), "personal": etf_buy.stats(e.get("_close") or {}, "verdict"),
+                                          "market": etf_buy.stats(e.get("_close") or {}, "market")}, default=clean), mimetype="application/json")
+
+
+@app.route("/api/etf/why/<isin>")
+def api_etf_why(isin):
+    """"Perché si muove" of one ETF (etf.why), computed when its panel is opened."""
+    import etf
+    w = etf.why(isin)
+    return (jsonify(w) if w is not None else (jsonify(error="ETF non trovato"), 404))
+
+
 @app.route("/api/etf")
 def api_etf():
     """Ricerca → ETF (etf.py): public data of the day, plus "Ha senso per il mio portafoglio?" and "Ha senso comprare?"
     computed now in memory."""
     import etf
     d = etf.public()
+    st = etf.status()
     if not d:
-        return jsonify(status="loading", error=etf._state["error"])
+        return jsonify(status="error" if st["error"] else "loading", **st)
     out = {k: v for k, v in d.items() if not k.startswith("_")}
     out.update(etf_personal(d, portfolio_view()))
     out["status"] = "ok"
+    out["dataStatus"] = st
     return app.response_class(json.dumps(out, default=clean), mimetype="application/json")
 
 
@@ -1401,6 +1432,7 @@ def etf_personal(d, pf):
         out["diversify"] = etf.diversify(d["rows"], fits)
         out["corrReady"] = closes is not None
         out["pricesMissing"] = closes is not None and len(port_w) <= 30   # downloaded but unusable: correlation not computed
+        out["pricesRetryAt"] = risk.retry_at()
     import rules
     risk_pct = rules.load().get("tradeRisk") or 1.0
     usable = out.get("corrReady") and not out.get("pricesMissing")       # without correlation the fit is not complete
@@ -1459,11 +1491,6 @@ def api_diary():
     closes = {t: daily[t]["Close"].dropna() for t in tickers if t in daily}
     res = diary.results(closes, bench["Close"].dropna())
     res["missing"] = diary.missing(last_closed_session())
-    import etf
-    import etf_buy
-    e = etf._state.get("data") or {}
-    res["etf"] = {"days": len(etf_buy.days()), "personal": etf_buy.stats(e.get("_close") or {}, "verdict"),
-                  "market": etf_buy.stats(e.get("_close") or {}, "market")}
     return app.response_class(json.dumps(res, default=clean), mimetype="application/json")
 
 
