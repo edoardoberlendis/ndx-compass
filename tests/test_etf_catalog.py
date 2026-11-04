@@ -311,7 +311,7 @@ def test_20_existing_etf_tab_untouched():
     rules = [r.rule for r in server.app.url_map.iter_rules()]
     assert {"/api/etf", "/api/etf/why/<isin>", "/api/etf/diary"} <= set(rules)
     js = open(os.path.join(root, "static", "app.js")).read()
-    assert "function renderEtf()" in js and "BUY_INFO" in js and "data-etfmode" in js and 'etf: "ETF · catalogo e confronto"' in js
+    assert "function renderEtf()" in js and "BUY_INFO" in js and "data-etfmode" in js and 'etf: "ETF · esposizioni e prodotti"' in js  # label renamed in phase 6B
 
 
 # 21-23: no regressions, performance, no network

@@ -890,14 +890,15 @@ Regole:
   **borsa** (schede ETF di Borsa Italiana: tipo, ticker, MIC, TER, emittente legale, benchmark, proventi, date di KID e
   prospetto, book ritardato di 15 minuti), la **copia di justETF** già salvata l'8 ottobre 2026 in `etf_universe.json`
   (mai riscaricata), **Yahoo** per valuta e volumi medi di ogni quotazione. Una richiesta alla volta, stop al primo rifiuto.
-- **Tracking difference e tracking error**: non verificabili con le fonti gratuite lette (restano «n.d.»).
-  **Disponibilità presso il broker (Fineco)**: non verificata. **Spread**: solo da un book reale e a mercato aperto.
+- **Tracking difference e tracking error**: nella Fase 6A non verificabili; dalla Fase 6B la tracking difference c'è per
+  gli ETF iShares (vedi sotto); il tracking error resta «n.d.». **Disponibilità presso il broker (Fineco)**: non verificata. **Spread**: solo da un book reale e a mercato aperto.
 - ETC, ETN, leva, inversi e non UCITS stanno **a parte** (oggi: gli ETC su oro e argento); restano nella scheda Mercato.
 - Obbligazionari con un modello loro (tipo, duration, rendimento a scadenza al peggio, credito, valuta): il rendimento
   a scadenza non è una previsione.
-- Cinque classi sono state **aggiunte nella Fase 6A, da approvare** (IWLE, NQSE, IUSA, IEAA, SEGA: trovate nell'elenco
-  ufficiale iShares) per mostrare classe coperta / distribuzione / fondo diverso sullo stesso indice. Non sono nella
-  scheda Mercato e `etf_universe.json` non è cambiato.
+- Cinque classi sono state **aggiunte nella Fase 6A** (IWLE, NQSE, IUSA, IEAA, SEGA: trovate nell'elenco ufficiale
+  iShares) per mostrare classe coperta / distribuzione / fondo diverso sullo stesso indice. **Approvate il 4 novembre
+  2026** (Fase 6B) dopo il controllo automatico sulla pagina iShares di ISIN, classe, indice, proventi e quotazioni.
+  Non sono nella scheda Mercato e `etf_universe.json` non è cambiato.
 
 **Livelli di comparabilità** (`etf_comparison.py`): **1** stesso indice e stessa copertura; **2** esposizione molto
 simile (indice diverso sullo stesso mercato, o stesso indice con e senza copertura del cambio); **3** stessa categoria,
@@ -906,9 +907,57 @@ separate (identità, indice ed esposizione, valuta, costi, struttura, dimensione
 per i livelli 1–2, «cosa cambia tra loro» senza dire quale sia meglio. I titoli in comune si mostrano solo sui primi 10
 con data, e solo come elenco: con i primi 10 non si può calcolare una sovrapposizione complessiva.
 
-Catalogo al 4 novembre 2026: 66 ETF UCITS + 2 esclusi, 118 quotazioni (Borsa Italiana e Xetra), completezza media 99%.
-Dati mancanti noti: duration e rendimento per gli obbligazionari non iShares (X13E, BTP10), quotazioni delle classi
-IWLE e NQSE (non su ETFplus), replica per SEGA e IUSA; per i file Xtrackers senza data si usa la data del download.
+Catalogo al 4 novembre 2026 (dopo la Fase 6B): 66 ETF UCITS + 2 esclusi, 120 quotazioni (Borsa Italiana e Xetra; IWLE e
+NQSE ora con Xetra). Dati mancanti noti: duration e rendimento per gli obbligazionari non iShares (X13E, BTP10, XEON),
+tracking difference per gli ETF non iShares, TER di EQQQ (fonti discordanti, documento Invesco non letto); per i file
+Xtrackers senza data si usa la data del download.
+
+## Scanner delle esposizioni ETF (Fase 6B)
+
+In **Opportunità → ETF** il catalogo diventa uno scanner **esplorativo** che parte dalle **esposizioni** (mercato
+mondiale, USA, Europa, emergenti, settori, temi, governativi, societari, altre) e solo dopo guarda i prodotti. Nessun
+Compra/Vendi, nessuna probabilità, nessun punteggio unico: le dimensioni (andamento, rischio, prodotto) restano separate.
+Le condizioni **non sono validate** (il momentum sulle categorie di ETF non ha superato il test della Fase 24; le
+strategie Trading delle Fasi 3–4B non hanno mostrato vantaggi).
+
+```sh
+.venv/bin/python etf_prices.py aggiorna           # scarica le chiusure degli ETF (di solito lo fa il server dopo le 18:00)
+.venv/bin/python etf_prices.py stato              # cosa c'è in cache/etf_prices.pkl
+.venv/bin/python etf_opportunity.py lungo         # lo scanner da Terminale (oppure `breve`)
+.venv/bin/python etf_opportunity_diary.py         # stato del diario dello scanner ETF
+```
+
+- **Prezzi** (`etf_prices.py`): una serie per ISIN (Borsa Italiana se ha almeno 2 anni, altrimenti la quotazione più
+  lunga, es. Xetra per India e Brasile), chiusure rettificate per dividendi, convertite in euro con il cambio dello
+  stesso giorno, niente prima del lancio della classe; una classe a distribuzione senza dividendi registrati è segnata
+  «solo prezzo». Prezzi dei fondi veri, mai degli ETF americani usati come fonte nella scheda Mercato. Scaricati solo in
+  background dopo la chiusura; la pagina legge solo la cache.
+- **Benchmark coerenti** (classi ad accumulo in euro): mondo VWCE; settori e temi mondiali SWDA; settori USA CSSPX;
+  Europa SMEA; emergenti EIMI. Mai QQQ per tutto. La «classe di riferimento» dell'esposizione serve solo a misurare
+  (serie più lunga, non coperta, con dividendi): non è una preferenza.
+- **Due modi**: *Medio-lungo* (3–24 mesi: trend 50/200, forza relativa a 6 e 12 mesi, sua evoluzione in 21 sedute,
+  volatilità 3/12 mesi, calo dal massimo a 12 mesi, condizioni L1–L4 e M1–M4) e *Breve* (3–30 sedute: medie 20/50, forza
+  relativa a 1 e 3 mesi, evoluzione in 5 sedute, condizioni S1–S4 e K1–K4). Il breve periodo è solo esplorativo.
+- **Obbligazioni** con un modello separato, mai momentum: rendimento ÷ duration (O1), quota con rating A o superiore
+  (O2), peso del TER sul rendimento (O3), duration ≥ 10 anni (P1), un solo emittente (P2). Rendimento a scadenza, cedola
+  e rendimento da distribuzione restano tre numeri diversi; il rendimento a scadenza non è un rendimento netto garantito.
+- **Stati**: Esposizione da approfondire, Trend favorevole da monitorare, Condizioni contrastanti, Rischio elevato,
+  Dati insufficienti, Nessuna opportunità convincente (più «Riferimento di mercato» per mondo e liquidità). Una
+  condizione non valutabile non conta mai come soddisfatta. Rischio a parte (R1–R6: volatilità, concentrazione, calo,
+  settore/tema, paese singolo, cambio). Prodotti con una lista di controlli (Q1–Q6: TER dell'emittente, patrimonio,
+  tracking difference, scambi, spread a mercato aperto, anni di prezzi): nessun vincitore, indici diversi mai confrontati
+  come uguali. Soglie in cima a `etf_opportunity.py` (modello `E1`): cambiarle = nuova versione.
+- **Dati del catalogo completati** (`etf_catalog_build.py` + `etf_catalog_verifiche.json`): pagine prodotto iShares (dati
+  con la loro data, classe, quotazioni, rendimenti annui di fondo e indice, rating e scadenze); **tracking difference**
+  = rendimento annuo del fondo − indice nella stessa valuta, solo anni interi dopo il lancio, bloccata se valute diverse
+  o classe coperta contro indice non coperto; **TER** con priorità all'emittente e verifiche a mano su documenti
+  dell'emittente (VWCE 0,14% OCF, IMIE 0,17%, VFEA 0,17%, XEON 0,10% all-in fee); se le fonti non coincidono e manca
+  l'emittente il TER resta **non risolto** (mai il più basso: oggi EQQQ). Spread: solo letto a mercato aperto e da meno
+  di 24 ore, altrimenti «non rappresentativo» o «datato».
+- **Diario** (`etf_opportunity_diary.py`): tabelle nuove `etf_runs` e `etf_observations` in `data/opportunita.sqlite3`
+  (le tabelle esistenti non cambiano), una volta per seduta di Borsa Italiana e versione, entrambi i modi, tutte le
+  esposizioni, solo con prezzi scaricati dopo le 18:00, mai a posteriori, mai modificate (trigger). Salvato dal ciclo del
+  server e dal job serale, mai all'apertura della pagina; nessuno scheduler nuovo.
 
 ## Da verificare quando il diario avrà almeno 3 mesi di dati
 
@@ -956,6 +1005,14 @@ da più fonti e discordanze, tracking difference ed error separati, spread solo 
 pochi scambi, azionari contro obbligazionari, livelli di comparabilità, nessun vincitore, titoli in comune parziali,
 classi dello stesso fondo, doppioni, prodotti esclusi, indirizzi, scheda ETF esistente invariata, prestazioni con 600
 ETF e nessuna chiamata di rete.
+Scanner delle esposizioni ETF (`tests/test_etf_opportunity.py`, Fase 6B): catalogo e prezzi inventati; esposizioni e
+famiglie, stesso ISIN su più borse contato una volta, classi distinte (coperta, distribuzione), dati aggiornati o
+datati (spread, cache dei prezzi, chiusure definitive), rendimenti assoluti e relativi con benchmark coerente, cambio,
+accumulo/distribuzione e rendimento totale, quotazione più lunga, trend, volatilità, calo dal massimo, azionari contro
+obbligazionari, duration e sensibilità ai tassi, rendimento a scadenza contro cedola e distribuzione, confronto dei
+prodotti senza vincitore, dati mancanti mai soddisfatti, TER e conflitti non risolti, liquidità e spread, ordine e
+motivi, nessuna informazione futura, niente Compra/Vendi, diario (solo sedute chiuse, idempotente, immutabile, mai
+dall'apertura della pagina), indirizzi, pagine iShares e tracking difference, nessuna regressione.
 
 ## File del progetto
 
@@ -991,6 +1048,10 @@ ETF e nessuna chiamata di rete.
 | `etf_catalog.py` | Catalogo ETF UCITS (Fase 6A): modello, controllo ISIN, esclusi, ricerca, completezza, date; `/api/etf/catalog` |
 | `etf_catalog_build.py` | Aggiornamento manuale del catalogo (emittente, Borsa Italiana, copia justETF, Yahoo) e classificazione |
 | `etf_comparison.py` | Confronto di 2–4 ETF: livelli di comparabilità, dimensioni separate, rischi, titoli in comune; `/api/etf/compare` |
+| `etf_catalog_verifiche.json` | TER verificati a mano su documenti dell'emittente, conflitti non risolti, approvazione delle 5 classi aggiunte (Fase 6B) |
+| `etf_prices.py` | Chiusure in euro degli ETF del catalogo (Fase 6B) in `cache/etf_prices.pkl`, scaricate in background dopo la chiusura |
+| `etf_opportunity.py` | Scanner esplorativo delle esposizioni ETF (Fase 6B): due modi, condizioni, rischi, prodotti; `/api/etf/opportunities` |
+| `etf_opportunity_diary.py` | Diario dello scanner ETF (tabelle nuove in `data/opportunita.sqlite3`, immutabili) |
 | `etf_catalog/` | Il catalogo: `strumenti.json`, `quotazioni.json`, `esposizione.json`, `fonti.json`, `controlli.json` (dati pubblici) |
 | `opportunity_validation.py` | Laboratorio di validazione (Fase O3): studio storico esplorativo delle condizioni Trading, simulazione sperimentale e controllo dei dati per l'Investimento; report in `data/validazione/` |
 | `decision.py` | Sezione Decisione della scheda titolo: cinque blocchi, verdetto e piani operativi con regole esplicite |

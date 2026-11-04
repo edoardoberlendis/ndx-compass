@@ -28,7 +28,7 @@ import os
 import re
 import sys
 import threading
-from datetime import date
+from datetime import date, datetime
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DIR = os.path.join(ROOT, "etf_catalog")
@@ -200,6 +200,28 @@ def _present(e, f):
             v = val(block[f])
             return v not in (None, [], {}, "")
     return False
+
+
+SPREAD_MAX_HOURS = 24
+
+
+def spread_state(s, now=None):
+    """(state, text) of a book spread: 'rappresentativo' only when read during continuous trading and less than a day
+    ago; 'non rappresentativo' when read with the market closed; 'datato' when older; 'mancante' without a real book.
+    A missing spread is never invented."""
+    if not s or s.get("v") is None:
+        return "mancante", "n.d. (serve il book reale con prezzi in acquisto e vendita)"
+    try:
+        at = datetime.fromisoformat(s["at"])
+    except (KeyError, TypeError, ValueError):
+        return "datato", "n.d.: ora della lettura sconosciuta"
+    when = s["at"][:16].replace("T", " ")
+    if not s.get("representative"):
+        return "non rappresentativo", f"n.d.: book letto il {when} a mercato chiuso, non rappresentativo"
+    hours = ((now or datetime.now()) - at).total_seconds() / 3600
+    if hours > SPREAD_MAX_HOURS:
+        return "datato", f"{s['v']:.2f}% letto il {when}: dato vecchio, da rileggere a mercato aperto".replace(".", ",", 1)
+    return "rappresentativo", f"{s['v']:.2f}% ({when}, ritardato {s.get('delayMin', 15)} min)".replace(".", ",", 1)
 
 
 def completeness(e):

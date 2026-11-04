@@ -1022,3 +1022,36 @@ table.my td.nw { max-width: 280px; }
   .cmp-tbl td { min-width: 120px; }
   .cmp-tbl th.l:first-child { min-width: 100px; }
 }
+
+/* Phase 6B: Opportunità → ETF, scanner of the exposures */
+.eo-st { display: inline-block; padding: 1px 7px; border-radius: var(--r-tag); font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; border: 1px solid var(--line); color: var(--ink-2); background: var(--surface-2); }
+.eo-st.eo-ok { background: var(--pos-soft); color: var(--pos); border-color: transparent; }
+.eo-st.eo-mon { color: var(--pos); border-color: currentColor; background: none; }
+.eo-st.eo-mix { color: var(--warn); border-color: currentColor; background: none; }
+.eo-st.eo-risk { background: var(--neg-soft); color: var(--neg); border-color: transparent; }
+.eo-st.eo-na, .eo-st.eo-none, .eo-st.eo-ref { color: var(--muted); }
+#oppsBody .pos { color: var(--pos); }
+#oppsBody .neg { color: var(--neg); }
+#oppsBody .warn { color: var(--warn); }
+.eo-kpis { margin: 12px 0; }
+.eo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--sp-3); }
+.eo-card { border: 1px solid var(--line); border-radius: var(--r-panel); padding: var(--sp-3); background: var(--surface); min-width: 0; }
+.eo-card-h { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: space-between; }
+.eo-card h4, .eo-detail h4 { margin: 8px 0 2px; font-size: var(--fs-sm); }
+.eo-card p { margin: 4px 0; }
+.eo-detail h3 { margin: 14px 0 6px; font-size: var(--fs-md, 15px); }
+.eo-detail .card-h { flex-wrap: wrap; gap: 8px; }
+.eo-detail .card-h .btn { margin-left: auto; }
+.eo-act { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.btn.ghost { background: none; }
+.eo-kv td:last-child { width: auto; display: table-cell; }
+.eo-tbl tbody tr { cursor: pointer; }
+.eo-tbl td, .eo-prod td { vertical-align: top; }
+.eo-prod td { white-space: normal; min-width: 90px; }
+.eo-prod td.l:first-child { min-width: 170px; }
+button.cat-chip { cursor: pointer; font: inherit; font-size: var(--fs-xs); }
+@media (max-width: 640px) {
+  .eo-grid { grid-template-columns: 1fr; }
+  .eo-tbl .p3 { display: none; }
+  .eo-kv td:last-child { display: table-cell; }
+}

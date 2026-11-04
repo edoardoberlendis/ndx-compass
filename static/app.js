@@ -168,7 +168,7 @@ function spark(values, w = 80, h = 22, base = null, color = null) {
 
 // ------------------------------------------------------------ data
 // must equal DASHBOARD_VERSION in server.py: otherwise the server runs old code and the page says so
-const PAGE_VERSION = "2026-11-04k";
+const PAGE_VERSION = "2026-11-04l";
 async function load() {
   const r = await fetch("/api/snapshot", { cache: "no-store" });
   const sv = r.headers.get("X-Dashboard-Version");
@@ -2734,18 +2734,182 @@ document.addEventListener("change", e => {
   const f = e.target.closest("[data-catf]");
   if (f) { etfC.f[f.dataset.catf] = f.value; $("#etfCatList").innerHTML = etfCatListHTML(); }
 });
-// Opportunità → ETF: no ranking, only the way into the catalogue and the comparison
-const OPP_ETF_EXAMPLES = [["Mondo: stesso indice", "SWDA,XDWD"], ["USA: accumulo e distribuzione", "CSSPX,VUSA"], ["USA: con e senza copertura del cambio", "CSSPX,IUSE"],
-  ["Tecnologia: USA, mondo, semiconduttori", "QDVE,XDWT,SMH"], ["Titoli di Stato euro 1-3 anni", "IBGS,X13E"]];
-function oppEtfHTML() {
-  return `<p class="warn-box"><b>Per gli ETF qui non c'è una classifica.</b> Nessun ETF viene segnalato come opportunità: il catalogo serve a capire cosa contiene
-      ciascun ETF e a confrontare prodotti simili su costi, struttura, valuta, liquidità e rischi. Non è una consulenza finanziaria.</p>
-    <div class="card"><div class="card-h"><h2>${esc(OPP_MODES.etf)}</h2>
-      <div class="seg">${Object.entries(OPP_MODES).map(([k, l]) => `<button data-opm="${k}" class="${k === "etf" ? "on" : ""}">${esc(l.split(" · ")[0])}</button>`).join("")}</div></div>
-      <p class="small">Apri il catalogo per cercare per nome, ticker o ISIN, oppure parti da un confronto di esempio:</p>
-      <div class="chips">${OPP_ETF_EXAMPLES.map(([l, k]) => `<button data-oppetf="${esc(k)}">${esc(l)}</button>`).join("")}</div>
-      <p><button class="btn" data-oppetf="">Apri il catalogo ETF</button></p></div>`;
+// Opportunità → ETF (phase 6B): exploratory scanner of the ETF EXPOSURES (etf_opportunity.py). Exposure first, products
+// after; the judgement on the exposure and the quality of the product stay separate; never Compra/Vendi, never a score.
+const EO = { mode: LS.get("eo.mode", "lungo"), data: {}, err: {}, loading: {}, open: null, det: {}, detErr: null };
+const EO_MODES = { lungo: "Medio-lungo periodo", breve: "Breve periodo" };
+const EO_ST = { "Esposizione da approfondire": "ok", "Trend favorevole da monitorare": "mon", "Condizioni contrastanti": "mix",
+  "Rischio elevato": "risk", "Dati insufficienti": "na", "Nessuna opportunità convincente": "none", "Riferimento di mercato": "ref" };
+const eoSt = s => `<span class="eo-st eo-${EO_ST[s] || "none"}">${esc(s)}</span>`;
+const eoPts = v => isNum(v) ? `<span class="${v > 0 ? "pos" : v < 0 ? "neg" : ""}">${(v > 0 ? "+" : "") + fNum(v, 1)}</span>` : "n.d.";
+const eoPct = v => isNum(v) ? fPct(v, 1) : "n.d.";
+const eoCk = c => `<li class="${c.ok === true ? "ck-ok" : c.ok === false ? "ck-ko" : "ck-na"}">${esc(c.text)}${c.value != null ? ` — <b>${esc(String(c.value))}</b>` : ""}${c.why ? ` <span class="muted">(${esc(c.why)})</span>` : ""}</li>`;
+async function loadEo(mode, force) {
+  if (EO.loading[mode] || (EO.data[mode] && !force)) return;
+  EO.loading[mode] = true; EO.err[mode] = null;
+  try { const r = await fetch("/api/etf/opportunities?mode=" + mode); const j = await r.json(); if (r.ok && j.status === "ok") EO.data[mode] = j; else EO.err[mode] = j.error || "dati non disponibili"; }
+  catch { EO.err[mode] = "server non raggiungibile"; }
+  EO.loading[mode] = false;
+  if (opps.mode === "etf") renderOpps();
 }
+async function loadEoDetail(key) {
+  const k = EO.mode + ":" + key;
+  EO.open = key; EO.detErr = null;
+  if (!EO.det[k]) {
+    renderOpps();
+    try { const r = await fetch(`/api/etf/opportunities/${encodeURIComponent(key)}?mode=${EO.mode}`); const j = await r.json(); if (r.ok) EO.det[k] = j; else EO.detErr = j.error; }
+    catch { EO.detErr = "server non raggiungibile"; }
+  }
+  renderOpps();
+  document.getElementById("eoDetail")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function eoRetCells(r, mode) {
+  const R = r.returns || {}, X = r.rel || {};
+  return mode === "breve" ? `1 mese ${eoPct(R["1m"])} · contro il mercato ${eoPts(X["1m"])} punti`
+    : `6 mesi ${eoPct(R["6m"])} · 12 mesi ${eoPct(R["12m"])} · contro il mercato a 6 mesi ${eoPts(X["6m"])} punti`;
+}
+function eoCard(o, mode) {
+  const m = o.measures || {}, b = o.bond;
+  const prods = o.products.products;
+  const andamento = o.kind === "bond"
+    ? `Duration ${fNum(b.duration, 1)} anni · rendimento a scadenza ${fNum(b.yield, 2)}% lordo (al ${esc(dayIT(b.yieldAsOf || ""))}) · ${esc(o.role)}`
+    : eoRetCells({ returns: m.returns, rel: m.rel }, mode) + ` · trend ${esc(m.trend || "n.d.")}`;
+  return `<div class="eo-card"><div class="eo-card-h"><b>${esc(o.label)}</b> ${eoSt(o.state)}</div>
+    <p class="small muted">${esc(o.familyLabel)}${o.benchmarkName ? ` · confronto con ${esc(o.benchmarkName)}` : ""}</p>
+    <p class="small"><b>Andamento:</b> ${andamento}</p>
+    <p class="small"><b>Rischio:</b> ${esc((o.risk || {}).level || "n.d.")}${(o.risk?.flags || []).length ? " — " + esc(o.risk.flags.map(f => f.text).join("; ")) : ""}</p>
+    <h4>Perché è stata selezionata</h4><ul class="why">${o.why.map(w => `<li>${esc(w)}</li>`).join("")}</ul>
+    <h4>Cosa potrebbe invalidare il giudizio</h4><ul class="why">${o.invalidate.map(w => `<li>${esc(w)}</li>`).join("")}</ul>
+    <p class="small"><b>ETF per ottenerla:</b> ${prods.map(p => `${esc(p.tickers[0] || p.isin)} (TER ${isNum(p.ter) ? fNum(p.ter, 2) + "%" : "n.d."}${p.hedged ? ", coperto" : ""})`).join(" · ")}</p>
+    <p class="eo-act"><button class="btn" data-eoopen="${esc(o.key)}">Scheda dell'esposizione</button>
+      ${prods.length > 1 ? `<button class="btn ghost" data-oppetf="${esc(o.products.compare.join(","))}">Confronta gli ETF nel catalogo</button>` : ""}</p></div>`;
+}
+function eoListHTML(D) {
+  const byFam = {};
+  D.rows.forEach(r => (byFam[r.family] = byFam[r.family] || []).push(r));
+  return D.families.filter(f => byFam[f.key]).map(f => {
+    const rows = byFam[f.key];
+    const n = rows.filter(r => r.state === "Esposizione da approfondire").length;
+    const bond = rows[0].kind === "bond";
+    return `<details class="fold" data-k="eo-${f.key}"><summary><b>${esc(f.label)}</b> <span class="muted small">${rows.length} esposizioni${n ? `, ${n} da approfondire` : ""}</span></summary>
+      <div class="table-wrap"><table class="scr eo-tbl"><thead><tr><th class="l">Esposizione</th><th class="l">Stato</th>
+      ${bond ? `<th>Duration</th><th>Rend. a scadenza</th><th class="l p3">Ruolo</th>` : `<th>${D.mode === "breve" ? "1 mese" : "6 mesi"}</th><th>Contro il mercato</th><th class="l p3">Trend</th>`}
+      <th class="l">Rischio</th><th class="l p3">ETF</th></tr></thead><tbody>${rows.map(r => {
+        const k = D.mode === "breve" ? "1m" : "6m";
+        return `<tr data-eoopen="${esc(r.key)}"><td class="l"><b>${esc(r.label)}</b></td><td class="l">${eoSt(r.state)}</td>
+          ${bond ? `<td>${r.bond && isNum(r.bond.duration) ? fNum(r.bond.duration, 1) : "n.d."}</td><td>${r.bond && isNum(r.bond.yield) ? fNum(r.bond.yield, 2) + "%" : "n.d."}</td><td class="l p3 small">${esc(r.bondRole || "")}</td>`
+            : `<td>${eoPct((r.returns || {})[k])}</td><td>${eoPts((r.rel || {})[k])}</td><td class="l p3">${esc(r.trend || "n.d.")}</td>`}
+          <td class="l">${esc(r.risk || "n.d.")}</td><td class="l p3 small">${r.products.map(p => esc(p.ticker)).join(", ")}</td></tr>`;
+      }).join("")}</tbody></table></div></details>`;
+  }).join("");
+}
+function eoDetailHTML() {
+  const o = EO.det[EO.mode + ":" + EO.open];
+  if (!EO.open) return "";
+  if (!o) return `<div class="card" id="eoDetail">${EO.detErr ? esc(EO.detErr) : "Caricamento della scheda…"}</div>`;
+  const m = o.measures || {}, c = o.concentration || {}, P = o.products;
+  const top = (arr, n = 5) => (arr || []).slice(0, n).map(x => `${esc(ETF_IT[x.name] || x.name)} ${fNum(x.weight, 1)}%`).join(" · ");
+  const contains = o.kind === "bond"
+    ? `<table class="cat-kv eo-kv"><tr><th>Tipo</th><td>${esc(o.bond.kind || "n.d.")}</td></tr><tr><th>Credito</th><td>${esc(o.bond.credit || "n.d.")}${isNum(o.bond.aOrBetter) ? ` · rating A o superiore ${fNum(o.bond.aOrBetter, 0)}% (al ${esc(dayIT(o.bond.ratingsAsOf || ""))})` : ""}</td></tr>
+       <tr><th>Duration effettiva</th><td>${isNum(o.bond.duration) ? fNum(o.bond.duration, 2) + " anni: con tassi +1 punto il valore scende di circa il " + fNum(o.bond.duration, 1) + "%" : "n.d."}</td></tr>
+       <tr><th>Scadenza media</th><td>${isNum(o.bond.maturity) ? fNum(o.bond.maturity, 1) + " anni" : "n.d."}</td></tr>
+       <tr><th>Rendimento a scadenza</th><td>${isNum(o.bond.yield) ? fNum(o.bond.yield, 2) + "% annuo lordo, senza spese (al " + esc(dayIT(o.bond.yieldAsOf || "")) + "): non è un rendimento netto garantito" : "n.d."}</td></tr>
+       <tr><th>Cedola media</th><td>${isNum(o.bond.coupon) ? fNum(o.bond.coupon, 2) + "% (gli interessi dei titoli, non il rendimento)" : "n.d."}</td></tr>
+       <tr><th>Distribuzioni ultimi 12 mesi</th><td>${isNum(o.bond.distYield) ? fNum(o.bond.distYield, 2) + "% (guarda indietro: non è il rendimento a scadenza)" : "n.d."}</td></tr>
+       <tr><th>Valuta</th><td>${esc(o.bond.currency || "n.d.")}</td></tr>
+       ${o.bondChange ? `<tr><th>Dalla rilevazione del ${esc(dayIT(o.bondChange.since))}</th><td>rendimento ${eoPts(o.bondChange.yield)} punti</td></tr>` : `<tr><th>Rilevazione precedente</th><td>nessuna: il confronto parte dalla prima registrazione nel diario</td></tr>`}</table>`
+    : `<table class="cat-kv eo-kv"><tr><th>Concentrazione</th><td>${isNum(c.top10) ? `primi 10 titoli ${fNum(c.top10, 0)}% del fondo` : "n.d."}${c.src ? ` <span class="cat-src">(${esc(c.src)}${c.asOf ? ", " + esc(dayIT(c.asOf)) : ""})</span>` : ""}${c.kind === "ETF americano" ? ` <span class="warn small">composizione dell'ETF americano sullo stesso indice: non verificata per l'ETF europeo</span>` : ""}</td></tr>
+       <tr><th>Paesi</th><td>${top(c.countries) || "n.d."}</td></tr><tr><th>Settori</th><td>${top(c.sectors) || "n.d."}</td></tr>
+       <tr><th>Valutazione</th><td>${isNum(o.valuation?.pe) ? `P/E ${fNum(o.valuation.pe, 1)}${isNum(o.valuation.pb) ? ` · P/B ${fNum(o.valuation.pb, 1)}` : ""} (al ${esc(dayIT(o.valuation.asOf || ""))})${isNum(o.valuation.benchPe) ? ` · mercato di confronto P/E ${fNum(o.valuation.benchPe, 1)}` : ""}` : "n.d."}
+         <span class="cat-src">${esc(o.valuation?.note || "")}</span></td></tr>
+       <tr><th>Ruolo possibile</th><td>${esc(o.role || "n.d.")} <span class="cat-src">(non analizzato rispetto al tuo portafoglio)</span></td></tr></table>`;
+  const meas = o.kind === "equity" && m.returns ? `<div class="table-wrap"><table class="scr"><thead><tr><th class="l"></th><th>1 sett.</th><th>1 mese</th><th>3 mesi</th><th>6 mesi</th><th>12 mesi</th></tr></thead><tbody>
+      <tr><td class="l">Rendimento totale in euro</td>${["1s", "1m", "3m", "6m", "12m"].map(k => `<td>${eoPct(m.returns[k])}</td>`).join("")}</tr>
+      <tr><td class="l">Contro ${esc(o.benchmarkName || "—")} (punti)</td>${["1s", "1m", "3m", "6m", "12m"].map(k => `<td>${eoPts((m.rel || {})[k])}</td>`).join("")}</tr>
+      <tr><td class="l">Stessa misura ${o.mode === "breve" ? 5 : 21} sedute fa</td>${["1s", "1m", "3m", "6m", "12m"].map(k => `<td>${eoPts((m.relPrev || {})[k])}</td>`).join("")}</tr></tbody></table></div>
+      <p class="small">Trend ${esc(m.trend || "n.d.")} · volatilità 1 mese ${eoPct(m.vol1m)}, 3 mesi ${eoPct(m.vol3m)}, 12 mesi ${eoPct(m.vol12m)} · calo dal massimo a 3 mesi ${eoPct(m.dd3m)}, a 12 mesi ${eoPct(m.dd12m)} · prezzi al ${esc(dayIT(m.date || ""))}, ${m.aligned || "n.d."} sedute allineate con il benchmark</p>` : "";
+  const trends = (o.trends || []).length ? o.trends.map(t => `<li><b>${esc(t.label)}</b>: ${esc(t.observed)} (${esc(t.period)}${t.benchmark ? ", contro " + esc(t.benchmark) : ""})${t.previous ? `; prima: ${esc(t.previous)}` : ""}
+      ${t.favourable.length ? `<br><span class="pos">a favore:</span> ${esc(t.favourable.join("; "))}` : ""}${t.contrary.length ? `<br><span class="neg">contro:</span> ${esc(t.contrary.join("; "))}` : ""}</li>`).join("")
+    : `<li>Nessun cambiamento significativo secondo le condizioni descritte sotto.</li>`;
+  const prod = p => `<tr><td class="l"><b>${esc(p.tickers.join(" · ") || p.isin)}</b><br><span class="small muted">${esc(p.name)}</span><br><span class="cat-src">${esc(p.isin)} · ${esc(p.status || "")}</span>${p.level ? `<br><span class="small">livello ${p.level} rispetto alla classe di misura</span>` : ""}</td>
+      <td class="l small">${esc(p.index || "n.d.")}</td>
+      <td>${isNum(p.ter) ? fNum(p.ter, 2) + "%" : "n.d."}<br><span class="cat-src">${esc(p.terResolution || "")}</span></td>
+      <td>${isNum(p.tdAvg) ? eoPts(p.tdAvg) + " /anno" : "n.d."}${isNum(p.td) ? `<br><span class="cat-src">ultimo anno ${eoPts(p.td)}</span>` : ""}</td>
+      <td class="l small">${esc(p.replication || "n.d.")} · ${esc(p.distribution || "n.d.")}${p.frequency ? ` (${esc(p.frequency.toLowerCase())})` : ""} · ${p.hedged ? "cambio coperto" : "cambio non coperto"}</td>
+      <td class="small">${isNum(p.size) ? fNum(p.size, 0) + " mln " + esc(p.sizeUnit || "") : "n.d."}</td>
+      <td class="l small">${esc(p.domicile || "n.d.")} · ${esc(p.tradingCurrencies.join(", ") || "n.d.")}</td>
+      <td class="l small">${p.listings.map(l => `${esc(l.ticker)}: ${isNum(l.turnover) ? fNum(l.turnover / 1000, 0) + " mila €/giorno" : "n.d."}`).join("<br>")}<br><span class="cat-src">spread ${esc(p.spread)}</span></td></tr>`;
+  return `<div class="card eo-detail" id="eoDetail"><div class="card-h"><h2>${esc(o.label)}</h2> ${eoSt(o.state)}<button class="btn ghost" data-eoclose>Chiudi</button></div>
+    <p class="small muted">${esc(o.familyLabel)} · ${esc(EO_MODES[o.mode])} · modello ${esc(o.version)}${o.benchmarkName ? ` · benchmark: ${esc(o.benchmarkName)}` : ""}</p>
+    <h3>Cosa contiene</h3>${contains}
+    <h3>Perché viene monitorata</h3><ul class="why">${o.why.map(w => `<li>${esc(w)}</li>`).join("")}</ul>
+    ${meas}
+    <h3>Segnali</h3><div class="opp-x"><div class="opp-cols"><div><h4>Favorevoli</h4><ul>${o.conditions.fav.map(eoCk).join("")}</ul></div>
+      <div><h4>Contrari</h4><ul>${o.conditions.con.map(eoCk).join("")}</ul></div></div></div>
+    <p class="muted small">✅ condizione soddisfatta · ❌ non soddisfatta · ❓ non valutabile (non conta mai come soddisfatta). Condizioni valutabili: ${esc(o.completeness.conditions)}.${o.completeness.notes.length ? " " + esc(o.completeness.notes.join("; ")) + "." : ""}</p>
+    <h3>Cosa è cambiato</h3><ul class="why">${trends}</ul>
+    <h3>Rischi</h3><ul class="why">${(o.risk?.flags || []).length ? o.risk.flags.map(f => `<li>${f.high ? "⚠ " : ""}${esc(f.text)}</li>`).join("") : "<li>Nessun rischio oltre le soglie descritte.</li>"}</ul>
+    <p class="small">Cosa potrebbe invalidare il giudizio: ${esc(o.invalidate.join("; "))}.</p>
+    <h3>Prodotti che la replicano</h3>
+    <p class="small"><b>${esc(P.verdict)}.</b> Il giudizio sull'esposizione è separato dalla qualità del prodotto. Disponibilità presso Fineco: non verificata.</p>
+    <div class="table-wrap"><table class="scr eo-prod"><thead><tr><th class="l">ETF</th><th class="l">Indice</th><th>TER</th><th>Tracking difference</th><th class="l">Struttura</th><th>Patrimonio</th><th class="l">Domicilio · valuta</th><th class="l">Scambi e spread</th></tr></thead>
+      <tbody>${P.products.map(prod).join("")}</tbody></table></div>
+    ${P.differences.length ? `<h4>Cosa cambia tra loro</h4><ul class="why">${P.differences.map(d => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}
+    <details class="fold"><summary><span class="small">Qualità del prodotto (controlli separati, non un punteggio)</span></summary>
+      ${P.products.map(p => `<p class="small"><b>${esc(p.tickers[0] || p.isin)}</b></p><div class="opp-x"><ul>${p.checks.map(eoCk).join("")}</ul></div>`).join("")}</details>
+    ${P.similar.length ? `<p class="small">Esposizioni simili ma non identiche (stessa categoria, indice diverso): ${P.similar.map(x => `<button class="cat-chip" data-oppetf="${esc([o.reference, x.isin].filter(Boolean).join(","))}">${esc(x.label)}</button>`).join(" ")}</p>` : ""}
+    <p class="eo-act"><button class="btn" data-oppetf="${esc(P.compare.join(","))}">${P.compare.length > 1 ? "Confronta questi ETF nel catalogo" : "Apri l'ETF nel catalogo"}</button></p>
+    <p class="muted small">${esc(o.disclaimer)}</p></div>`;
+}
+function oppEtfHTML() {
+  const mode = EO.mode, D = EO.data[mode];
+  const head = `<div class="card"><div class="card-h"><h2>ETF · esposizioni da approfondire</h2>
+      <div class="seg">${Object.entries(OPP_MODES).map(([k, l]) => `<button data-opm="${k}" class="${k === "etf" ? "on" : ""}">${esc(l.split(" · ")[0])}</button>`).join("")}</div></div>
+      <div class="seg small">${Object.entries(EO_MODES).map(([k, l]) => `<button data-eomode="${k}" class="${k === mode ? "on" : ""}">${esc(l)}</button>`).join("")}</div>
+      <p class="small muted">${mode === "breve" ? "3–30 sedute: movimenti, forza relativa a 1 mese, volatilità e cali recenti. Screening esplorativo: nessun segnale di trading."
+        : "3–24 mesi: trend sulle medie 50 e 200, forza relativa a 6 e 12 mesi, rischio, costi e struttura. Per le obbligazioni un modello separato (duration, rendimento, credito)."}</p></div>`;
+  if (!D) {
+    if (!EO.loading[mode] && !EO.err[mode]) loadEo(mode);
+    return head + `<div class="card empty">${EO.err[mode] ? esc(EO.err[mode]) : "Caricamento dello scanner ETF…"}</div>`;
+  }
+  const O = D.overview, sel = D.selectedRows;
+  const kpi = (l, v, s) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s || ""}</div></div>`;
+  const chg = (arr, cls) => arr.length ? arr.map(x => `<button class="cat-chip" data-eoopen="${esc(x.key)}">${esc(x.label)} <b class="${cls}">${(x.change > 0 ? "+" : "") + fNum(x.change, 1)}</b></button>`).join(" ") : `<span class="muted small">nessuna oltre la soglia</span>`;
+  return `<p class="warn-box"><b>Screening esplorativo, non consulenza finanziaria.</b> Parte dalle esposizioni (mercati, settori, obbligazioni) e mostra
+      quali condizioni sono soddisfatte e quali mancano: nessun «Compra» o «Vendi», nessuna probabilità. Le regole non sono validate: il momentum sulle
+      categorie di ETF non ha superato il test (Fase 24).</p>${head}
+    <div class="kpis eo-kpis">${kpi("Esposizioni monitorate", O.exposures, `${O.products} ETF del catalogo`)}${kpi("Da approfondire", O.counts["Esposizione da approfondire"], `al massimo ${D.params.max_selected} mostrate`)}
+      ${kpi("Rischio elevato", O.counts["Rischio elevato"], "segnali favorevoli o contrari con rischio oltre soglia")}${kpi("Dati insufficienti", O.counts["Dati insufficienti"], "non giudicabili")}
+      ${kpi("Ultima seduta", D.session ? esc(dayIT(D.session)) : "n.d.", D.pricesFetched ? "prezzi scaricati " + esc(D.pricesFetched.slice(0, 16).replace("T", " ")) : "")}</div>
+    <div class="card"><h3>Panoramica</h3>
+      <p class="small"><b>In miglioramento</b> (forza relativa ${D.mode === "breve" ? "a 1 mese rispetto a 5 sedute fa" : "a 6 mesi rispetto a 21 sedute fa"}, punti): ${chg(O.improving, "pos")}</p>
+      <p class="small"><b>In peggioramento</b>: ${chg(O.worsening, "neg")}</p>
+      <p class="small"><b>Rischi principali</b>: ${O.risks.length ? O.risks.slice(0, 6).map(r => `<button class="cat-chip bad" data-eoopen="${esc(r.key)}">${esc(r.label)}</button>`).join(" ") : "nessuno oltre le soglie"}</p>
+      ${O.world ? `<p class="small muted">Mercato azionario mondiale (VWCE): 1 mese ${eoPct(O.world.returns?.["1m"])}, 6 mesi ${eoPct(O.world.returns?.["6m"])}, 12 mesi ${eoPct(O.world.returns?.["12m"])}, trend ${esc(O.world.trend || "n.d.")}.</p>` : ""}</div>
+    <div class="card"><h3>Opportunità da approfondire <span class="muted small">(${esc(EO_MODES[D.mode])})</span></h3>
+      ${sel.length ? `<div class="eo-grid">${sel.map(o => eoCard(o, D.mode)).join("")}</div>` : `<p class="small">${esc(D.noneText)}</p>`}
+      <p class="muted small">${esc(D.orderRule)} Altre ${O.counts["Trend favorevole da monitorare"]} esposizioni hanno un trend favorevole da monitorare: sono nell'elenco sotto.</p></div>
+    ${eoDetailHTML()}
+    <div class="card"><h3>Tutte le esposizioni</h3><p class="small muted">Tocca una riga per la scheda. Una riga per esposizione: lo stesso fondo quotato su più borse non conta due volte.</p>${eoListHTML(D)}</div>
+    <details class="fold" data-k="eo-method"><summary><span class="small">Metodo, soglie e dati usati</span></summary>
+      <ul class="why small"><li><b>Stati</b>: «Esposizione da approfondire» tutte le condizioni favorevoli e nessuna contraria; se il rischio supera le soglie diventa «Rischio elevato».
+        «Trend favorevole da monitorare» almeno 2 favorevoli e nessuna contraria; «Condizioni contrastanti» almeno una favorevole e una contraria. Una condizione non valutabile non conta mai come soddisfatta.</li>
+        <li><b>Rendimenti</b>: totali in euro (chiusure rettificate per i dividendi), stesse date del benchmark, solo dati fino alla seduta indicata; la «rilevazione precedente» è ricalcolata con i soli dati di allora.</li>
+        <li><b>Benchmark coerenti</b>: mondo (VWCE), USA (S&P 500), Europa (MSCI Europe), emergenti (MSCI EM IMI), settori e temi globali (MSCI World), settori USA (S&P 500). Mai QQQ per tutti.</li>
+        <li><b>Obbligazioni</b>: duration, rendimento a scadenza, rating e costi dalla pagina dell'emittente con la loro data; niente medie mobili come metodo principale.</li>
+        <li><b>Valutazioni</b>: solo P/E e P/B pubblicati dall'emittente; mai stimati dai singoli titoli, mai DCF sugli ETF.</li>
+        <li>Prezzi: ${esc(D.pricesSource || "")}. Catalogo del ${esc((D.catalogBuilt || "").replace("T", " "))}. Modello ${esc(D.version)}: cambiare soglie o condizioni richiede una nuova versione.</li>
+        <li><b>Diario</b>: ${D.diary?.started ? `${D.diary.days} sedute registrate (dal ${esc(dayIT(D.diary.first))} al ${esc(dayIT(D.diary.last))}), ${D.diary.observations} osservazioni` : "nessuna seduta ancora registrata"}; si registra dopo la chiusura di Borsa Italiana, anche con la pagina chiusa (server acceso o job serale).</li></ul></details>
+    <p class="muted small">${esc(D.disclaimer)}</p>`;
+}
+document.addEventListener("click", e => {
+  if (!e.target.closest("#oppsBody")) return;
+  const md = e.target.closest("[data-eomode]");
+  if (md) { EO.mode = md.dataset.eomode; LS.set("eo.mode", EO.mode); EO.open = null; renderOpps(); return; }
+  if (e.target.closest("[data-eoclose]")) { EO.open = null; renderOpps(); return; }
+  const op = e.target.closest("[data-eoopen]");
+  if (op) { loadEoDetail(op.dataset.eoopen); return; }
+});
 document.addEventListener("click", e => {
   const b = e.target.closest("[data-oppetf]");
   if (!b) return;
@@ -2754,7 +2918,8 @@ document.addEventListener("click", e => {
   setView("etf");
   loadEtfCat().then(() => {
     if (!keys || !etfC.data?.rows) return;
-    const isins = keys.split(",").map(k => etfC.data.rows.find(r => r.tickers.includes(k))?.isin).filter(Boolean);
+    const isins = keys.split(",").map(k => etfC.data.rows.find(r => r.isin === k || r.tickers.includes(k))?.isin).filter(Boolean);
+    if (isins.length === 1) { etfCatOpen(isins[0]); return; }
     etfC.sel = isins; etfCatRefreshList(); etfCatCompare(isins);
   });
 });
@@ -2962,7 +3127,7 @@ document.addEventListener("click", e => { const b = e.target.closest("[data-dz]"
 const opps = { data: null, at: 0, err: null, mode: LS.get("opp.mode", "trading"), open: new Set(), diary: null, diaryErr: null,
   inv: null, invAt: 0, invErr: null, invLoading: false, invFilter: "all", invSort: { k: "order", dir: 1 },
   val: null, valAt: 0, valErr: null, valLoading: false, valFilter: "all" };
-const OPP_MODES = { trading: "Trading · breve periodo", invest: "Investimento · medio-lungo periodo", etf: "ETF · catalogo e confronto" };
+const OPP_MODES = { trading: "Trading · breve periodo", invest: "Investimento · medio-lungo periodo", etf: "ETF · esposizioni e prodotti" };
 const OPP_LIMITS = [
   ["Condizioni non verificate", "Nessuna condizione è stata provata con un backtest. Nel test della Fase 11 i pattern di forza (Leader di momentum, momentum 12-1, massimi a 52 settimane) non hanno superato le condizioni: la classifica Trading usa misure simili, quindi indica solo titoli da guardare, non titoli che salgono."],
   ["Classifica relativa", "«Più forte del Nasdaq-100» vuol dire meglio di QQQ: in un mercato in calo può significare «scende meno». Per questo la tabella mostra a parte il rendimento del titolo e quello rispetto a QQQ, e segnala chi è più forte di QQQ ma in calo."],
@@ -3409,7 +3574,12 @@ function valDetailHTML(X) {
 function renderOpps() {
   const el = $("#oppsBody"), D = opps.data;
   if (state.view !== "opps" || !el) return;
-  if (opps.mode === "etf") { el.innerHTML = oppEtfHTML(); return; }   // phase 6A: no ETF ranking, only catalogue and comparison
+  if (opps.mode === "etf") {                                         // phase 6B: scanner of the ETF exposures
+    const keep = [...el.querySelectorAll("details.fold[data-k]")].filter(d => d.open).map(d => d.dataset.k);
+    el.innerHTML = oppEtfHTML();
+    keep.forEach(k => { const d = el.querySelector(`details.fold[data-k="${k}"]`); if (d) d.open = true; });
+    return;
+  }
   if (!D) {
     el.innerHTML = `<div class="card empty">${opps.err === "loading" ? "I dati di mercato si stanno ancora caricando: le classifiche compaiono appena sono pronti."
       : `Classifiche non disponibili al momento${opps.err ? ` (${esc(opps.err)})` : ""}.`} Nuovo tentativo al prossimo aggiornamento della pagina.</div>`;

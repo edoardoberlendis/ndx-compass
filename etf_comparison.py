@@ -142,14 +142,12 @@ def liquidity_text(e):
     return " · ".join(out) or "n.d."
 
 
-def spread_text(e):
+def spread_text(e, now=None):
     for l in e.get("listings") or []:
         s = l.get("spread")
         if s:
-            when = s['at'][:16].replace('T', ' ')
-            if not s["representative"]:
-                return f"n.d.: book di {l['ticker']} letto il {when} a mercato chiuso, non rappresentativo"
-            return f"{pct(s['v'], 2)} ({l['ticker']}, {when}, ritardato 15 min)"
+            st, txt = cat.spread_state(s, now)
+            return txt.replace("book letto", f"book di {l['ticker']} letto").replace("% (", f"% ({l['ticker']}, ", 1)
     return "n.d. (serve il book reale con prezzi in acquisto e vendita)"
 
 

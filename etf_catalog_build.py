@@ -35,6 +35,7 @@ import etf_catalog as cat
 ROOT = cat.ROOT
 UNIVERSE = os.path.join(ROOT, "etf_universe.json")
 HOLDINGS = os.path.join(ROOT, "cache", "etf_holdings.json")
+VERIFY = os.path.join(ROOT, "etf_catalog_verifiche.json")
 RAW = os.path.join(ROOT, "cache", "etf_catalog")
 PAUSE = 2.0
 UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"}
@@ -250,6 +251,124 @@ def bi_page(kind, isin, offline, force):
     return r.text, TODAY, r.url, at
 
 
+ISH_PAGE_MAX_AGE = 7
+ISH_SITE = "https://www.ishares.com"
+
+
+def ishares_page(isin, path, offline, force=False):
+    """(html, fetched date, url) of the issuer's product page of one iShares class (phase 6B), or None. Reuses the
+    saved copy for ISH_PAGE_MAX_AGE days; one page at a time with a pause; stops at the first refusal."""
+    p = os.path.join(RAW, f"ish_page_{isin}.html")
+    meta = p + ".json"
+    if os.path.exists(p) and os.path.exists(meta):
+        m = cat._read(meta)
+        if offline or (not force and cat.age_days(m["fetched"]) <= ISH_PAGE_MAX_AGE):
+            with open(p, encoding="utf-8") as f:
+                return f.read(), m["fetched"], m["url"]
+    if offline or not path:
+        return None
+    url = ISH_SITE + path + "?switchLocale=y&siteEntryPassthrough=true"
+    time.sleep(PAUSE)
+    r = requests.get(url, headers=UA, timeout=40)
+    if r.status_code in (401, 403, 429):
+        raise Refused(f"iShares ha risposto {r.status_code}: mi fermo")
+    if r.status_code != 200:
+        return None
+    os.makedirs(RAW, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(r.text)
+    with open(meta, "w") as f:
+        json.dump({"fetched": TODAY, "url": r.url.split("?")[0]}, f)
+    return r.text, TODAY, r.url.split("?")[0]
+
+
+def _clean(s):
+    return " ".join(htmlmod.unescape(re.sub(r"<button.*?</button>|<[^>]+>", " ", s, flags=re.S)).split())
+
+
+def _chart(t, var):
+    """The first series of an iShares breakdown chart ([{name, y}]), or []."""
+    m = re.search(r"var " + var + r"\s*=\s*(\[.*?\]);", t, re.S)
+    if not m:
+        return []
+    try:
+        data = json.loads(m.group(1))
+        return [{"name": x["name"], "weight": x["y"]} for x in (data[0]["data"] if data else [])]
+    except (ValueError, KeyError, IndexError, TypeError):
+        return []
+
+
+def _series(block, name):
+    m = re.search(r"name\s*:\s*'" + re.escape(name) + r"'\s*,\s*data\s*:\s*\[(.*?)\]", block, re.S)
+    if not m:
+        return None
+    return [float(y) if y not in ("null", "") else None for y in re.findall(r"\{\s*y\s*:\s*(-?[\d.]+|null)", m.group(1))]
+
+
+def parse_ishares_page(html):
+    """What phase 6B reads from an iShares product page: the key facts with their 'al gg/mm/aaaa' date, the class
+    (hedged or not), the listings table, calendar-year total returns of the fund and of its benchmark (same currency,
+    same years: the base of the tracking difference), credit-rating and maturity breakdowns. None if not a fund page."""
+    if not html or "product-data-item" not in html:
+        return None
+    facts = {}
+    for m in re.finditer(r'<div class="product-data-item col-(\w+)[^"]*">\s*<div class="caption"[^>]*>(.*?)</div>\s*</div>\s*'
+                         r'<div class="data">(.*?)</div>', html, re.S):
+        cap = m.group(2)
+        d = re.search(r'<div class="as-of-date">\s*al\s*(\d{2}/\d{2}/\d{4})', cap)
+        label = _clean(re.sub(r'<div class="as-of-date">.*', "", cap, flags=re.S))
+        facts[m.group(1)] = {"label": label, "asOf": date_it(d.group(1)) if d else None, "value": _clean(m.group(3))}
+    if not facts.get("isin"):
+        return None
+    sc = re.search(r'productShareClass:\s*"([^"]*)"', html)
+    title = re.search(r'<meta property="og:title" content="([^"]*)"', html)
+    hedged = bool(sc and "hedged" in sc.group(1).lower()) or bool(title and title.group(1).lower().endswith("hedged"))
+    pid = re.search(r'portfolioId:\s*"(\d+)"', html)
+    cls = re.search(r'<option[^>]*data-link-event="share class ([^"]*)"[^>]*value="[^"]*/prodotti/' + (pid.group(1) if pid else "x") + r'/', html)
+    listings = []
+    tb = re.search(r'<table id="listingsTable".*?<tbody>(.*?)</tbody>', html, re.S)
+    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", tb.group(1) if tb else "", re.S):
+        cells = [_clean(c) for c in re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)]
+        if len(cells) >= 4:
+            listings.append({"exchange": cells[0], "ticker": cells[1], "currency": cells[2], "listingDate": date_it(cells[3])})
+    cal = []
+    yrs = re.search(r"var returnsCalChartCategories\s*=\s*\[([^\]]*)\]", html)
+    blk = re.search(r"var returnsCalChartData\s*=\s*\[(.*?)\];", html, re.S)
+    if yrs and blk:
+        years = [int(y) for y in re.findall(r"\d{4}", yrs.group(1))]
+        fund, bench = _series(blk.group(1), "Rendimento totale (%)"), _series(blk.group(1), "Benchmark (%)")
+        if fund and bench and len(fund) == len(bench) == len(years):
+            cal = [{"year": y, "fund": f, "bench": b} for y, f, b in zip(years, fund, bench) if f is not None and b is not None]
+    bench_name = re.search(r'title="Indice: ([^"]+)"', html)
+    ccy_f = re.search(r"Rendimento totale \(%\) ([A-Z]{3})", html)
+    ccy_b = re.search(r"Benchmark \(%\) ([A-Z]{3})", html)
+    rat_as = re.search(r'id="tabsRating".*?al (\d{2}/\d{2}/\d{4})', html, re.S)
+    mat_as = re.search(r'id="tabsMaturity".*?al (\d{2}/\d{2}/\d{4})', html, re.S)
+    return {"isin": facts["isin"]["value"], "facts": facts, "hedged": hedged, "classLabel": htmlmod.unescape(cls.group(1)) if cls else None,
+            "listings": listings, "calendar": cal, "benchmarkName": re.split(r"\.?<br", htmlmod.unescape(bench_name.group(1)))[0].strip() if bench_name else None,
+            "returnCurrency": {"fund": ccy_f.group(1) if ccy_f else None, "benchmark": ccy_b.group(1) if ccy_b else None},
+            "rating": {"rows": _chart(html, "tabsRatingDataChart"), "asOf": date_it(rat_as.group(1)) if rat_as else None},
+            "maturity": {"rows": _chart(html, "tabsMaturityDataChart"), "asOf": date_it(mat_as.group(1)) if mat_as else None}}
+
+
+def page_num(s):
+    """'3,34%' / '1,94 yrs' / 'EUR 1.804.995.637' / '25,33' -> float, None if not a number."""
+    m = re.search(r"-?[\d.]+(?:,\d+)?", (s or "").replace(" ", ""))
+    return num_it(m.group(0)) if m else None
+
+
+def tracking_difference(cal, launch_year=None):
+    """Calendar-year tracking difference = fund total return − benchmark total return, the same year and the same
+    currency (as published by the issuer, NAV with income reinvested). Only full years after the launch year."""
+    rows = [r for r in cal or [] if launch_year is None or r["year"] > launch_year]
+    rows = [dict(r, td=round(r["fund"] - r["bench"], 3)) for r in rows]
+    if not rows:
+        return None
+    last = rows[-1]
+    recent = rows[-5:]
+    return {"years": rows, "last": last, "avg": round(sum(r["td"] for r in recent) / len(recent), 3), "n": len(recent)}
+
+
 def ishares_list(offline):
     p = os.path.join(RAW, "ishares_list.json")
     if os.path.exists(p) and (offline or cat.age_days(cat._read(p + ".meta")["fetched"]) <= 7):
@@ -347,7 +466,7 @@ def spread_of(book, at):
     phase = (book.get("phase") or "").lower()
     open_ = phase in ("continuous trading", "negoziazione continua", "open", "continua")
     return {"v": round((a - b) / ((a + b) / 2) * 100, 3), "bid": b, "ask": a, "phase": book.get("phase"), "at": at,
-            "representative": open_,
+            "representative": open_, "delayMin": 15, "src": "Borsa Italiana, book del miglior livello",
             "note": None if open_ else "letto a mercato chiuso: non rappresenta lo spread normale durante le contrattazioni"}
 
 
@@ -400,7 +519,97 @@ def state(values, tol=0.006):
     return "verificato" if len({str(v).lower() for v in vs}) == 1 else "discordante"
 
 
-def build_entry(isin, uni, ish, bi, bk, bk_at, holdings, sources, report, twins_of):
+def ter_reference(isin, ter_i, s_i, as_i, ter_p, s_p, as_p, ter_b, s_b, ter_j, s_j, as_j, verif):
+    """(value, source, date, note, resolution, readings, state) of the TER. Reference = the issuer: iShares' list or page,
+    else a document of the issuer checked by hand (etf_catalog_verifiche.json). Without the issuer, two other sources
+    that agree are enough; if they disagree the conflict stays unresolved and NO value is chosen (never the lowest)."""
+    readings = [{"src": s, "v": v, "kind": k} for s, v, k in ((s_i, ter_i, "emittente"), (s_p, ter_p, "emittente"), (s_b, ter_b, "borsa"),
+                                                             (s_j, ter_j, "aggregatore")) if s and v is not None]
+    man = ((verif or {}).get("ter") or {}).get(isin)
+    if man:
+        readings.append({"src": f"verifica:{isin}", "v": man["v"], "kind": "emittente (documento letto a mano)"})
+    st = state([r["v"] for r in readings])
+    if ter_i is not None:
+        return ter_i, s_i, as_i, "TER/OCF dell'emittente", "riferimento dell'emittente", readings, st
+    if ter_p is not None:
+        return ter_p, s_p, as_p, "TER dell'emittente (pagina prodotto)", "riferimento dell'emittente", readings, st
+    if man:
+        return (man["v"], f"verifica:{isin}", man["asOf"], f"{man['definition']} dal documento dell'emittente: {man['document']}",
+                "documento dell'emittente verificato a mano", readings, st)
+    if st == "discordante":
+        un = ((verif or {}).get("terUnresolved") or {}).get(isin) or {}
+        return (None, None, None, "fonti discordanti e nessun documento dell'emittente: conflitto non risolto" +
+                (f" ({un['note']})" if un.get("note") else ""), "non risolto", readings, st)
+    if ter_b is not None:
+        return ter_b, s_b, TODAY, "Commissioni totali annue (Borsa Italiana)", "borsa", readings, st
+    return ter_j, s_j, as_j, "TER secondo justETF", "aggregatore", readings, st
+
+
+def fact(page, key):
+    """(number, date) of one key fact of an iShares page, or (None, None)."""
+    f = ((page or {}).get("facts") or {}).get(key) or {}
+    return page_num(f.get("value")), f.get("asOf")
+
+
+def td_comparable(page, hedged):
+    """None if the issuer's fund and benchmark returns are comparable (same currency; a hedged class against a hedged
+    index), else the reason why a tracking difference cannot be computed from them."""
+    rc = (page or {}).get("returnCurrency") or {}
+    if rc.get("fund") and rc.get("benchmark") and rc["fund"] != rc["benchmark"]:
+        return (f"l'emittente confronta il fondo in {rc['fund']} con l'indice in {rc['benchmark']}: valute diverse, "
+                "la differenza conterrebbe l'effetto del cambio")
+    if hedged and "hedged" not in ((page or {}).get("benchmarkName") or "").lower():
+        return "classe coperta confrontata con l'indice non coperto: la differenza conterrebbe l'effetto della copertura"
+    return None
+
+
+def td_field(page, launch, src, as_of, hedged=False):
+    """Tracking difference from the issuer's calendar-year returns of fund and benchmark (same currency and years)."""
+    ly = int(launch[:4]) if launch else None
+    why = td_comparable(page, hedged) if page else None
+    if why:
+        return cat.fv(None, None, None, "non calcolabile: " + why)
+    td = tracking_difference((page or {}).get("calendar"), ly)
+    if not td:
+        return cat.fv(None, None, None, "non verificabile: serve il rendimento dell'indice nella stessa valuta e periodo"
+                      + (" (la pagina dell'emittente non riporta anni completi)" if page else " (nessun documento dell'emittente letto)"))
+    out = cat.fv(td["last"]["td"], src, f"{td['last']['year']}-12-31",
+                 f"anno {td['last']['year']}: fondo {td['last']['fund']:.2f}% − indice {td['last']['bench']:.2f}% (rendimento totale, "
+                 f"stessa valuta, dati dell'emittente); media degli ultimi {td['n']} anni {td['avg']:+.2f} punti")
+    out.update(years=td["years"], avg=td["avg"], n=td["n"], benchmark=(page or {}).get("benchmarkName"),
+               definition="differenza di rendimento annuo fondo − indice (tracking difference), non la volatilità della differenza (tracking error)")
+    return out
+
+
+def bond_block(k, ish, s_i, page, s_p, hedged, dist):
+    """Bond data (phase 6B, part B5): the issuer's page first (each value with its own date), else iShares' list.
+    Yield to maturity, coupon and distribution yield are three different things and stay separate."""
+    as_n = date_num(rd(ish, "navAmountAsOf")) if ish else None
+    def pick(page_key, list_key, note):
+        v, d = fact(page, page_key) if page else (None, None)
+        if v is not None:
+            return cat.fv(v, s_p, d or TODAY, note)
+        lv = rd(ish, list_key) if ish and list_key else None
+        return cat.fv(lv, s_i if lv is not None else None, as_n if lv is not None else None, note + (" (elenco prodotti, senza data propria)" if lv is not None else ""))
+    rat = (page or {}).get("rating") or {}
+    mat = (page or {}).get("maturity") or {}
+    return {"bondKind": cat.fv(k["bondKind"], "manuale", None, "dalla definizione dell'indice"),
+            "credit": cat.fv(k["credit"], "manuale", None, "dalla definizione dell'indice, non un rating del fondo"),
+            "duration": pick("modelOad", "effectiveDuration", "duration effettiva, anni: circa la perdita % per +1 punto dei tassi"),
+            "yield": pick("yieldToWorst", "yieldToWorst", "rendimento a scadenza medio ponderato (al peggio per i titoli richiamabili), "
+                          "% annuo lordo, senza spese: non è una previsione né un rendimento netto garantito"),
+            "maturity": pick("weightedAvgLife", None, "scadenza media ponderata, anni"),
+            "coupon": pick("weightedAvgCoupon", None, "cedola media ponderata dei titoli, %: non è il rendimento"),
+            "distYield": pick("twelveMonTrlYld", "distYield", "rendimento delle distribuzioni degli ultimi 12 mesi, %: guarda indietro, non è il rendimento a scadenza")
+                         if dist != "accumulazione" else cat.fv(None, None, None, "classe ad accumulazione: nessuna distribuzione"),
+            "ratings": cat.fv(rat.get("rows") or None, s_p if rat.get("rows") else None, rat.get("asOf"), "qualità del credito dei titoli, % del fondo"),
+            "maturities": cat.fv(mat.get("rows") or None, s_p if mat.get("rows") else None, mat.get("asOf"), "fasce di scadenza, % del fondo"),
+            "currency": cat.fv("EUR" if k["family"] != "aggregato_globale" else "varie, coperte in EUR" if hedged else "varie",
+                               "manuale", None, "dalla definizione dell'indice"),
+            "hedged": hedged}
+
+
+def build_entry(isin, uni, ish, bi, bk, bk_at, holdings, sources, report, twins_of, page=None, verif=None):
     j = (uni or {}).get("justetf") or {}
     k = C.get(isin)
     if not k:
@@ -429,10 +638,13 @@ def build_entry(isin, uni, ish, bi, bk, bk_at, holdings, sources, report, twins_
     rep, rep_detail = replication(j) if j else (("fisica a campione" if ish and "campion" in str(ish).lower() else None), None)
     ter_i = rd(ish, "ter_ocf") if ish else None
     ter_b, ter_j = (bi or {}).get("ter"), j.get("ter")
-    ter_v, ter_src, ter_as = ((ter_i, s_i, as_i) if ter_i is not None else (ter_b, s_b, TODAY) if ter_b is not None else (ter_j, s_j, as_j))
-    ter_state = state([ter_i, ter_b, ter_j])
+    s_p = f"ishares_pagina:{isin}" if page else None
+    ter_p, as_p = fact(page, "emeaMgt") if page else (None, None)
+    ter_v, ter_src, ter_as, ter_note, ter_res, ter_read, ter_state = ter_reference(
+        isin, ter_i, s_i, as_i, ter_p, s_p, as_p or TODAY, ter_b, s_b, ter_j, s_j, as_j, verif)
     if ter_state == "discordante":
-        report.append({"isin": isin, "problema": "TER diverso tra le fonti", "emittente": ter_i, "borsa": ter_b, "justETF": ter_j})
+        report.append({"isin": isin, "problema": "TER diverso tra le fonti", "emittente": ter_i if ter_i is not None else ter_p,
+                       "borsa": ter_b, "justETF": ter_j, "riferimento": ter_v, "risoluzione": ter_res})
     ccy_vals = [(ish or {}).get("seriesBaseCurrencyCode"), (bi or {}).get("currency"), (j.get("fundCurrency") or "")[:3] or None]
     ccy = next((v for v in ccy_vals if v), None)
     if state(ccy_vals) == "discordante":
@@ -471,7 +683,11 @@ def build_entry(isin, uni, ish, bi, bk, bk_at, holdings, sources, report, twins_
             "baseCurrencyState": state(ccy_vals),
             "hedged": cat.fv(hedged, s_j or s_i, as_j or as_i), "hedgedState": state(hedged_vals),
             "distribution": cat.fv(dist, s_j or s_i or s_b, as_j or as_i), "distributionState": state(dist_vals),
-            "distributionFrequency": cat.fv(None, None, None, "frequenza delle cedole non disponibile nelle fonti lette"),
+            "distributionFrequency": (cat.fv(fq, s_p, as_p or TODAY, "frequenza delle distribuzioni (pagina dell'emittente)")
+                                      if (fq := (((page or {}).get("facts") or {}).get("distributionFrequency") or {}).get("value"))
+                                      and dist == "distribuzione" else
+                                      cat.fv(None, None, None, "classe ad accumulazione: nessuna distribuzione") if dist == "accumulazione" else
+                                      cat.fv(None, None, None, "frequenza delle cedole non disponibile nelle fonti lette")),
             "replication": cat.fv(rep, s_j, as_j), "replicationDetail": rep_detail,
             "counterpartyRisk": "sì: l'ETF riceve il rendimento dell'indice da uno swap con una banca" if synthetic else
                                 ("possibile prestito titoli: verificare sul documento dell'emittente" if rep else None),
@@ -480,10 +696,9 @@ def build_entry(isin, uni, ish, bi, bk, bk_at, holdings, sources, report, twins_
             "prospectusDate": cat.fv(((bi or {}).get("docs") or {}).get("prospectus"), s_b, None),
         },
         "costs": {
-            "ter": cat.fv(ter_v, ter_src, ter_as, "TER/OCF dell'emittente" if ter_src == s_i else
-                          "Commissioni totali annue (Borsa Italiana)" if ter_src == s_b else "TER secondo justETF"),
-            "terState": ter_state, "terChecks": [{"src": s, "v": v} for s, v in ((s_i, ter_i), (s_b, ter_b), (s_j, ter_j)) if s],
-            "trackingDifference": cat.fv(None, None, None, "non verificabile: serve il rendimento dell'indice nella stessa valuta e periodo"),
+            "ter": cat.fv(ter_v, ter_src, ter_as, ter_note),
+            "terState": ter_state, "terResolution": ter_res, "terChecks": ter_read,
+            "trackingDifference": td_field(page, launch, s_p, as_p, bool(hedged)),
             "trackingError": cat.fv(None, None, None, "non verificabile con le fonti gratuite lette"),
             "brokerFees": cat.fv(None, None, None, "commissioni del broker non note"),
             "brokerAvailability": "non verificata",
@@ -492,16 +707,15 @@ def build_entry(isin, uni, ish, bi, bk, bk_at, holdings, sources, report, twins_
         "classification": dict(k, familyLabel=FAMILY.get(k["family"]), assetClassLabel=cat.ASSET_CLASSES.get(k["assetClass"])),
     }
     if k["assetClass"] in ("obbligazionario", "monetario"):
-        dur, ytw, dy = (rd(ish, "effectiveDuration"), rd(ish, "yieldToWorst"), rd(ish, "distYield")) if ish else (None, None, None)
-        as_n = date_num(rd(ish, "navAmountAsOf")) if ish else None
-        entry["bond"] = {"bondKind": cat.fv(k["bondKind"], "manuale", None, "dalla definizione dell'indice"),
-                         "credit": cat.fv(k["credit"], "manuale", None, "dalla definizione dell'indice, non un rating del fondo"),
-                         "duration": cat.fv(dur, s_i if dur is not None else None, as_n if dur is not None else None, "duration effettiva, anni"),
-                         "yield": cat.fv(ytw, s_i if ytw is not None else None, as_n if ytw is not None else None,
-                                         "rendimento al peggio (yield to worst), % annuo lordo: non è una previsione"),
-                         "distYield": cat.fv(dy, s_i if dy is not None else None, as_n if dy is not None else None, "rendimento distribuito ultimi 12 mesi, %"),
-                         "currency": cat.fv("EUR" if k["family"] != "aggregato_globale" else "varie, coperte in EUR" if hedged else "varie",
-                                            "manuale", None, "dalla definizione dell'indice")}
+        entry["bond"] = bond_block(k, ish, s_i, page, s_p, hedged, dist)
+    if k["assetClass"] == "azionario" and page:
+        val = {}
+        for key, lab in (("priceEarnings", "P/E"), ("priceBook", "P/B")):
+            v, d = fact(page, key)
+            if v is not None:
+                val[key] = cat.fv(v, s_p, d, f"{lab} del portafoglio calcolato dall'emittente sui titoli del fondo (non una stima di questo programma)")
+        if val:
+            entry["valuation"] = val
     # exposure
     ex = {}
     h = holdings.get(isin)
@@ -556,6 +770,56 @@ def build_entry(isin, uni, ish, bi, bk, bk_at, holdings, sources, report, twins_
     return entry
 
 
+VENUES = {"Borsa Italiana": ("Borsa Italiana (ETFplus)", "ETFP", "MI"), "Xetra": ("Xetra (Francoforte)", "XETR", "DE")}
+
+
+def verify_added(e, page):
+    """Checks of an added class against the issuer's own page (phase 6B, part B1): ISIN, class (hedged or not),
+    index, use of income and listings. Returns the list of checks; each one says what the page and the catalog say."""
+    if not page:
+        return [{"what": "pagina dell'emittente", "ok": False, "page": None, "catalog": None}]
+    f = page["facts"]
+    k = e["classification"]
+    idx_page = (f.get("indexSeriesName") or {}).get("value") or ""
+    norm = lambda x: re.sub(r"[^a-z0-9&]+", " ", x.lower()).replace("treasury bond", "government").replace("govt", "government").replace("bbg ", "bloomberg ")
+    words = [w for w in norm(k["indexKey"]).split() if w not in ("&",)]
+    use = (f.get("useOfProfitsCode") or {}).get("value")
+    hedged = cat.val(e["fund"]["hedged"])
+    out = [{"what": "ISIN", "ok": page["isin"] == e["isin"], "page": page["isin"], "catalog": e["isin"]},
+           {"what": "classe (copertura del cambio)", "ok": page["hedged"] == bool(hedged), "page": page.get("classLabel") or ("coperta" if page["hedged"] else "non coperta"),
+            "catalog": "coperta" if hedged else "non coperta"},
+           {"what": "indice", "ok": all(w in norm(idx_page) for w in words), "page": idx_page, "catalog": k["indexKey"]},
+           {"what": "politica dei proventi", "ok": norm_dist(use) == cat.val(e["fund"]["distribution"]), "page": use,
+            "catalog": cat.val(e["fund"]["distribution"])},
+           {"what": "quotazioni", "ok": bool(page["listings"]), "page": ", ".join(f"{l['exchange']} {l['ticker']}" for l in page["listings"]) or None,
+            "catalog": None}]
+    return out
+
+
+def approve_added(e, page, verif, report):
+    """The user approved the 5 added classes on 4 Nov 2026 on condition that the issuer's documents confirm them.
+    Listings on Borsa Italiana / Xetra that the issuer's page shows and the catalog lacks are added (same ISIN: never
+    a new row)."""
+    checks = verify_added(e, page)
+    approved = e["isin"] in ((verif or {}).get("approved") or {}).get("isins", [])
+    ok = all(c["ok"] for c in checks)
+    e["verification"] = {"checks": checks, "ok": ok, "src": f"ishares_pagina:{e['isin']}" if page else None}
+    if approved and ok:
+        e["status"], e["statusNote"] = ("approvata dall'utente il 4 nov 2026, verificata sulla pagina dell'emittente",
+                                        (e.get("statusNote") or ""))
+    elif approved:
+        bad = ", ".join(c["what"] for c in checks if not c["ok"])
+        e["status"] = "approvata con condizione non ancora soddisfatta"
+        e["statusNote"] = f"verifica sulla documentazione dell'emittente non completa: {bad}"
+        report.append({"isin": e["isin"], "problema": "classe aggiunta non verificata del tutto", "dettaglio": bad})
+    have = {v[1] for v in e.get("_venues", [])}
+    for l in (page or {}).get("listings", []):
+        v = VENUES.get(l["exchange"])
+        if v and v[1] not in have and l.get("ticker"):
+            e["_venues"].append((v[0], v[1], l["ticker"], v[2]))
+            have.add(v[1])
+
+
 def inherit_from_twins(entries, uni, twins_of):
     """A class added in phase 6A takes from a sibling class of the SAME fund what belongs to the fund (index,
     replication, number of holdings, countries, sectors), saying so. Never between different funds."""
@@ -605,6 +869,8 @@ def add_listings(entry, yahoo, yahoo_date):
                          "turnover": bk["turnover"], "lastTrade": bk["lastTrade"], "official": bk["official"], "officialDate": bk["officialDate"],
                          "src": f"bi_book:{entry['isin']}", "note": "dati ritardati di 15 minuti"}
             l["spread"] = spread_of(bk, at)
+            if l["spread"]:
+                l["spread"].update(venue=venue, currency=cat.val(l["currency"]))
         out.append(l)
     entry.pop("_book", None)
     return out
@@ -672,6 +938,32 @@ def main(argv=None):
         if not sch and ((uni.get(isin) or {}).get("justetf") or {}).get("legal") != "ETC":
             report.append({"isin": isin, "problema": "non trovato su Borsa Italiana (ETFplus)"})
         bi_data[isin] = (sch, book, bk[3] if bk else None)
+    # issuer pages (phase 6B): one iShares page per class, gentle, stop at the first refusal
+    verif = cat._read(VERIFY) if os.path.exists(VERIFY) else {}
+    pages = {}
+    ish_stopped = None
+    for n, isin in enumerate([i for i in isins if ish.get(i)], 1):
+        if ish_stopped:
+            break
+        try:
+            pg = ishares_page(isin, ish[isin].get("productPageUrl"), a.offline)
+        except (Refused, requests.RequestException) as e:
+            ish_stopped = str(e)
+            report.append({"problema": "pagine iShares interrotte", "dettaglio": ish_stopped})
+            break
+        parsed = parse_ishares_page(pg[0]) if pg else None
+        if parsed and parsed["isin"] != isin:
+            report.append({"isin": isin, "problema": "la pagina iShares riporta un altro ISIN", "valore": parsed["isin"]})
+            parsed = None
+        if parsed:
+            pages[isin] = parsed
+            sources[f"ishares_pagina:{isin}"] = {"publisher": "iShares (BlackRock), pagina prodotto della classe", "kind": "emittente",
+                                                "url": pg[2], "asOf": pg[1], "fetched": pg[1]}
+        if n % 10 == 0:
+            print(f"  iShares: {n} pagine", flush=True)
+    for isin, v in (verif.get("ter") or {}).items():
+        sources[f"verifica:{isin}"] = {"publisher": v["document"], "kind": "emittente (verifica manuale)", "url": v["url"],
+                                       "asOf": v["asOf"], "fetched": verif.get("checked")}
     twins_of = {}
     for isin in isins:
         i = ish.get(isin)
@@ -682,8 +974,10 @@ def main(argv=None):
         if isin in ADDED and not ish.get(isin) and not sch:
             report.append({"isin": isin, "problema": "classe aggiunta non confermata da nessuna fonte: scartata"})
             continue
-        e = build_entry(isin, uni.get(isin), ish.get(isin), sch, book, at, holdings, sources, report, twins_of)
+        e = build_entry(isin, uni.get(isin), ish.get(isin), sch, book, at, holdings, sources, report, twins_of, pages.get(isin), verif)
         if e:
+            if isin in ADDED:
+                approve_added(e, pages.get(isin), verif, report)
             entries[isin] = e
     # Yahoo, one symbol at a time
     syms = sorted({f"{t}.{s}" for e in entries.values() for _, _, t, s in e["_venues"]})

@@ -828,6 +828,14 @@ def run_daily_job():
     history.record(portfolio.snapshot(snap, infos))
     save_signal_diary()
     save_opportunity_diary(source="job serale")         # phase O2: logs its own errors, the rest of the job goes on
+    try:                                                 # phase 6B: ETF closes (in this process: no thread) and scan diary
+        import etf_catalog
+        import etf_prices
+        if etf_prices.due(etf_prices.load(), datetime.now(ROME_TZ)):
+            etf_prices.save(etf_prices.build(download, etf_catalog.load()))
+    except Exception:
+        log.exception("ETF prices not updated by the evening job")
+    save_etf_scan_diary(source="job serale")
     save_etf_diary(wait=True)
     for _ in range(60):                                  # positions diary: wait for the 2 years of prices (risk.py)
         import pos_diary
@@ -940,6 +948,8 @@ def worker():
             portfolio.refresh()
             save_signal_diary()
             save_opportunity_diary()                             # opportunity diary (phase O2): never stops the loop
+            refresh_etf_prices()                                 # phase 6B: ETF closes once after each Borsa Italiana close
+            save_etf_scan_diary()                                # phase 6B: scanner of the ETF exposures, once per session
             refresh_fundamentals(tickers)                        # at most every 30 minutes, only stocks that need it
             save_etf_diary()
             save_pos_diary()
@@ -1153,7 +1163,7 @@ def movers_why(n=8):
 app = Flask(__name__, static_folder=None)
 # version of the code that serves the page: change it together with PAGE_VERSION in static/app.js whenever the data
 # sent to the page changes, so that a server left running with old code is noticed (the page asks to restart it)
-DASHBOARD_VERSION = "2026-11-04k"
+DASHBOARD_VERSION = "2026-11-04l"
 
 
 @app.route("/")
@@ -1593,6 +1603,119 @@ def api_etf_compare():
     if out.get("error"):
         return jsonify(out), 400
     return app.response_class(json.dumps(out, default=clean), mimetype="application/json")
+
+
+# ---------------------------------------------------------------- phase 6B: scanner of the ETF exposures
+
+_eopp = {"key": None, "data": {}}
+
+
+def etf_scan(mode="lungo"):
+    """Scan of the ETF exposures (etf_opportunity.py) from data already on disk (catalog + cache/etf_prices.pkl): no
+    download, cached in memory until the prices, the catalog or the diary change. None without prices."""
+    import etf_catalog
+    import etf_opportunity as eo
+    import etf_opportunity_diary as ed
+    import etf_prices
+    prices, catalog = etf_prices.load(), etf_catalog.load()
+    if not prices or not catalog:
+        return None
+    st = ed.stats()
+    key = (prices.get("fetched"), catalog.get("builtAt"), st.get("last"), date.today().isoformat())
+    if _eopp["key"] != key:
+        _eopp.update(key=key, data={})
+    if mode not in _eopp["data"]:
+        _eopp["data"][mode] = eo.scan(catalog, prices, mode, previous=ed.previous(), now=datetime.now())
+    return _eopp["data"][mode]
+
+
+def _json(obj, status=200):
+    import etf_opportunity_diary as ed
+    return app.response_class(json.dumps(ed._clean(obj), default=clean, ensure_ascii=False), status=status, mimetype="application/json")
+
+
+@app.route("/api/etf/opportunities")
+def api_etf_opportunities():
+    """Opportunità → ETF (phase 6B): overview, every exposure (compact) and the short selection, for one mode."""
+    import etf_opportunity as eo
+    import etf_opportunity_diary as ed
+    import etf_prices
+    mode = request.args.get("mode", "lungo")
+    if mode not in eo.MODES:
+        return jsonify(error="modo sconosciuto"), 400
+    r = etf_scan(mode)
+    if r is None:
+        return _json({"status": "missing", "prices": etf_prices.status(), "diary": ed.stats(),
+                      "error": "Prezzi degli ETF non ancora scaricati: arrivano in background dopo la chiusura di Borsa Italiana "
+                               "(oppure `.venv/bin/python etf_prices.py aggiorna`)."})
+    return _json(dict(eo.page(r), status="ok", prices=etf_prices.status(), diary=ed.stats()))
+
+
+@app.route("/api/etf/opportunities/diary")
+def api_etf_opportunities_diary():
+    import etf_opportunity_diary as ed
+    return _json(ed.stats())
+
+
+@app.route("/api/etf/opportunities/<key>")
+def api_etf_opportunity(key):
+    """One exposure in full: measures, conditions, trends, risks and its products (links to the 6A comparator)."""
+    import etf_opportunity as eo
+    mode = request.args.get("mode", "lungo")
+    if mode not in eo.MODES:
+        return jsonify(error="modo sconosciuto"), 400
+    r = etf_scan(mode)
+    o = eo.detail(r, key) if r else None
+    if not o:
+        return jsonify(error="esposizione non trovata"), 404
+    return _json(dict(o, disclaimer=eo.DISCLAIMER, params=eo.P, version=eo.VERSION, mode=mode))
+
+
+def refresh_etf_prices():
+    """Background download of the ETF closes once after each close of Borsa Italiana (etf_prices.refresh_async):
+    never at page opening, never blocks the loop."""
+    try:
+        import etf_catalog
+        import etf_prices
+        return etf_prices.refresh_async(download, etf_catalog.load)
+    except Exception:
+        log.exception("ETF prices refresh not started")
+        return False
+
+
+def save_etf_scan_diary(source="dashboard"):
+    """Records the scan of the last closed Borsa Italiana session (etf_opportunity_diary.py), both modes, once per
+    session and model version, only with closes downloaded after the close. Never stops the loop."""
+    try:
+        import etf_catalog
+        import etf_opportunity as eo
+        import etf_opportunity_diary as ed
+        import etf_prices
+        prices = etf_prices.load()
+        if not prices or not prices.get("closes"):
+            return "scanner ETF: prezzi non ancora in cache"
+        bench = prices["closes"].get(eo.B_WORLD_ALL)
+        if bench is None or not len(bench):
+            return "scanner ETF: manca la serie di riferimento"
+        session = str(bench.index[-1].date())
+        if ed.exists(session, eo.VERSION):
+            return "scanner ETF: seduta già registrata"
+        why = ed.check_final(session, prices.get("fetched"))
+        if why:
+            return "scanner ETF: " + why
+        catalog = etf_catalog.load()
+        prev = ed.previous(before=session)
+        res = {m: eo.scan(catalog, prices, m, as_of=session, previous=prev, now=datetime.now()) for m in eo.MODES}
+        saved, msg = ed.record(res, session, datetime.now(ROME_TZ).isoformat(timespec="seconds"), source)
+        if saved:
+            log.info("ETF scan diary: %s for %s (%s)", msg, session, source)
+        return "scanner ETF: " + msg
+    except Exception:
+        log.exception("ETF scan diary not saved")
+        return "scanner ETF: errore, vedi cache/server.log"
+
+
+ROME_TZ = ZoneInfo("Europe/Rome")
 
 
 @app.route("/api/etf")
