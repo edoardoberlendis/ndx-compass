@@ -1142,7 +1142,7 @@ def movers_why(n=8):
 app = Flask(__name__, static_folder=None)
 # version of the code that serves the page: change it together with PAGE_VERSION in static/app.js whenever the data
 # sent to the page changes, so that a server left running with old code is noticed (the page asks to restart it)
-DASHBOARD_VERSION = "2026-10-10b"
+DASHBOARD_VERSION = "2026-11-04"
 
 
 @app.route("/")
@@ -1309,7 +1309,47 @@ def portfolio_view():
     pf["actions"] = actions.evaluate(pf, {                    # thesis and proposed action of every position (actions.py)
         "rows": rows, "sma200": risk.sma200(), "firstSeen": history.first_seen(),
         "analysts": {t: analysts.analyst_summary(store.analysts.get(t)) for t in tickers if store.analysts.get(t)}})
+    add_pillars(pf, rows, tickers)
     return pf
+
+
+def add_pillars(pf, rows, tickers):
+    """Pillars of every position's thesis (pillars.py), checked with the data the dashboard already has; the stocks
+    outside the Nasdaq-100 get their analyst data once a day. Changes of the chosen pillars go in the thesis' log."""
+    import actions
+    import analysts
+    import pillars
+    import risk
+    positions = pf.get("positions") or []
+    if not positions:
+        return
+    with store.lock:
+        anl, vals = dict(store.analysts), dict(store.valuations)
+    extra = pillars.extra([p["ticker"] for p in positions if p.get("ticker") and p["kind"] == "Azione" and p["ticker"] not in rows])
+    sma = risk.sma200()
+    closes = risk.history(tickers) if tickers else None
+    theses, updates = actions.load(), {}
+    for p in positions:
+        tk, th = p.get("ticker"), theses.get(p["isin"]) or {}
+        d = {"sma200": sma.get(tk)}
+        if p["kind"] in ("ETF", "ETC"):
+            d["corr"], d["weeks"] = pillars.fund_correlation(pf, p, closes)
+        elif tk in rows:
+            v = vals.get(tk) or {}
+            d.update(years=(anl.get(tk) or {}).get("years"), epsRev90=analysts.analyst_summary(anl.get(tk)).get("epsRev90"),
+                     rec=rows[tk].get("rec"), valLabel=v.get("label"))
+        elif tk in extra:
+            x = extra[tk]
+            d.update(years=x["a"].get("years"), epsRev90=analysts.analyst_summary(x["a"]).get("epsRev90"), rec=x["row"].get("rec"))
+            d["valLabel"], d["valWhy"] = pillars.extra_valuation(x)
+        ev = pillars.evaluate(p, th, d)
+        ev["score"] = pillars.score(ev)
+        ev["log"] = (th.get("log") or [])[-12:][::-1]           # newest first
+        p["pillars"] = ev
+        if not ev["draft"]:
+            updates[p["isin"]] = pillars.changes(ev, th.get("last"))
+    if updates:
+        actions.record_pillars(updates)
 
 
 @app.route("/api/portfolio")
@@ -1331,6 +1371,23 @@ def api_thesis_review():
     fired = [r["id"] for r in p["action"]["rules"] if r["group"] == "Rivedi la tesi" and r["state"] == "on"]
     try:
         actions.review(p["isin"], body.get("note"), fired)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(ok=True)
+
+
+@app.route("/api/thesis/log", methods=["POST"])
+def api_thesis_log():
+    """A dated note in the thesis' log, or the pillar written in words marked as still valid / fallen."""
+    import actions
+    if not local_request():
+        return jsonify(error="La tesi si modifica solo dalla dashboard aperta su questo Mac."), 403
+    body = request.get_json(silent=True) or {}
+    try:
+        if body.get("manual"):
+            actions.mark_manual(body.get("isin"), body["manual"])
+        else:
+            actions.add_note(body.get("isin"), body.get("note"))
     except ValueError as e:
         return jsonify(error=str(e)), 400
     return jsonify(ok=True)

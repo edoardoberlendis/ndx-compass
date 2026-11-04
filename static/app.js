@@ -168,7 +168,7 @@ function spark(values, w = 80, h = 22, base = null, color = null) {
 
 // ------------------------------------------------------------ data
 // must equal DASHBOARD_VERSION in server.py: otherwise the server runs old code and the page says so
-const PAGE_VERSION = "2026-10-10b";
+const PAGE_VERSION = "2026-11-04";
 async function load() {
   const r = await fetch("/api/snapshot", { cache: "no-store" });
   const sv = r.headers.get("X-Dashboard-Version");
@@ -1075,6 +1075,36 @@ const actTax = a => a.tax ? `<span class="act-tax">Effetto fiscale stimato: ${es
 const ACT_INFO = `Per ogni posizione la dashboard propone <b>Mantieni</b>, <b>Accumula</b> o <b>Rivedi la tesi</b> con regole esplicite: accanto vedi quali sono scattate e con quali numeri.
   Rivedi la tesi vince su Accumula.<br><br>Sono <b>regole di disciplina scelte da te, non verificate da un backtest</b>: servono a non dimenticare le cose da controllare,
   non dicono cosa farà il prezzo. «Accumula» scatta solo se hai scritto un peso obiettivo nella tesi.`;
+// ---- pillars of the thesis (pillars.py): measurable reasons chosen from a list, checked every day
+const PIL_INFO = `<b>Pilastri della tesi.</b> Sono i motivi per cui possiedi il titolo, scelti da un elenco perché la dashboard possa controllarli da sola ogni giorno
+  (✓ vale, ✕ caduto, ? dato mancante). Puoi aggiungerne uno scritto a parole, che confermi tu ogni 3 mesi.<br><br>
+  Quando un pilastro cambia stato, il registro lo annota con la data. Sono <b>regole di disciplina, non verificate da backtest</b>: dicono se i motivi
+  per cui hai comprato valgono ancora, non cosa farà il prezzo.`;
+const PIL_ICON = { ok: "✓", ko: "✕", na: "?" };
+const pilLog = e => e.note ? `<li><span class="muted">${dayIT(e.date)}</span> ${esc(e.note)}</li>`
+  : `<li><span class="muted">${dayIT(e.date)}</span> <span class="pil-st ${e.to}">${PIL_ICON[e.to]}</span> <b>${esc(e.name)}</b> ${e.to === "ok" ? (e.from ? "è tornato vero" : "confermato") : "è caduto"}
+    <span class="muted small">${esc(e.detail || "")}</span></li>`;
+function pillarsHTML(p, th) {
+  const P = p.pillars;
+  if (!P) return "";
+  const S = P.score, saved = !!th.updated;
+  const rev = th.pillarOpts?.ricavi;
+  return `<div class="d-sec"><h3>Pilastri della tesi ${info(PIL_INFO)}</h3>
+    ${P.draft ? `<p class="pil-draft small"><b>Bozza</b>: sono spuntati i pilastri veri oggi. Togli o aggiungi (al massimo 4), poi premi «Salva la tesi» qui sotto.</p>`
+      : `<p class="small">${S.n ? `<b>${S.ok} ✓</b> · <b>${S.ko} ✕</b>${S.na ? ` · ${S.na} non valutabili` : ""} su ${S.n} ${S.n === 1 ? "pilastro scelto" : "pilastri scelti"}` : "Nessun pilastro scelto."}</p>`}
+    <ul class="pil-list">${P.list.map(x => `<li><label><input type="checkbox" data-pil="${x.id}"${x.chosen ? " checked" : ""}>
+      <span class="pil-st ${x.state}" title="${{ ok: "vale", ko: "caduto", na: "non valutabile" }[x.state]}">${PIL_ICON[x.state]}</span>
+      <span><b>${esc(x.name)}</b><br><span class="muted small">${esc(x.rule)}</span><br><span class="small">${x.state === "na" ? "non valutabile: " : ""}${esc(x.detail)}</span></span></label>
+      ${x.id === "ricavi" ? `<label class="pil-opt small">soglia per questo titolo <input type="number" step="any" min="0" max="100" data-th="revMin" value="${isNum(rev) ? rev : ""}" placeholder="10"> %</label>` : ""}</li>`).join("")}</ul>
+    <div class="th-form"><label class="th-txt"><span>Pilastro scritto a parole <span class="muted small">(facoltativo: lo confermi tu ogni 3 mesi)</span></span>
+      <textarea data-th="manual" rows="2" maxlength="300" placeholder="Per esempio: il nuovo prodotto X arriva entro il 2027">${esc(P.manual?.text || "")}</textarea></label></div>
+    ${P.manual ? `<p class="small"><span class="pil-st ${P.manual.state}">${PIL_ICON[P.manual.state]}</span> ${esc(P.manual.detail)}
+      ${saved ? ` <button class="btn" data-man="ok">Vale ancora</button> <button class="btn" data-man="ko">È caduto</button>` : ""}</p>` : ""}
+    <h4 class="bt-h">Registro</h4>
+    ${P.log.length ? `<ul class="pil-log small">${P.log.map(pilLog).join("")}</ul>` : `<p class="muted small">Ancora vuoto: qui compaiono i pilastri che cambiano stato e le tue note.</p>`}
+    ${saved ? `<div class="toolbar"><input type="text" id="pilNote" maxlength="300" placeholder="Aggiungi una nota: un fatto che rafforza o indebolisce la tesi"><button class="btn" id="pilNoteSave">Aggiungi</button><span id="pilMsg" class="small"></span></div>` : ""}
+  </div>`;
+}
 // panel of one position: thesis to write or edit, proposed action and the full list of rules
 function openPosition(isin) {
   const p = pf.data?.positions?.find(x => x.isin === isin);
@@ -1097,6 +1127,7 @@ function openPosition(isin) {
           <input type="text" id="revNote" maxlength="300" placeholder="Per esempio: il calo dipende dal settore, i conti restano solidi"></label>
           <div class="toolbar"><button class="btn" id="revSave">Ho rivisto la tesi</button><span id="revMsg" class="small"></span></div></div>` : ""}
         ${A.notes.length ? `<p class="muted small">${A.notes.map(esc).join("<br>")}</p>` : ""}</div>
+      ${pillarsHTML(p, th)}
       <div class="d-sec"><h3>La mia tesi</h3>
         <div class="th-form">${txt("why", "Perché la possiedo", "In una o due frasi")}${txt("expect", "Cosa mi aspetto", "Per esempio: crescita dei ricavi, nuovo prodotto, recupero dei margini…")}
           ${txt("sell", "Cosa mi farebbe vendere", "Per esempio: se i ricavi rallentano, se perde il contratto X, se scende sotto…")}
@@ -1119,10 +1150,26 @@ function openPosition(isin) {
       openPosition(isin);
     } catch (e) { $("#revMsg").innerHTML = `<span class="down">Non salvato: ${esc(e.message)}</span>`; }
   };
+  const logPost = async (payload, msg) => {
+    try {
+      await pfPost("/api/thesis/log", { body: JSON.stringify({ isin, ...payload }), headers: { "Content-Type": "application/json" } });
+      await loadPortfolio();
+      openPosition(isin);
+    } catch (e) { msg.innerHTML = `<span class="down">Non salvato: ${esc(e.message)}</span>`; }
+  };
+  drawer.querySelectorAll("[data-man]").forEach(b => b.onclick = () => logPost({ manual: b.dataset.man }, $("#thMsg")));
+  if ($("#pilNoteSave")) $("#pilNoteSave").onclick = () => {
+    const note = $("#pilNote").value.trim();
+    if (note.length < 3) { $("#pilMsg").innerHTML = `<span class="down">Scrivi almeno qualche parola.</span>`; return; }
+    logPost({ note }, $("#pilMsg"));
+  };
   $("#thSave").onclick = async () => {
     const body = { isin };
     drawer.querySelectorAll("[data-th]").forEach(i => { const k = i.dataset.th; body[k] = i.tagName === "TEXTAREA" ? i.value : (i.value.trim() === "" ? null : parseFloat(i.value.replace(",", "."))); });
     if (["stop", "target", "weight"].some(k => body[k] !== null && !(body[k] > 0)) || body.weight > 100) { $("#thMsg").innerHTML = `<span class="down">Stop, target e peso obiettivo devono essere numeri positivi (il peso al massimo 100).</span>`; return; }
+    if (p.pillars) body.pillars = [...drawer.querySelectorAll("[data-pil]:checked")].map(i => i.dataset.pil);
+    if (body.pillars?.length > 4) { $("#thMsg").innerHTML = `<span class="down">Scegli al massimo 4 pilastri dall'elenco.</span>`; return; }
+    if (body.revMin !== undefined && body.revMin !== null && !(body.revMin >= 0 && body.revMin <= 100)) { $("#thMsg").innerHTML = `<span class="down">La soglia dei ricavi deve essere tra 0 e 100.</span>`; return; }
     try {
       await pfPost("/api/thesis", { body: JSON.stringify(body), headers: { "Content-Type": "application/json" } });
       await loadPortfolio();

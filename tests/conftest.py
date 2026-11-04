@@ -16,11 +16,13 @@ def private_folder(tmp_path, monkeypatch):
     import etf_buy
     import etf_holdings
     import history
+    import pillars
     import portfolio
     import rules
     monkeypatch.setattr(portfolio, "PORTFOLIO_DIR", str(tmp_path))
     monkeypatch.setattr(actions, "FILE", str(tmp_path / "tesi.json"))
     monkeypatch.setattr(actions, "FISCAL", str(tmp_path / "fiscale.json"))
+    monkeypatch.setattr(pillars, "FILE", str(tmp_path / "dati_titoli.json"))
     monkeypatch.setattr(rules, "FILE", str(tmp_path / "regole.json"))
     monkeypatch.setattr(history, "DIR", str(tmp_path / "storico"))
     monkeypatch.setattr(history, "FLOWS", str(tmp_path / "storico" / "flussi.json"))

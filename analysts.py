@@ -90,8 +90,9 @@ def fetch_one(ticker):
         for col in inc.columns:
             ni = clean(inc.loc["Net Income", col]) if "Net Income" in inc.index else None
             rev = clean(inc.loc["Total Revenue", col]) if "Total Revenue" in inc.index else None
+            oi = clean(inc.loc["Operating Income", col]) if "Operating Income" in inc.index else None   # for the margin pillar (pillars.py)
             if ni is not None or rev is not None:
-                years.append({"fy": pd.Timestamp(col).strftime("%Y-%m-%d"), "netIncome": ni, "revenue": rev})
+                years.append({"fy": pd.Timestamp(col).strftime("%Y-%m-%d"), "netIncome": ni, "revenue": rev, "operatingIncome": oi})
     out["years"] = years
     return ticker, out
 

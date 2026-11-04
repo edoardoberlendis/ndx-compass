@@ -23,6 +23,8 @@ FISCAL = os.path.join(portfolio.PORTFOLIO_DIR, "fiscale.json")      # {"losses":
 TEXTS = ("why", "expect", "sell")           # perché la possiedo, cosa mi aspetto, cosa mi farebbe vendere
 NUMBERS = ("stop", "target", "weight")      # stop price, target price, target weight (% of the portfolio): all optional
 MAX_TEXT = 2000
+MAX_PILLARS = 4         # pillars chosen from the list (pillars.py), plus at most one written in words
+PILLAR_IDS = {"ricavi": 0, "stime": 0, "consenso": 0, "margine": 0, "valutazione": 0, "trend": 0, "diversifica": 0}
 
 # thresholds of the rules (proposed starting values, approved by the user)
 EPS_CUT = -3.0          # V4: next year's EPS estimate cut by more than 3% in 30 days
@@ -88,9 +90,33 @@ def save(isin, data):
         if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0 or (k == "weight" and v > 100):
             raise ValueError("Stop, target e peso obiettivo devono essere numeri positivi (il peso al massimo 100).")
         out[k] = float(v)
-    out["updated"] = date.today().isoformat()
     all_ = load()
-    out["reviews"] = (all_.get(isin) or {}).get("reviews") or []       # "Ho rivisto la tesi" entries are kept
+    old = all_.get(isin) or {}
+    # pillars (pillars.py): ids from the list of the position's kind, at most 4, plus at most one written in words
+    if "pillars" in (data or {}):
+        ids = data.get("pillars")
+        if not isinstance(ids, list) or not all(isinstance(x, str) and x in PILLAR_IDS for x in ids) or len(set(ids)) > MAX_PILLARS:
+            raise ValueError(f"Scegli al massimo {MAX_PILLARS} pilastri dall'elenco.")
+        out["pillars"] = sorted(set(ids), key=list(PILLAR_IDS).index)
+    elif "pillars" in old:
+        out["pillars"] = old["pillars"]
+    text = (data or {}).get("manual")
+    if text is None:
+        text = (old.get("manual") or {}).get("text") or ""
+    if not isinstance(text, str) or len(text) > 300:
+        raise ValueError("Il pilastro scritto a parole può avere al massimo 300 caratteri.")
+    text = text.strip()
+    prev = old.get("manual") or {}
+    out["manual"] = ({**prev, "text": text} if text == prev.get("text") else {"text": text, "state": None, "date": None}) if text else None
+    rev = (data or {}).get("revMin", (old.get("pillarOpts") or {}).get("ricavi"))
+    if rev not in (None, "") and (not isinstance(rev, (int, float)) or isinstance(rev, bool) or not 0 <= rev <= 100):
+        raise ValueError("La soglia dei ricavi deve essere una percentuale tra 0 e 100.")
+    out["pillarOpts"] = {"ricavi": float(rev)} if rev not in (None, "") else {}
+    out["updated"] = date.today().isoformat()
+    for k in ("reviews", "log", "last"):                 # "Ho rivisto la tesi", the pillars' log and their last states are kept
+        out[k] = old.get(k) or ([] if k != "last" else {})
+    if "pillars" in out and out.get("pillars") != old.get("pillars"):
+        out["last"] = {k: v for k, v in out["last"].items() if k in out["pillars"]}
     all_[isin] = out
     _write(all_)
     return out
@@ -101,6 +127,50 @@ def _write(all_):
     with open(FILE + ".tmp", "w") as f:
         json.dump(all_, f, indent=1, ensure_ascii=False)
     os.replace(FILE + ".tmp", FILE)
+
+
+def add_note(isin, note):
+    """A dated note of mine in the thesis' log (a fact that strengthens or weakens the thesis)."""
+    note = (note or "").strip() if isinstance(note, str) else ""
+    if not 3 <= len(note) <= 300:
+        raise ValueError("Scrivi una nota da 3 a 300 caratteri.")
+    all_ = load()
+    if isin not in all_:
+        raise ValueError("Scrivi e salva prima la tesi.")
+    all_[isin].setdefault("log", []).append({"date": date.today().isoformat(), "note": note})
+    _write(all_)
+
+
+def mark_manual(isin, state):
+    """The pillar written in words: "ok" = still valid, "ko" = fallen (confirmed by hand every 3 months)."""
+    if state not in ("ok", "ko"):
+        raise ValueError("Stato non valido.")
+    all_ = load()
+    m = (all_.get(isin) or {}).get("manual") or {}
+    if not m.get("text"):
+        raise ValueError("Non c'è un pilastro scritto a parole.")
+    today = date.today().isoformat()
+    if m.get("state") != state:
+        all_[isin].setdefault("log", []).append({"date": today, "pillar": "manual", "name": m["text"], "from": m.get("state"), "to": state,
+                                                 "detail": "segnato da te"})
+    all_[isin]["manual"] = {**m, "state": state, "date": today}
+    _write(all_)
+
+
+def record_pillars(updates):
+    """{isin: (entries, last)} from pillars.changes: append the changes to the log and keep the new states.
+    Writes only when something changed."""
+    all_ = load()
+    dirty = False
+    for isin, (entries, last) in updates.items():
+        th = all_.get(isin)
+        if th is None or (not entries and th.get("last") == last):
+            continue
+        th.setdefault("log", []).extend(entries)
+        th["last"] = last
+        dirty = True
+    if dirty:
+        _write(all_)
 
 
 def review(isin, note, fired):
@@ -183,7 +253,7 @@ def tax_estimate(p, sell_value, whole, fiscal=None):
 
 
 def _has_thesis(t):
-    return bool(t and (any(t.get(k) for k in TEXTS) or any(t.get(k) for k in NUMBERS)))
+    return bool(t and (any(t.get(k) for k in TEXTS) or any(t.get(k) for k in NUMBERS) or t.get("pillars") or (t.get("manual") or {}).get("text")))
 
 
 # ---------------------------------------------------------------- rules

@@ -922,3 +922,20 @@ table.my td.nw { max-width: 280px; }
   .ret-tbl th, .ret-tbl td, .stop-tbl th, .stop-tbl td { padding-left: 4px; padding-right: 4px; }
   .stop-tbl td.l { min-width: 90px; }
 }
+
+/* ================================================ pillars of the thesis (pillars.py) */
+.pil-draft { background: var(--info-soft); border: 1px solid var(--line); border-radius: var(--r-ctrl); padding: var(--sp-2) var(--sp-3); }
+.pil-list { list-style: none; margin: var(--sp-2) 0 var(--sp-3); padding: 0; }
+.pil-list li { border-top: 1px solid var(--line); padding: var(--sp-2) 0; }
+.pil-list li:first-child { border-top: 0; }
+.pil-list label { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: var(--sp-2); align-items: start; cursor: pointer; }
+.pil-list input[type="checkbox"] { margin-top: 3px; accent-color: var(--accent); }
+.pil-opt { display: block; margin: var(--sp-1) 0 0 calc(var(--sp-2) * 2 + 30px); color: var(--ink-2); }
+.pil-opt input { width: 64px; }
+.pil-st { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: var(--r-tag); font-size: 12px; font-weight: 700; line-height: 1; border: 1px solid; }
+.pil-st.ok { color: var(--pos); background: var(--pos-soft); border-color: var(--pos); }
+.pil-st.ko { color: var(--neg); background: var(--neg-soft); border-color: var(--neg); }
+.pil-st.na { color: var(--ink-3); border-style: dashed; border-color: var(--line-strong); }
+.pil-log { list-style: none; padding: 0; margin: 0 0 var(--sp-2); }
+.pil-log li { padding: 3px 0; }
+#pilNote { flex: 1 1 200px; min-width: 0; }
