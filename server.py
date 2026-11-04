@@ -828,6 +828,12 @@ def run_daily_job():
     history.record(portfolio.snapshot(snap, infos))
     save_signal_diary()
     save_etf_diary(wait=True)
+    for _ in range(60):                                  # positions diary: wait for the 2 years of prices (risk.py)
+        import pos_diary
+        save_pos_diary()
+        if pos_diary.exists(last_closed_session()) or last_closed_session() != datetime.now(ET).date().isoformat():
+            break
+        time.sleep(5)
     now = datetime.now(ET)
     rid = f"{now:%Y-%m-%d}_close"
     after_close = now.hour * 60 + now.minute >= market_calendar.close_minute(now)
@@ -932,6 +938,7 @@ def worker():
             portfolio.refresh()
             save_signal_diary()
             save_etf_diary()
+            save_pos_diary()
             macro_calendar.refresh()                             # does real work at most once a day (more on release days)
         except Exception:
             log.exception("refresh failed")
@@ -1142,7 +1149,7 @@ def movers_why(n=8):
 app = Flask(__name__, static_folder=None)
 # version of the code that serves the page: change it together with PAGE_VERSION in static/app.js whenever the data
 # sent to the page changes, so that a server left running with old code is noticed (the page asks to restart it)
-DASHBOARD_VERSION = "2026-11-04"
+DASHBOARD_VERSION = "2026-11-04b"
 
 
 @app.route("/")
@@ -1291,46 +1298,161 @@ def api_watchlist():
 
 
 def portfolio_view():
-    """My positions with rules, theses and proposed actions (personal data: only served to this Mac, never cached)."""
+    """My positions with their "Pagella del titolo", market verdict, automatic stop and proposed level (personal data:
+    only served to this Mac, never cached). Since phase 26 nothing written or chosen by me is used (no thesis)."""
     import actions
     import analysts
     import history
+    import pillars
+    import pos_diary
     import risk
     import rules  # local imports: keep the personal-data modules together
+    import stop_auto
     with store.lock:
         snap, infos = store.snapshot, dict(store.infos)
     pf = portfolio.snapshot(snap, infos)
     pf["rules"] = rules.load()                # my risk per trade (the weight limits were removed in phase 21)
     pf["fiscal"] = actions.load_fiscal()      # my capital losses carried forward (zainetto fiscale), for the tax estimate
-    tickers = [p["ticker"] for p in pf.get("positions") or [] if p.get("ticker")]
+    positions = pf.get("positions") or []
+    tickers = [p["ticker"] for p in positions if p.get("ticker")]
     if tickers:
         risk.history(tickers)                 # starts the daily download of 2 years of prices if needed (for the 200-day average)
     rows = {r["ticker"]: r for r in snap["stocks"]} if snap else {}
-    pf["actions"] = actions.evaluate(pf, {                    # thesis and proposed action of every position (actions.py)
-        "rows": rows, "sma200": risk.sma200(), "firstSeen": history.first_seen(),
-        "analysts": {t: analysts.analyst_summary(store.analysts.get(t)) for t in tickers if store.analysts.get(t)}})
-    add_pillars(pf, rows, tickers)
+    market = position_market(pf, rows)        # as when I decide whether to buy: verdict, trend, levels, earnings
+    pils = add_pillars(pf, rows, tickers)     # the "Pagella del titolo" and its log
+    # the stop starts from the price of the same series as its levels (never the old price of the Fineco file)
+    stops = stop_auto.update(positions, {p["isin"]: (market[p["isin"]]["levelPrice"], market[p["isin"]]["levels"], market[p["isin"]]["money"])
+                                         for p in positions if (market.get(p["isin"]) or {}).get("levels")
+                                         and market[p["isin"]].get("levelPrice")}) if positions else {}
+    an = {t: analysts.analyst_summary(store.analysts.get(t)) for t in tickers if store.analysts.get(t)}
+    extra = pillars.read()["data"]
+    an.update({t: analysts.analyst_summary(x["a"]) for t, x in extra.items() if t in tickers and t not in an and x.get("a")})
+    pf["actions"] = actions.evaluate(pf, {                    # proposed level of every position (actions.py)
+        "rows": rows, "sma200": risk.sma200(), "below200": risk.below200_sessions(), "firstSeen": history.first_seen(),
+        "analysts": an, "pillars": pils, "market": market, "stops": stops})
+    for p in positions:                                       # for the page: market verdict and automatic stop
+        m = market.get(p["isin"]) or {}
+        p["market"] = {k: m.get(k) for k in ("verdict", "label", "why", "by", "source", "skipped", "trendBase")}
+        p["stopAuto"] = stops.get(p["isin"])
+    pf["posDiary"] = pos_diary.test_line()                    # the fixed test of the levels (3 months, at least 30 cases)
     return pf
 
 
+def _future_ts(*ts):
+    now = time.time() - 86400
+    xs = [t for t in ts if t and t >= now]
+    return min(xs) if xs else None
+
+
+def position_market(pf, rows):
+    """The market side of every position, as when I decide whether to buy (phase 26): the verdict of the "Decisione"
+    section for the stocks (also outside the Nasdaq-100, with the same rules on their own daily prices), the "solo
+    mercato" verdict for ETF and ETC (also outside the ETF list: the rules that need justETF data are skipped and
+    named), the long-term trend (price above the 200-day average and 50 above 200), levels for the automatic stop on
+    the position's own listing, and the next earnings date. {isin: {...}}."""
+    import analysts
+    import decision
+    import etf
+    import etf_buy
+    import pillars
+    import technical
+    positions = pf.get("positions") or []
+    if not positions:
+        return {}
+    stub = {"positions": [], "rules": pf.get("rules")}         # no position: the verdict is the one for buying
+    pub = etf.public() or {}
+    erows = {r["isin"]: r for r in pub.get("rows") or []}
+    stocks_out = [p["ticker"] for p in positions if p.get("ticker") and p["kind"] == "Azione" and p["ticker"] not in rows]
+    funds = [p["ticker"] for p in positions if p.get("ticker") and p["kind"] in ("ETF", "ETC")]
+    extra = pillars.extra(stocks_out, funds)
+    fx = pf.get("fx") or cached(("fx",), 900, eurusd)
+    eur = etf_buy.eur
+    out = {}
+    for p in positions:
+        tk = p.get("ticker")
+        m = {"verdict": None, "levels": None, "money": None, "trendBase": None, "earningsTs": None, "source": None}
+        try:
+            if p["kind"] == "Azione" and tk in rows:
+                d = stock_decision(tk, pf=stub, details=False)
+                if d:
+                    _from_decision(m, d)
+                    m["source"] = "Decisione (Nasdaq-100)"
+                m["earningsTs"] = rows[tk].get("earningsTs")
+            elif p["kind"] == "Azione" and tk in extra:
+                x = extra[tk]
+                df = pillars.frame(x)
+                ta = technical.levels(df)
+                srow = series_stats(df, None) if df is not None else None
+                info = x.get("info") or {}
+                m["earningsTs"] = _future_ts(info.get("earningsTimestamp"), info.get("earningsTimestampStart"))
+                if ta and srow:
+                    ta.update(patterns=[], groups=[])
+                    row = {**srow, "ticker": tk, "earningsTs": m["earningsTs"], "weight": 0, "sector": p.get("sector")}
+                    label, _ = pillars.extra_valuation(x)
+                    d = decision.decide(tk, row, info, {"label": label} if label else None, analysts.analyst_summary(x.get("a")) or None,
+                                        ta, patterns_test(), macro_calendar.upcoming(7)["events"], stub, fx)
+                    _from_decision(m, d)
+                    m["levelPrice"] = srow.get("price")
+                    m["source"] = "Decisione, stesse regole sui prezzi del titolo (fuori dal Nasdaq-100)"
+            elif p["kind"] in ("ETF", "ETC"):
+                df = pillars.frame(extra.get(tk))
+                lv = etf.plan_levels(df) if df is not None else None
+                c = df["Close"].dropna() if df is not None else None
+                s50 = float(c.iloc[-50:].mean()) if c is not None and len(c) >= 50 else None
+                s200 = float(c.iloc[-200:].mean()) if c is not None and len(c) >= 200 else None
+                price = p.get("price")
+                if price and s50 and s200:
+                    m["trendBase"] = price > s200 and s50 > s200
+                    m["trendWord"] = etf.trend_word(price, s50, s200)
+                if lv and c is not None and len(c):
+                    m["levels"], m["money"], m["levelPrice"] = lv, eur, float(c.iloc[-1])
+                r = erows.get(p["isin"])
+                if r:
+                    b = etf_buy.decide(r, None)["market"]
+                    m.update(verdict=b["verdict"], by=b["by"], why=[b["why"]], label=b["verdict"], source="«Ha senso comprare?», solo mercato")
+                elif c is not None:
+                    row = {"trend": m.get("trendWord"), "late": etf.late_risk(c), "leverage": p.get("leverage") or 1}
+                    cks = [k for k in etf_buy.checks(row, None) if k["id"] not in ("E4", "A2")]
+                    v, by, why = etf_buy.verdict(cks, personal=False)
+                    m.update(verdict=v, by=by, why=[why], label=v, skipped=["E4 patrimonio", "A2 costo"],
+                             source="«Ha senso comprare?», solo mercato, sui prezzi del fondo (fuori dall'elenco ETF)")
+        except Exception:
+            log.exception("market view failed for %s", tk)
+        out[p["isin"]] = m
+    return out
+
+
+def _from_decision(m, d):
+    """Verdict, long-term trend and stop levels from a "Decisione" sheet (decision.decide)."""
+    b = d.get("buyVerdict") or {}
+    lv = (d.get("timing") or {}).get("levels") or {}
+    m.update(verdict=b.get("category"), label=b.get("label"), why=b.get("why"), by=b.get("decidedBy") or b.get("by"))
+    price, s50, s200 = d.get("price"), lv.get("sma50"), lv.get("sma200")
+    if price and s50 and s200:
+        m["trendBase"] = price > s200 and s50 > s200
+    if lv.get("atr") and lv.get("low") and price:
+        m["levels"], m["levelPrice"] = {"atr": lv["atr"], "sma50": s50, "low": lv["low"]}, price
+        import decision
+        m["money"] = decision.usd
+
+
 def add_pillars(pf, rows, tickers):
-    """Pillars of every position's thesis (pillars.py), checked with the data the dashboard already has; the stocks
-    outside the Nasdaq-100 get their analyst data once a day. Changes of the chosen pillars go in the thesis' log."""
-    import actions
+    """The "Pagella del titolo" of every position (pillars.py), with the data the dashboard already has; changes
+    true <-> false go in the log (portafoglio/pagella.json)."""
     import analysts
     import pillars
     import risk
     positions = pf.get("positions") or []
     if not positions:
-        return
+        return {}
     with store.lock:
         anl, vals = dict(store.analysts), dict(store.valuations)
-    extra = pillars.extra([p["ticker"] for p in positions if p.get("ticker") and p["kind"] == "Azione" and p["ticker"] not in rows])
+    extra = pillars.read()["data"]
     sma = risk.sma200()
     closes = risk.history(tickers) if tickers else None
-    theses, updates = actions.load(), {}
+    logs, updates = pillars.load_log(), {}
     for p in positions:
-        tk, th = p.get("ticker"), theses.get(p["isin"]) or {}
+        tk = p.get("ticker")
         d = {"sma200": sma.get(tk)}
         if p["kind"] in ("ETF", "ETC"):
             d["corr"], d["weeks"] = pillars.fund_correlation(pf, p, closes)
@@ -1338,73 +1460,29 @@ def add_pillars(pf, rows, tickers):
             v = vals.get(tk) or {}
             d.update(years=(anl.get(tk) or {}).get("years"), epsRev90=analysts.analyst_summary(anl.get(tk)).get("epsRev90"),
                      rec=rows[tk].get("rec"), valLabel=v.get("label"))
-        elif tk in extra:
+        elif tk in extra and extra[tk].get("row"):
             x = extra[tk]
-            d.update(years=x["a"].get("years"), epsRev90=analysts.analyst_summary(x["a"]).get("epsRev90"), rec=x["row"].get("rec"))
+            d.update(years=(x.get("a") or {}).get("years"), epsRev90=analysts.analyst_summary(x.get("a")).get("epsRev90"),
+                     rec=x["row"].get("rec"))
             d["valLabel"], d["valWhy"] = pillars.extra_valuation(x)
-        ev = pillars.evaluate(p, th, d)
-        ev["score"] = pillars.score(ev)
-        ev["log"] = (th.get("log") or [])[-12:][::-1]           # newest first
+        ev = pillars.evaluate(p, d)
+        prev = logs.get(p["isin"]) or {}
+        e, last = pillars.changes(ev, prev.get("last"))
+        if p.get("live"):                                        # the old price of the Fineco file never goes in the log
+            updates[p["isin"]] = (e, last)
+        else:
+            e, last = [], prev.get("last") or {}
+        ev["last"] = last                                        # the day each check took its state (rule T1)
+        ev["log"] = ((prev.get("log") or []) + e)[-12:][::-1]   # newest first
         p["pillars"] = ev
-        if not ev["draft"]:
-            updates[p["isin"]] = pillars.changes(ev, th.get("last"))
-    if updates:
-        actions.record_pillars(updates)
+    pillars.record(updates)
+    return {p["isin"]: p["pillars"] for p in positions}
 
 
 @app.route("/api/portfolio")
 def api_portfolio():
     """My positions from the newest export in portafoglio/."""
     return app.response_class(json.dumps(portfolio_view(), default=clean), mimetype="application/json")
-
-
-@app.route("/api/thesis/review", methods=["POST"])
-def api_thesis_review():
-    """"Ho rivisto la tesi": save my reason; the review rules that fired stay silent for 30 days unless a new one fires."""
-    import actions
-    if not local_request():
-        return jsonify(error="La tesi si modifica solo dalla dashboard aperta su questo Mac."), 403
-    body = request.get_json(silent=True) or {}
-    p = next((x for x in portfolio_view().get("positions") or [] if x["isin"] == body.get("isin")), None)
-    if not p:
-        return jsonify(error="Posizione non trovata."), 404
-    fired = [r["id"] for r in p["action"]["rules"] if r["group"] == "Rivedi la tesi" and r["state"] == "on"]
-    try:
-        actions.review(p["isin"], body.get("note"), fired)
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    return jsonify(ok=True)
-
-
-@app.route("/api/thesis/log", methods=["POST"])
-def api_thesis_log():
-    """A dated note in the thesis' log, or the pillar written in words marked as still valid / fallen."""
-    import actions
-    if not local_request():
-        return jsonify(error="La tesi si modifica solo dalla dashboard aperta su questo Mac."), 403
-    body = request.get_json(silent=True) or {}
-    try:
-        if body.get("manual"):
-            actions.mark_manual(body.get("isin"), body["manual"])
-        else:
-            actions.add_note(body.get("isin"), body.get("note"))
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    return jsonify(ok=True)
-
-
-@app.route("/api/thesis", methods=["POST"])
-def api_thesis():
-    """Save the thesis of one position in portafoglio/tesi.json (only from the dashboard open on this Mac)."""
-    import actions
-    if not local_request():
-        return jsonify(error="La tesi si modifica solo dalla dashboard aperta su questo Mac."), 403
-    body = request.get_json(silent=True) or {}
-    try:
-        actions.save(body.get("isin"), body)
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    return jsonify(ok=True)
 
 
 @app.route("/api/earnings")
@@ -1496,6 +1574,28 @@ def etf_personal(d, pf):
     out["buy"] = {r["isin"]: etf_buy.decide(r, fits.get(r["isin"]) if usable else None, total, risk_pct) for r in d["rows"]}
     out["fitComplete"] = bool(usable)
     return out
+
+
+def save_pos_diary():
+    """The same evening as the NYSE close (at least 20 minutes after it): the level of each of my positions in
+    portafoglio/diario_posizioni/ (pos_diary.py), once per session and never rewritten. Not the next morning: the
+    prices would no longer be those of the session. Waits for the 2 years of prices (200-day average)."""
+    try:
+        import pos_diary
+        import risk
+        day = last_closed_session()
+        if day != datetime.now(ET).date().isoformat() or pos_diary.exists(day):
+            return
+        pf = portfolio_view()
+        if pf.get("resolving") or not pf.get("positions") or not pf.get("quotesAt"):
+            return                                          # wait for today's quotes, never the prices of the Fineco file
+        if any(p.get("ticker") for p in pf["positions"]) and not risk.sma200():
+            log.info("positions diary: prices for the 200-day average not ready yet, retry later")
+            return
+        if pos_diary.save(day, pf["positions"]):
+            log.info("positions diary saved for %s", day)
+    except Exception:
+        log.exception("positions diary failed")
 
 
 def save_etf_diary(wait=False):

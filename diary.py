@@ -26,7 +26,8 @@ RULE_NAMES = {"dati": "dati insufficienti", "D1": "azienda debole (D1)", "D2": "
               "tutte": "tutte le regole soddisfatte", "posizione": "regole delle mie posizioni"}
 HORIZONS = {"1M": 21, "3M": 63, "6M": 126}       # trading sessions, as in the backtests
 MIN_CASES, MIN_DAYS = 100, 20                    # below this the page says the cases are too few to conclude anything
-ORDER = ["Entra ora", "Entra su ritracciamento", "Entra su rottura", "Attendi", "Evita", "Accumula", "Mantieni", "Rivedi la tesi", "Riduci"]
+ORDER = ["Entra ora", "Entra su ritracciamento", "Entra su rottura", "Attendi", "Evita", "Accumula", "Mantieni", "Attenzione", "Valuta la vendita",
+         "Rivedi la tesi", "Riduci"]   # the last two only in days saved before phase 26 (the diary is never rewritten)
 
 LIMITS = [
     ("Casi ancora pochi", f"Finché una categoria ha meno di {MIN_CASES} casi o meno di {MIN_DAYS} giorni diversi, i numeri possono essere solo caso: la pagina lo segnala e non vanno usati per decidere."),

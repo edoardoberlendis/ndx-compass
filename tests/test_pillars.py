@@ -3,7 +3,6 @@ from datetime import date
 
 import pytest
 
-import actions
 import pillars
 
 Y = lambda fy, rev, oi=None: {"fy": fy, "revenue": rev, "operatingIncome": oi}
@@ -40,61 +39,78 @@ def test_diversification_threshold_and_minimum_weeks():
     assert pillars.diversification(0.2, 20)[0] == "na"
 
 
-def test_manual_pillar_must_be_confirmed_every_three_months():
-    today = date(2026, 11, 4)
-    assert pillars.manual({"text": "x", "state": None, "date": None}, today)[0] == "na"
-    assert pillars.manual({"text": "x", "state": "ok", "date": "2026-10-01"}, today)[0] == "ok"
-    assert pillars.manual({"text": "x", "state": "ok", "date": "2026-07-01"}, today)[0] == "na"
-    assert pillars.manual({"text": "x", "state": "ko", "date": "2026-10-01"}, today)[0] == "ko"
-    assert pillars.manual({}, today) is None
-
-
 DATA = {"years": [Y("2024-12-31", 100, 20), Y("2025-12-31", 115, 24)], "epsRev90": -5.0, "rec": "buy", "valLabel": "Cara", "sma200": 90}
 
 
-def test_draft_proposes_the_pillars_true_today():
-    ev = pillars.evaluate({"kind": "Azione", "price": 100}, {}, DATA)
-    chosen = {x["id"] for x in ev["list"] if x["chosen"]}
-    assert ev["draft"] and chosen == {"ricavi", "consenso", "margine", "trend"}
-
-
-def test_saved_choice_and_score():
-    ev = pillars.evaluate({"kind": "Azione", "price": 100}, {"pillars": ["ricavi", "stime", "valutazione"]}, DATA)
-    assert not ev["draft"]
-    assert pillars.score(ev) == {"n": 3, "ok": 1, "ko": 2, "na": 0}
+def test_pagella_is_the_same_for_every_stock():
+    ev = pillars.evaluate({"kind": "Azione", "price": 100}, DATA)
+    assert [x["id"] for x in ev["list"]] == ["ricavi", "stime", "consenso", "margine", "valutazione", "trend"]
+    assert ev["score"] == {"n": 6, "ok": 4, "ko": 2, "na": 0}
 
 
 def test_funds_have_their_own_list():
-    ev = pillars.evaluate({"kind": "ETF", "price": 100}, {}, {"sma200": 95, "corr": 0.4, "weeks": 100})
-    assert [x["id"] for x in ev["list"]] == ["trend", "diversifica"]
+    ev = pillars.evaluate({"kind": "ETF", "price": 100}, {"sma200": 95, "corr": 0.4, "weeks": 100})
+    assert [x["id"] for x in ev["list"]] == ["trend", "diversifica"] and ev["score"]["ok"] == 2
 
 
 def test_changes_log_only_true_false_switches():
-    ev = lambda st: {"list": [{"id": "trend", "name": "Trend", "state": st, "detail": "d", "chosen": True},
-                              {"id": "stime", "name": "Stime", "state": "ko", "detail": "d", "chosen": False}]}
+    ev = lambda st: {"list": [{"id": "trend", "name": "Trend", "state": st, "detail": "d"}]}
     e, last = pillars.changes(ev("ok"), {}, date(2026, 11, 1))
-    assert e == [] and last == {"trend": {"state": "ok", "since": "2026-11-01"}}          # first check: starting state only
+    assert e == [] and last == {"trend": {"state": "ok", "since": "2026-11-01", "initial": True}}   # first check: starting state
     e, last = pillars.changes(ev("na"), last, date(2026, 11, 2))
     assert e == [] and last["trend"]["state"] == "ok"                                      # a missing figure is not news
     e, last = pillars.changes(ev("ko"), last, date(2026, 11, 3))
-    assert [(x["pillar"], x["from"], x["to"]) for x in e] == [("trend", "ok", "ko")] and last["trend"]["since"] == "2026-11-03"
+    assert [(x["pillar"], x["from"], x["to"]) for x in e] == [("trend", "ok", "ko")]
+    assert last["trend"] == {"state": "ko", "since": "2026-11-03", "initial": False}
 
 
-def test_save_keeps_log_reviews_and_manual_state():
-    actions.save("XX0000000001", {"why": "motivo", "pillars": ["trend", "ricavi"], "manual": "prodotto nuovo", "revMin": 5})
-    actions.mark_manual("XX0000000001", "ok")
-    actions.add_note("XX0000000001", "trimestrale buona")
-    actions.record_pillars({"XX0000000001": ([], {"trend": {"state": "ok", "since": "2026-11-01"}})})
-    actions.save("XX0000000001", {"why": "motivo cambiato", "manual": "prodotto nuovo"})       # pillars not sent: kept
-    th = actions.load()["XX0000000001"]
-    assert th["pillars"] == ["ricavi", "trend"] and th["pillarOpts"] == {"ricavi": 5.0} and th["manual"]["state"] == "ok"
-    assert [x.get("note") for x in th["log"]] == [None, "trimestrale buona"] and th["last"]["trend"]["state"] == "ok"
+def test_log_file_round_trip():
+    pillars.record({"XX01": ([{"date": "2026-11-03", "pillar": "trend", "name": "Trend", "from": "ok", "to": "ko"}], {"trend": {"state": "ko"}})})
+    pillars.record({"XX01": ([], {"trend": {"state": "ko"}})})                            # nothing new: nothing written twice
+    assert len(pillars.load_log()["XX01"]["log"]) == 1
 
 
-def test_save_rejects_too_many_or_unknown_pillars():
-    with pytest.raises(ValueError):
-        actions.save("XX0000000001", {"pillars": ["trend", "ricavi", "stime", "consenso", "margine"]})
-    with pytest.raises(ValueError):
-        actions.save("XX0000000001", {"pillars": ["fortuna"]})
-    with pytest.raises(ValueError):
-        actions.add_note("XX0000000002", "nessuna tesi")
+# ---------------------------------------------------------------- automatic stop (stop_auto.py)
+
+import stop_auto  # noqa: E402
+
+LV = {"atr": 2.0, "sma50": 95.0, "low": {"v": 94.0, "date": "2026-10-20"}}
+
+
+def test_automatic_stop_only_rises():
+    d1, d2, d3 = date(2026, 11, 2), date(2026, 11, 3), date(2026, 11, 4)
+    s1 = stop_auto.trail(None, (90.0, "x", 2.0), d1)
+    s2 = stop_auto.trail(s1, (85.0, "y", 2.0), d2)                   # lower: kept at 90
+    s3 = stop_auto.trail(s2, (93.0, "z", 2.0), d3)                   # higher: raised
+    assert (s1["stop"], s2["stop"], s3["stop"]) == (90.0, 90.0, 93.0) and s3["raised"] == 1 and s3["since"] == "2026-11-02"
+
+
+def test_automatic_stop_uses_the_purchase_plan_rule():
+    v, label, atr = stop_auto.computed(100.0, LV)
+    assert v < 100 and atr == 2.0 and label
+
+
+def test_automatic_stop_restarts_after_a_sale_and_keeps_all_when_the_file_is_missing():
+    p = {"isin": "XX01", "price": 100.0, "currency": "USD"}
+    stop_auto.update([p], {"XX01": (100.0, LV, None)})
+    assert "XX01" in stop_auto.load()
+    assert stop_auto.update([], {}) == stop_auto.load()               # portfolio not loaded: nothing dropped
+    stop_auto.update([{"isin": "XX02", "price": 50.0, "currency": "USD"}], {})
+    assert "XX01" not in stop_auto.load()                             # sold: a new purchase starts from zero
+
+
+def test_sessions_below_the_200_day_average(monkeypatch):
+    import pandas as pd
+
+    import risk
+    up = pd.Series([100.0 + i * 0.1 for i in range(250)])
+    down = pd.concat([up, pd.Series([90.0] * 4)], ignore_index=True)       # last 4 closes well below the average
+    monkeypatch.setitem(risk._hist, "closes", {"UP": up, "DN": down, "SHORT": up[:100]})
+    assert risk.below200_sessions() == {"UP": 0, "DN": 4}
+
+
+def test_stop_below_zero_is_not_calculable():
+    lv = {"atr": 0.08, "sma50": 0.2, "low": {"v": 0.2, "date": "2026-10-20"}}      # price 0.10, very volatile
+    assert stop_auto.computed(0.10, lv) == stop_auto.NO_STOP
+    out = stop_auto.update([{"isin": "XX03", "price": 0.10, "currency": "USD"}], {"XX03": (0.10, lv, None)})
+    assert out["XX03"]["stop"] is None and "sotto zero" in out["XX03"]["why"] and "XX03" not in stop_auto.load()

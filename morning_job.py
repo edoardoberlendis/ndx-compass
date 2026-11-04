@@ -2,7 +2,7 @@
 
 It replaces the old morning report (the Report page no longer exists). If something is relevant today it shows a
 window with: US macro events of today (Italian time), earnings of my stocks (favourites and portfolio) in the next
-5 days, how many positions are in "Rivedi la tesi", sessions missing from the signal diary. Two buttons: "Chiudi" and
+5 days, how many positions are in "Valuta la vendita" (phase 26), sessions missing from the signal diary. Two buttons: "Chiudi" and
 "Apri la pagina Oggi" (the dashboard, started with the app if it is closed). With nothing relevant: no window.
 A macOS notification cannot open a web page when clicked (it opens Script Editor), hence a window; it closes by
 itself after 30 minutes, so the job never stays blocked.
@@ -47,7 +47,7 @@ def when_it(ts_et):
 
 def summary_text(today, macro, earnings, review, missing):
     """The window text (None when nothing is relevant). macro: [(title, "14:30")]; earnings: [(ticker, date, when, where)];
-    review: number of positions in "Rivedi la tesi"; missing: ISO dates of sessions without diary."""
+    review: number of positions in "Valuta la vendita"; missing: ISO dates of sessions without diary."""
     parts = []
     if macro:
         parts.append("Eventi macro di oggi\n" + "\n".join(f"· {t} alle {hm} ora italiana" for t, hm in macro))
@@ -55,7 +55,7 @@ def summary_text(today, macro, earnings, review, missing):
         parts.append(f"Trimestrali dei tuoi titoli nei prossimi {EARNINGS_DAYS} giorni\n"
                      + "\n".join(f"· {t} {day_it(d)}{', ' + w if w else ''} ({where})" for t, d, w, where in earnings))
     if review:
-        parts.append(f"Posizioni in «Rivedi la tesi»: {review}")
+        parts.append(f"Posizioni in «Valuta la vendita»: {review}")
     if missing:
         ds = ", ".join(f"{int(d[8:])} {MONTHS[int(d[5:7]) - 1]}" for d in missing[-5:])
         parts.append(f"Diario dei segnali: {'manca' if len(missing) == 1 else 'mancano'} {len(missing)} "
@@ -125,7 +125,7 @@ def collect():
         if d and today <= d <= last:
             earn.append((t, d, w, where))
     earn.sort(key=lambda x: (x[1], x[0]))
-    review = sum(1 for p in pf.get("positions") or [] if (p.get("action") or {}).get("action") == "Rivedi la tesi")
+    review = sum(1 for p in pf.get("positions") or [] if (p.get("action") or {}).get("action") == "Valuta la vendita")
     missing = diary.missing(server.last_closed_session())
     return today, macro, earn, review, missing
 

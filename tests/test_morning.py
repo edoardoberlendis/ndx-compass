@@ -14,5 +14,5 @@ def test_summary_text():
     assert t.startswith("Nasdaq-100 Monitor · ven 9 ott")
     assert "· Inflazione CPI (09/2026) alle 14:30 ora italiana" in t
     assert "· NFLX mar 13 ott, dopo la chiusura (preferito)" in t
-    assert "Posizioni in «Rivedi la tesi»: 11" in t and "manca 1 seduta (7 ott)" in t
+    assert "Posizioni in «Valuta la vendita»: 11" in t and "manca 1 seduta (7 ott)" in t
     assert t.endswith("non è una consulenza finanziaria.")

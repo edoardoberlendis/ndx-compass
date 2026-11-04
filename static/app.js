@@ -168,7 +168,7 @@ function spark(values, w = 80, h = 22, base = null, color = null) {
 
 // ------------------------------------------------------------ data
 // must equal DASHBOARD_VERSION in server.py: otherwise the server runs old code and the page says so
-const PAGE_VERSION = "2026-11-04";
+const PAGE_VERSION = "2026-11-04b";
 async function load() {
   const r = await fetch("/api/snapshot", { cache: "no-store" });
   const sv = r.headers.get("X-Dashboard-Version");
@@ -970,7 +970,7 @@ const LEV_INFO = (n = 3) => `<b>Prodotto a leva ${n}x giornaliera.</b> Ogni gior
   di partenza. Esempio: indice +10% e poi −9,1% = pari; prodotto 3x +30% e poi −27,3% = <b>−5,5%</b>.<br><br>
   <b>In un crollo forte</b> può perdere gran parte del valore in pochi giorni: un calo dell'indice di circa il 33% in un solo giorno
   lo azzererebbe. Costa anche più di un ETF normale. È pensato per periodi brevi e va controllato spesso.`;
-const pfAct = x => x.action ? `<button class="act-btn" data-pos="${esc(x.isin)}" title="${esc(x.action.reasons.join(" · ") || "Nessuna regola scattata")}">${actBadge(x.action)}${x.action.silenced ? ` <span class="muted small">rivista</span>` : ""}${x.thesis ? "" : ` <span class="muted small">senza tesi</span>`}</button>` : "—";
+const pfAct = x => x.action ? `<button class="act-btn" data-pos="${esc(x.isin)}" title="${esc(x.action.reasons.join(" · ") || "Nessuna regola scattata")}">${actBadge(x.action)}</button>` : "—";
 const pfName = x => `<b>${esc(x.name)}</b>${x.leverage > 1 ? ` <span class="lev-badge">leva ${x.leverage}x</span> ${info(LEV_INFO(x.leverage))}` : ""}
   <div class="muted small">${esc(x.ticker || x.symbol)} · ${esc(x.kind)} · ${esc(x.currency)}</div>${x.action ? `<div class="pf-act-in">${pfAct(x)}</div>` : ""}`;
 // Nasdaq-100 data the dashboard already has (same renderers as the Screener); "—" for the other positions
@@ -980,7 +980,7 @@ const PF_DASH = () => [
   { k: "name", l: "Titolo", cls: "l", sort: x => x.name, html: pfName },
   { k: "value", l: "Valore", sort: x => x.value, html: x => fEur(x.value) },
   { k: "weight", l: "Peso", p: 3, sort: x => x.weight, html: x => isNum(x.weight) ? fNum(x.weight, 1) + "%" : "—" },
-  { k: "action", l: "Azione", cls: "l", i: "Azione proposta dalle regole (clicca per la tesi e i motivi). Regole di disciplina, non verificate da backtest.", sort: x => ({ "Rivedi la tesi": 2, "Accumula": 1 }[x.action?.action] || 0),
+  { k: "action", l: "Azione", cls: "l", i: "Indicazione proposta dalle regole, solo dall'analisi del titolo (clicca per pagella, stop e motivi). Regole di disciplina, non verificate da backtest.", sort: x => ({ "Valuta la vendita": 3, "Attenzione": 2, "Accumula": 1 }[x.action?.action] || 0),
     p: 4, html: pfAct },
   { ...ndxCol("trend", "Trend"), cls: "", p: 2 }, { ...ndxCol("signal", "Segnale"), cls: "l", p: 3 }, { ...ndxCol("valLabel", "Valutazione"), cls: "l", p: 3 },
   { ...ndxCol("upside", "Potenziale analisti"), cls: "", p: 2 }, { ...ndxCol("earnings", "Prossima trimestrale"), cls: "l", p: 2 },
@@ -996,7 +996,7 @@ const PF_COLS = [
   { k: "fxEffect", l: "Di cui cambio", i: FX_INFO, p: 2, sort: x => x.fxEffect, html: x => x.currency === "EUR" ? `<span class="muted">—</span>` : `<span class="${sign(x.fxEffect)}">${fEurS(x.fxEffect)}</span>` },
   { k: "today", l: "Oggi", i: "Variazione di oggi in euro, dovuta al prezzo (rispetto alla chiusura precedente della sua borsa).", p: 3, sort: x => x.today, html: x => `<span class="${sign(x.today)}">${fEurS(x.today)}</span>` },
   { k: "weight", l: "Peso", i: "Quota del valore totale del portafoglio.", p: 3, sort: x => x.weight, html: x => isNum(x.weight) ? fNum(x.weight, 1) + "%" : "—" },
-  { k: "action", l: "Azione", cls: "l", i: "Azione proposta dalle regole (clicca per la tesi e i motivi). Regole di disciplina, non verificate da backtest.", sort: x => ({ "Rivedi la tesi": 2, "Accumula": 1 }[x.action?.action] || 0),
+  { k: "action", l: "Azione", cls: "l", i: "Indicazione proposta dalle regole, solo dall'analisi del titolo (clicca per pagella, stop e motivi). Regole di disciplina, non verificate da backtest.", sort: x => ({ "Valuta la vendita": 3, "Attenzione": 2, "Accumula": 1 }[x.action?.action] || 0),
     p: 4, html: pfAct },
 ];
 function renderPortfolio() {
@@ -1065,118 +1065,99 @@ function renderConcentration() {
   };
   $("#pfConcNote").innerHTML = `${notes[pf.dim]} Barra chiara = valore investito, barra scura = esposizione effettiva.`;
 }
-// ---- thesis and proposed action of each position (actions.py, portafoglio/tesi.json)
-const ACT_CLS = { "Rivedi la tesi": "rev", "Accumula": "acc", "Mantieni": "hold" };
-const actBadge = a => `<span class="act ${ACT_CLS[a.action] || "hold"}">${esc(a.label || a.action)}</span>`;   // label: "Rivedi · target raggiunto"
+// ---- proposed level of each position (actions.py, phase 26: only the analysis of the stock)
+const ACT_CLS = { "Valuta la vendita": "red", "Attenzione": "rev", "Accumula": "acc", "Mantieni": "hold" };
+const actBadge = a => `<span class="act ${ACT_CLS[a.action] || "hold"}">${esc(a.label || a.action)}</span>`;   // label: "Attenzione · target raggiunto"
 const TAX_NOTE = "Stima indicativa, non è una consulenza fiscale: non conta commissioni, minusvalenze che hai già, né casi particolari.";
 const actTax = a => a.tax ? `<span class="act-tax">Effetto fiscale stimato: ${esc(a.tax.text)}. ${info(`<b>Effetto fiscale stimato.</b> Guadagno o perdita in euro sulla parte da vendere, in proporzione al «Valore di carico» di Fineco, con l'imposta indicativa del 26%.<br><br>
   <b>Azioni ed ETC/ETN</b>: guadagni e perdite sono «redditi diversi» e si compensano tra loro (le perdite valgono per i 4 anni successivi).<br>
   <b>ETF UCITS</b>: i guadagni sono «redditi di capitale», tassati al 26% senza poterli compensare con le perdite; le perdite sono «redditi diversi».<br><br>${TAX_NOTE}`)}</span>` : "";
-const ACT_INFO = `Per ogni posizione la dashboard propone <b>Mantieni</b>, <b>Accumula</b> o <b>Rivedi la tesi</b> con regole esplicite: accanto vedi quali sono scattate e con quali numeri.
-  Rivedi la tesi vince su Accumula.<br><br>Sono <b>regole di disciplina scelte da te, non verificate da un backtest</b>: servono a non dimenticare le cose da controllare,
-  non dicono cosa farà il prezzo. «Accumula» scatta solo se hai scritto un peso obiettivo nella tesi.`;
-// ---- pillars of the thesis (pillars.py): measurable reasons chosen from a list, checked every day
-const PIL_INFO = `<b>Pilastri della tesi.</b> Sono i motivi per cui possiedi il titolo, scelti da un elenco perché la dashboard possa controllarli da sola ogni giorno
-  (✓ vale, ✕ caduto, ? dato mancante). Puoi aggiungerne uno scritto a parole, che confermi tu ogni 3 mesi.<br><br>
-  Quando un pilastro cambia stato, il registro lo annota con la data. Sono <b>regole di disciplina, non verificate da backtest</b>: dicono se i motivi
-  per cui hai comprato valgono ancora, non cosa farà il prezzo.`;
+const ACT_INFO = `Per ogni posizione la dashboard propone uno di quattro livelli con regole esplicite, usando <b>solo l'analisi del titolo</b>,
+  come quando decidi se comprarlo: pagella, verdetto di mercato, stop automatico e novità degli ultimi giorni. Sotto vedi quali regole sono scattate e con quali numeri.<br><br>
+  <b>✕ Valuta la vendita</b> (ne basta una): stop automatico rotto; almeno 2 controlli della pagella caduti e almeno la metà di quelli valutabili
+  (servono almeno 3 controlli valutabili, altrimenti «dati insufficienti»); prodotto a leva tenuto oltre 30 giorni; verdetto di mercato «Evita».<br>
+  <b>! Attenzione</b> (le novità): controllo appena caduto, prezzo appena sceso sotto la media a 200 giorni, stime tagliate, più downgrade che upgrade,
+  trimestrale entro 5 giorni, prezzo a meno di 1 ATR dallo stop automatico.<br>
+  <b>✓ Accumula</b> (devono valere tutte): pagella buona (azioni: almeno 4 ✓ su 6 e nessun ✕; ETF ed ETC: tutti ✓), trend di fondo intatto (prezzo sopra la media 200 e media 50 sopra la 200),
+  verdetto «Entra ora» o «Entra su ritracciamento», nessuna trimestrale entro 5 giorni, nessun avviso, niente leva.<br>
+  <b>– Mantieni</b>: tutto il resto.<br><br>
+  Un controllo con <b>«?»</b> (dato mancante) <b>non conta mai come caduto</b> e non conta mai come vero: per «Valuta la vendita» la metà si calcola solo sui controlli valutabili.<br><br>
+  Sono <b>regole di disciplina, non verificate da un backtest</b>: servono a non dimenticare le cose da controllare, non dicono cosa farà il prezzo.
+  Ogni sera l'indicazione viene salvata nel diario delle posizioni per misurarla nel tempo.`;
+// ---- "Pagella del titolo" (pillars.py): the same automatic checks for every position, nothing chosen by me
+const PIL_INFO = `<b>Pagella del titolo.</b> Gli stessi controlli automatici per tutte le azioni (ricavi, stime, consenso, margine, valutazione, trend) e
+  per tutti gli ETF ed ETC (trend e diversificazione), calcolati ogni giorno con i dati pubblici: ✓ vale, ✕ caduto, ? dato mancante.<br><br>
+  Un <b>«?»</b> non conta mai come caduto e non conta mai come vero. Quando un controllo passa da ✓ a ✕ (o al contrario), il registro lo annota con la data.
+  Non è verificata da backtest: dice com'è messo il titolo, non cosa farà il prezzo.`;
+const STOP_INFO = `<b>Stop automatico.</b> Ogni giorno la dashboard calcola uno stop dal prezzo attuale con la stessa regola del piano di acquisto della sezione Decisione:
+  il livello del grafico più vicino a una distanza ragionevole (la media a 50 giorni o l'ultimo minimo, meno mezzo ATR), oppure, se nessuno va bene, un multiplo dell'ATR
+  (l'ATR è il movimento medio di un giorno).<br><br>Lo stop <b>si alza ma non scende mai</b>: si tiene il più alto mai raggiunto, come uno stop che segue il prezzo.
+  Parte dal primo giorno in cui la dashboard vede la posizione, quindi sta sotto il prezzo di quel giorno, <b>non sotto il tuo prezzo di acquisto</b>; se vendi e ricompri riparte da zero.<br><br>
+  Se il prezzo scende sotto lo stop scatta «Valuta la vendita» (regola S1); a meno di 1 ATR sopra lo stop scatta «Attenzione» (T6). Non è un ordine inserito su Fineco.`;
 const PIL_ICON = { ok: "✓", ko: "✕", na: "?" };
-const pilLog = e => e.note ? `<li><span class="muted">${dayIT(e.date)}</span> ${esc(e.note)}</li>`
-  : `<li><span class="muted">${dayIT(e.date)}</span> <span class="pil-st ${e.to}">${PIL_ICON[e.to]}</span> <b>${esc(e.name)}</b> ${e.to === "ok" ? (e.from ? "è tornato vero" : "confermato") : "è caduto"}
+const pilLog = e => `<li><span class="muted">${dayIT(e.date)}</span> <span class="pil-st ${e.to}">${PIL_ICON[e.to]}</span> <b>${esc(e.name)}</b> ${e.to === "ok" ? "è tornato vero" : "è caduto"}
     <span class="muted small">${esc(e.detail || "")}</span></li>`;
-function pillarsHTML(p, th) {
+function pagellaHTML(p) {
   const P = p.pillars;
   if (!P) return "";
-  const S = P.score, saved = !!th.updated;
-  const rev = th.pillarOpts?.ricavi;
-  return `<div class="d-sec"><h3>Pilastri della tesi ${info(PIL_INFO)}</h3>
-    ${P.draft ? `<p class="pil-draft small"><b>Bozza</b>: sono spuntati i pilastri veri oggi. Togli o aggiungi (al massimo 4), poi premi «Salva la tesi» qui sotto.</p>`
-      : `<p class="small">${S.n ? `<b>${S.ok} ✓</b> · <b>${S.ko} ✕</b>${S.na ? ` · ${S.na} non valutabili` : ""} su ${S.n} ${S.n === 1 ? "pilastro scelto" : "pilastri scelti"}` : "Nessun pilastro scelto."}</p>`}
-    <ul class="pil-list">${P.list.map(x => `<li><label><input type="checkbox" data-pil="${x.id}"${x.chosen ? " checked" : ""}>
+  const S = P.score;
+  return `<div class="d-sec"><h3>Pagella del titolo ${info(PIL_INFO)}</h3>
+    <p class="small"><b>${S.ok} ✓</b> · <b>${S.ko} ✕</b>${S.na ? ` · ${S.na} ?` : ""} su ${S.n} controlli</p>
+    <ul class="pil-list">${P.list.map(x => `<li><div class="pil-row">
       <span class="pil-st ${x.state}" title="${{ ok: "vale", ko: "caduto", na: "non valutabile" }[x.state]}">${PIL_ICON[x.state]}</span>
-      <span><b>${esc(x.name)}</b><br><span class="muted small">${esc(x.rule)}</span><br><span class="small">${x.state === "na" ? "non valutabile: " : ""}${esc(x.detail)}</span></span></label>
-      ${x.id === "ricavi" ? `<label class="pil-opt small">soglia per questo titolo <input type="number" step="any" min="0" max="100" data-th="revMin" value="${isNum(rev) ? rev : ""}" placeholder="10"> %</label>` : ""}</li>`).join("")}</ul>
-    <div class="th-form"><label class="th-txt"><span>Pilastro scritto a parole <span class="muted small">(facoltativo: lo confermi tu ogni 3 mesi)</span></span>
-      <textarea data-th="manual" rows="2" maxlength="300" placeholder="Per esempio: il nuovo prodotto X arriva entro il 2027">${esc(P.manual?.text || "")}</textarea></label></div>
-    ${P.manual ? `<p class="small"><span class="pil-st ${P.manual.state}">${PIL_ICON[P.manual.state]}</span> ${esc(P.manual.detail)}
-      ${saved ? ` <button class="btn" data-man="ok">Vale ancora</button> <button class="btn" data-man="ko">È caduto</button>` : ""}</p>` : ""}
+      <span><b>${esc(x.name)}</b><br><span class="muted small">${esc(x.rule)}</span><br><span class="small">${x.state === "na" ? "non valutabile: " : ""}${esc(x.detail)}</span></span></div></li>`).join("")}</ul>
     <h4 class="bt-h">Registro</h4>
-    ${P.log.length ? `<ul class="pil-log small">${P.log.map(pilLog).join("")}</ul>` : `<p class="muted small">Ancora vuoto: qui compaiono i pilastri che cambiano stato e le tue note.</p>`}
-    ${saved ? `<div class="toolbar"><input type="text" id="pilNote" maxlength="300" placeholder="Aggiungi una nota: un fatto che rafforza o indebolisce la tesi"><button class="btn" id="pilNoteSave">Aggiungi</button><span id="pilMsg" class="small"></span></div>` : ""}
+    ${P.log?.length ? `<ul class="pil-log small">${P.log.map(pilLog).join("")}</ul>` : `<p class="muted small">Ancora vuoto: qui compaiono, con la data, i controlli che cambiano stato.</p>`}
   </div>`;
 }
-// panel of one position: thesis to write or edit, proposed action and the full list of rules
+function marketHTML(p) {
+  const M = p.market || {}, S = p.stopAuto;
+  const v = M.verdict ? `<span class="act ${VERDICT_CLS[M.verdict] || "hold"}">${esc(M.label || M.verdict)}</span> ${M.why?.length ? `<span class="small">${esc(M.why[0])}</span>` : ""}`
+    : `<span class="muted">non calcolabile oggi</span>`;
+  const atrs = S && S.atr ? (p.price - S.stop) / S.atr : null;
+  return `<div class="d-sec"><h3>Mercato e stop</h3>
+    <p><b>Verdetto di mercato</b>: ${v}<br><span class="muted small">${esc(M.source || "")}${M.skipped?.length ? ` · regole saltate: ${M.skipped.map(esc).join(", ")}` : ""} · come se dovessi comprare oggi</span></p>
+    <p><b>Stop automatico</b> ${info(STOP_INFO)}: ${S && S.stop == null ? `<span class="muted">${esc(S.why || "non calcolabile")}</span>` : S ? `<b>${fPrice(S.stop)} ${esc(S.currency || p.currency)}</b>
+      <span class="small">· ${atrs !== null ? `${atrs > 0 ? "" : "rotto: "}${fNum(atrs, 1)} ATR dal prezzo` : ""} · dal ${dayIT(S.since)}${S.raised ? `, alzato ${S.raised} ${S.raised === 1 ? "volta" : "volte"}` : ""}</span>
+      <br><span class="muted small">${esc(S.how)}</span>` : `<span class="muted">non ancora calcolabile (servono i prezzi giornalieri del titolo)</span>`}</p></div>`;
+}
+// the fixed test of the levels in the positions diary (pos_diary.py): 3 months, at least 30 cases, 60% and 2 points
+const posDiaryLine = D => {
+  if (!D) return "";
+  const one = (name, x) => `«${name}»: ${x.verdict === "dati ancora insufficienti" ? `dati ancora insufficienti (${x.cases} ${x.cases === 1 ? "caso" : "casi"} su 30)`
+    : `${esc(x.verdict)} (${x.cases} casi, peggio delle altre posizioni nel ${fNum(x.worse, 0)}%, differenza mediana ${x.median > 0 ? "+" : ""}${fNum(x.median, 1)} punti)`}`;
+  return `<p class="muted small"><b>Verifica nel diario delle posizioni</b> (a 3 mesi, test fissato il 4 novembre 2026): ${one("Valuta la vendita", D.sell)} · ${one("Accumula", D.add)}.
+    ${D.days ? `Conteggio dal ${dayIT(D.since)}, ${D.days} ${D.days === 1 ? "seduta" : "sedute"} con le regole attuali.` : "Il primo giorno viene salvato stasera dopo la chiusura di Wall Street."}
+    Le posizioni vendute prima dei 3 mesi escono dal conto.</p>`;
+};
+// panel of one position: proposed level with its rules, market verdict and automatic stop, pagella
 function openPosition(isin) {
   const p = pf.data?.positions?.find(x => x.isin === isin);
   if (!p || !p.action) return;
-  const th = p.thesis || {}, A = p.action;
+  const A = p.action;
   state.detail = null; state.macro = null; state.panel = "position"; pf.openPos = isin;
   const icon = { on: "✅", off: "—", na: "·" };
-  const num = (k, label, hint) => `<label><span>${label}</span><input type="number" step="any" min="0" data-th="${k}" value="${isNum(th[k]) ? th[k] : ""}" placeholder="facoltativo"><span class="muted small">${hint}</span></label>`;
-  const txt = (k, label, ph) => `<label class="th-txt"><span>${label}</span><textarea data-th="${k}" rows="3" maxlength="2000" placeholder="${ph}">${esc(th[k] || "")}</textarea></label>`;
-  const groups = ["Rivedi la tesi", "Accumula"];
+  const groups = ["Valuta la vendita", "Attenzione", "Accumula"];
   drawer.classList.remove("full");
   drawer.innerHTML = `<div class="d-top"><div class="d-head"><div><div class="tt">${esc(p.ticker || p.symbol || p.name)}</div><div class="nm">${esc(p.name)} · ${fNum(p.weight, 1)}% del portafoglio</div></div>
       <div class="actions"><button class="icon-btn close-btn" id="dClose" aria-label="Chiudi">×</button></div></div></div>
     <div class="d-rest pos-d">
-      <div class="d-sec"><h3>Azione proposta ${info(ACT_INFO)}</h3><p>${actBadge(A)}</p>
-        ${A.reasons.length ? `<ul class="why">${A.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : `<p class="muted">${A.silenced ? "Motivi già rivisti da te (vedi sotto)." : "Nessuna regola scattata."}</p>`}
+      <div class="d-sec"><h3>Indicazione ${info(ACT_INFO)}</h3><p>${actBadge(A)}</p>
+        ${A.reasons.length ? `<ul class="why">${A.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : `<p class="muted">Nessuna regola scattata.</p>`}
+        <p class="act-todo"><b>Cosa fare</b>: ${esc(A.todo)}${A.until?.length ? `<br><b>Quando sparisce</b>: ${A.until.map(esc).join("; ")}.` : ""}</p>
         ${A.tax ? `<p class="small">${actTax(A)}<br><span class="muted">${TAX_NOTE}</span></p>` : ""}
-        ${A.silenced ? `<div class="rev-box"><b>Tesi rivista il ${dayIT(A.silenced.date)}</b>: «${esc(A.silenced.note)}»<br><span class="muted small">Motivi silenziati ancora per ${A.silenced.until} ${A.silenced.until === 1 ? "giorno" : "giorni"}, a meno che non ne scatti uno nuovo: ${A.silenced.rules.map(esc).join(" · ")}.</span></div>` : ""}
-        ${A.canReview ? `<div class="rev-box"><label><b>Ho rivisto la tesi</b> <span class="muted small">scrivi in una riga perché la tieni (o cosa hai deciso): i motivi «Rivedi» scattati restano silenziati per 30 giorni, a meno che non ne scatti uno nuovo.</span>
-          <input type="text" id="revNote" maxlength="300" placeholder="Per esempio: il calo dipende dal settore, i conti restano solidi"></label>
-          <div class="toolbar"><button class="btn" id="revSave">Ho rivisto la tesi</button><span id="revMsg" class="small"></span></div></div>` : ""}
         ${A.notes.length ? `<p class="muted small">${A.notes.map(esc).join("<br>")}</p>` : ""}</div>
-      ${pillarsHTML(p, th)}
-      <div class="d-sec"><h3>La mia tesi</h3>
-        <div class="th-form">${txt("why", "Perché la possiedo", "In una o due frasi")}${txt("expect", "Cosa mi aspetto", "Per esempio: crescita dei ricavi, nuovo prodotto, recupero dei margini…")}
-          ${txt("sell", "Cosa mi farebbe vendere", "Per esempio: se i ricavi rallentano, se perde il contratto X, se scende sotto…")}
-          <div class="th-nums">${num("stop", "Stop", `prezzo in ${esc(p.currency)} · ora ${fPrice(p.price)}`)}${num("target", "Target", `prezzo in ${esc(p.currency)}`)}${num("weight", "Peso obiettivo", `% del portafoglio · ora ${fNum(p.weight, 1)}%`)}</div></div>
-        <div class="toolbar" style="margin-top:10px"><button class="btn primary" id="thSave">Salva la tesi</button><span id="thMsg" class="small muted">${th.updated ? `ultima modifica ${dayIT(th.updated)}` : "non ancora scritta"}</span></div></div>
+      ${marketHTML(p)}
+      ${pagellaHTML(p)}
       <div class="d-sec"><h3>Tutte le regole</h3>
-        ${groups.map(g => `<h4 class="bt-h">${g}${g === "Accumula" ? " (devono valere tutte)" : ""}</h4><ul class="rule-list">${A.rules.filter(r => r.group === g).map(r =>
+        ${groups.map(g => `<h4 class="bt-h">${g}${g === "Accumula" ? " (devono valere tutte)" : " (ne basta una)"}</h4><ul class="rule-list">${A.rules.filter(r => r.group === g).map(r =>
           `<li class="${r.state}"><span class="ri">${icon[r.state]}</span><span><b>${r.id}</b> ${esc(r.text)}<span class="muted small"> ${r.state === "na" ? "non valutabile: " : ""}${esc(r.detail)}</span></span></li>`).join("")}</ul>`).join("")}
-        <p class="muted small">✅ scattata (per Accumula: soddisfatta) · — non scattata · “non valutabile” quando manca il dato. Regole di disciplina, non verificate da backtest.</p></div>
+        <p class="muted small">✅ scattata (per Accumula: soddisfatta) · — non scattata · “non valutabile” quando manca il dato (un dato mancante non fa mai scattare un avviso). Regole di disciplina, non verificate da backtest.</p>
+        ${posDiaryLine(pf.data.posDiary)}</div>
       ${p.ticker && state.bySym.has(p.ticker) ? `<button class="link-btn" data-mopen="${esc(p.ticker)}">Apri la scheda del titolo →</button>` : ""}
       <p class="disclaimer">Non è una consulenza finanziaria.</p></div>`;
   drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); scrim.hidden = false;
   $("#dClose").onclick = closeDetail;
-  if ($("#revSave")) $("#revSave").onclick = async () => {
-    const note = $("#revNote").value.trim();
-    if (note.length < 3) { $("#revMsg").innerHTML = `<span class="down">Scrivi una riga di motivazione.</span>`; return; }
-    try {
-      await pfPost("/api/thesis/review", { body: JSON.stringify({ isin, note }), headers: { "Content-Type": "application/json" } });
-      await loadPortfolio();
-      openPosition(isin);
-    } catch (e) { $("#revMsg").innerHTML = `<span class="down">Non salvato: ${esc(e.message)}</span>`; }
-  };
-  const logPost = async (payload, msg) => {
-    try {
-      await pfPost("/api/thesis/log", { body: JSON.stringify({ isin, ...payload }), headers: { "Content-Type": "application/json" } });
-      await loadPortfolio();
-      openPosition(isin);
-    } catch (e) { msg.innerHTML = `<span class="down">Non salvato: ${esc(e.message)}</span>`; }
-  };
-  drawer.querySelectorAll("[data-man]").forEach(b => b.onclick = () => logPost({ manual: b.dataset.man }, $("#thMsg")));
-  if ($("#pilNoteSave")) $("#pilNoteSave").onclick = () => {
-    const note = $("#pilNote").value.trim();
-    if (note.length < 3) { $("#pilMsg").innerHTML = `<span class="down">Scrivi almeno qualche parola.</span>`; return; }
-    logPost({ note }, $("#pilMsg"));
-  };
-  $("#thSave").onclick = async () => {
-    const body = { isin };
-    drawer.querySelectorAll("[data-th]").forEach(i => { const k = i.dataset.th; body[k] = i.tagName === "TEXTAREA" ? i.value : (i.value.trim() === "" ? null : parseFloat(i.value.replace(",", "."))); });
-    if (["stop", "target", "weight"].some(k => body[k] !== null && !(body[k] > 0)) || body.weight > 100) { $("#thMsg").innerHTML = `<span class="down">Stop, target e peso obiettivo devono essere numeri positivi (il peso al massimo 100).</span>`; return; }
-    if (p.pillars) body.pillars = [...drawer.querySelectorAll("[data-pil]:checked")].map(i => i.dataset.pil);
-    if (body.pillars?.length > 4) { $("#thMsg").innerHTML = `<span class="down">Scegli al massimo 4 pilastri dall'elenco.</span>`; return; }
-    if (body.revMin !== undefined && body.revMin !== null && !(body.revMin >= 0 && body.revMin <= 100)) { $("#thMsg").innerHTML = `<span class="down">La soglia dei ricavi deve essere tra 0 e 100.</span>`; return; }
-    try {
-      await pfPost("/api/thesis", { body: JSON.stringify(body), headers: { "Content-Type": "application/json" } });
-      await loadPortfolio();
-      openPosition(isin);
-      $("#thMsg").textContent = "✓ Tesi salvata";
-    } catch (e) { $("#thMsg").innerHTML = `<span class="down">Non salvata: ${esc(e.message)}</span>`; }
-  };
 }
 document.addEventListener("click", e => { const b = e.target.closest("[data-pos]"); if (b) { e.stopPropagation(); openPosition(b.dataset.pos); } }, true);
 // ---- history and performance (history.py): daily pictures in portafoglio/storico/, time-weighted return vs references
@@ -1304,7 +1285,7 @@ function renderTaxBox() {
   if (!el || el.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;   // typing: do not redraw
   el.innerHTML = `<summary><span class="small"><b>Zainetto fiscale</b> (facoltativo) · ${F.losses ? `minusvalenze disponibili ${fEur(F.losses, 0)}${F.expiry ? `, scadenza più vicina ${dayIT(F.expiry)}` : ""}` : "non indicato"}</span></summary>
     <p class="small">Lo «zainetto» sono le minusvalenze (perdite realizzate) che puoi ancora usare per pagare meno imposte sulle plusvalenze di azioni, ETC e derivati, entro 4 anni.
-      Lo trovi nel sito Fineco (area fiscale). Se lo indichi, la stima fiscale accanto a «Rivedi · target raggiunto» ne tiene conto per <b>azioni ed ETC</b>; per gli <b>ETF</b> no,
+      Lo trovi nel sito Fineco (area fiscale). Se lo indichi, la stima fiscale accanto a «Valuta la vendita» e «target raggiunto» ne tiene conto per <b>azioni ed ETC</b>; per gli <b>ETF</b> no,
       perché i loro guadagni sono redditi di capitale e non si compensano.</p>
     <div class="toolbar"><label class="small">Minusvalenze disponibili <input type="number" id="taxLosses" min="0" step="1" value="${F.losses ?? ""}" placeholder="es. 1200"> €</label>
       <label class="small">Scadenza più vicina <input type="date" id="taxExpiry" value="${F.expiry || ""}"></label>
@@ -1805,7 +1786,7 @@ const TA_WAIT_INFO = `Un ordine condizionato compra solo se il prezzo supera un 
   <b>margine di un quarto di ATR</b> (l'ATR è il movimento medio di un giorno): serve a non far scattare l'ordine per un superamento di pochi centesimi.<br><br>
   Lo stop è un ATR sotto il livello rotto: se il prezzo torna sotto, la rottura è fallita.`;
 const VERDICT_CLS = { "Entra ora": "acc", "Entra su ritracciamento": "wait", "Entra su rottura": "wait", "Attendi": "hold", "Evita": "red",
-  "Rivedi la tesi": "rev", "Accumula": "acc", "Mantieni": "hold" };
+  "Rivedi la tesi": "rev", "Valuta la vendita": "red", "Attenzione": "rev", "Accumula": "acc", "Mantieni": "hold" };
 const verdictBadge = v => `<span class="act big ${VERDICT_CLS[v.category] || "hold"}">${esc(v.label)}</span>`;
 
 // one operating plan computed by the server (entry, stop options, money); the stop can be switched here
@@ -1937,7 +1918,7 @@ function decPlan(D) {
   return `<div class="dec-verdict"><div>${verdictBadge(V)}</div>
       <ul class="why">${V.why.map(w => `<li>${esc(w)}</li>`).join("")}</ul>
       ${V.change ? `<p><b>Cosa deve cambiare:</b> ${esc(V.change)}.</p>` : ""}
-      ${V.owned ? `<p class="small">Lo possiedi: il verdetto è l'azione proposta dalle regole sulle posizioni. <button class="link-btn" data-pos="${esc(V.isin)}">Apri tesi e regole della posizione →</button></p>` : ""}</div>
+      ${V.owned ? `<p class="small">Lo possiedi: il verdetto è l'azione proposta dalle regole sulle posizioni. <button class="link-btn" data-pos="${esc(V.isin)}">Apri pagella e regole della posizione →</button></p>` : ""}</div>
     ${main}
     <h5>Regole del verdetto ${V.owned ? `<span class="muted">(per un nuovo acquisto; per le posizioni che hai valgono le regole della posizione)</span>` : `<span class="muted">(decide la prima non soddisfatta, in ordine)</span>`}</h5>
     <ul class="rule-list">${D.checks.map(c => `<li class="${c.ok === false ? "bad" : c.ok ? "on" : "na"}"><span class="ri">${icon[c.ok]}</span><span><b>${c.id}</b> ${esc(c.text)}<span class="muted small"> ${c.ok == null ? "non valutabile" : ""} ${esc(c.detail)}</span></span></li>`).join("")}</ul>

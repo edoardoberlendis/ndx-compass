@@ -98,22 +98,45 @@ ridosso del massimo"); gli avvisi di calendario dentro le card (ora una piccola 
   di caricamento del file, non ci sono liquidità né dividendi incassati, sotto i 3 mesi lo storico è troppo corto per
   trarre conclusioni. Lo storico parte dal 2 ottobre 2026; dal solo file attuale il passato non si può ricostruire
   (mancano date e prezzi dei singoli acquisti).
-- **Tesi e azioni sulle posizioni** (colonna "Azione" della tabella delle posizioni): per ogni posizione posso scrivere
-  una tesi breve (perché la possiedo, cosa mi aspetto, cosa mi farebbe vendere) con stop, target e peso obiettivo
-  facoltativi, salvata in `portafoglio/tesi.json`. La dashboard propone **Mantieni / Accumula / Rivedi la tesi** con
-  regole esplicite (`actions.py`); accanto compaiono i motivi con i numeri. **Rivedi la tesi**: V1 stop rotto, V2 target
-  raggiunto (etichetta "Rivedi · target raggiunto", valuta una presa di profitto), V3 prezzo sotto la media 200, V4 stime
-  tagliate di oltre il 3% in 30 giorni, V5 più downgrade che upgrade, V6 perde oltre il 25% dal prezzo di carico ("la
-  tesi è ancora valida? Decidi in base alle prospettive, non al prezzo pagato"), V7 prodotto a leva nello storico da più
-  di 30 giorni, V8 tesi più vecchia di 6 mesi. **Accumula** solo se: A1 peso sotto l'80% del mio peso obiettivo, A2
-  nessuna regola Rivedi scattata, A4 non è un prodotto a leva, A5 nessuna trimestrale entro 5 giorni (altrimenti
-  Mantieni con la nota "accumula dopo la trimestrale del …"). Pulsante **Ho rivisto la tesi**: una riga di motivazione,
-  e i motivi Rivedi scattati restano silenziati per 30 giorni, a meno che non ne scatti uno nuovo. Accanto a "Rivedi ·
-  target raggiunto" c'è l'**effetto fiscale stimato** (plusvalenza o minusvalenza e imposta indicativa al 26%): per
+- **Indicazioni sulle posizioni** (colonna "Azione" della tabella delle posizioni, Fase 26, regole approvate il 4 novembre
+  2026): **niente tesi personale**. Le indicazioni vengono solo dall'analisi del titolo, come quando decido se comprare
+  (`actions.py`); accanto compaiono i motivi con i numeri, **cosa fare** e **quando sparisce**. Il pannello della posizione
+  mostra quattro parti:
+  - **Verdetto di mercato**, "come se dovessi comprare oggi": per le azioni del Nasdaq-100 la sezione Decisione; per le altre
+    azioni le stesse regole sui prezzi del titolo (valutazione solo contro la sua storia, `pillars.extra_valuation`); per gli
+    ETF/ETC dell'elenco «Ha senso comprare?» solo mercato; per i fondi fuori elenco le stesse regole sui prezzi del fondo, senza
+    E4 (patrimonio) e A2 (costo), che lo dice.
+  - **Pagella del titolo** (`pillars.py`), uguale per tutti: per le azioni ricavi (+10% sull'ultimo bilancio annuale), stime (non
+    tagliate oltre il 3% in 90 giorni), consenso (almeno «Acquisto»), margine operativo (al massimo 1 punto sotto l'anno prima),
+    valutazione (non «Cara»), trend (sopra la media 200); per ETF ed ETC trend e diversificazione (correlazione settimanale con il
+    resto del portafoglio sotto 0,60). Ogni controllo è ✓, ✕ o **«?»** (dato mancante, che non conta mai come caduto). I cambi
+    ✓↔✕ vanno con la data in `portafoglio/pagella.json`, scritti solo con le quotazioni di oggi (mai il prezzo del file Fineco).
+  - **Stop automatico** (`stop_auto.py`): la stessa regola del piano di acquisto (`decision.stops`: livello del grafico, media 50
+    o ultimo minimo meno mezzo ATR, altrimenti 2 ATR), calcolata ogni giorno dall'ultimo prezzo della stessa serie dei livelli e
+    **mai abbassata**; riparte se la posizione viene venduta. Se la regola darebbe uno stop sotto zero (titolo troppo volatile
+    rispetto al prezzo) la pagina scrive "non calcolabile" con il motivo. Salvato in `portafoglio/stop_auto.json`.
+  - **Le regole**, dal livello più grave:
+    - **Valuta la vendita**: S1 prezzo sotto lo stop automatico; S2 almeno 2 controlli caduti e almeno la metà di quelli
+      valutabili, solo con almeno 3 controlli valutabili (altrimenti "dati insufficienti" e la pagella non porta alla vendita);
+      S3 prodotto a leva tenuto da più di 30 giorni; S4 verdetto di mercato «Evita».
+    - **Attenzione**: T1 controllo caduto nelle ultime 10 sedute; T2 prezzo sceso sotto la media 200 nelle ultime 10 sedute;
+      T3 stime tagliate di oltre il 3% in 30 giorni; T4 più downgrade che upgrade; T5 trimestrale entro 5 giorni; T6 prezzo a
+      meno di 1 ATR sopra lo stop automatico.
+    - **Accumula** solo se tutte: B1 azioni almeno 4 ✓ su 6 e nessun ✕, fondi tutti ✓; B2 trend di fondo intatto (prezzo sopra
+      la media 200 e media 50 sopra la media 200); B3 verdetto «Entra ora» o «Entra su ritracciamento»; B4 nessuna trimestrale
+      entro 5 giorni; B5 nessun avviso; B6 non a leva. **Mantieni**: tutto il resto.
+    - Tolte (numeri non riusati): le regole V e A con la tesi (Fase 26), R1, R2 e A3 sui limiti di peso (Fase 21). I file della
+      vecchia tesi (`portafoglio/tesi.json`) restano dove sono, ignorati.
+  Accanto a "Valuta la vendita" c'è l'**effetto fiscale stimato** (plusvalenza o minusvalenza e imposta indicativa al 26%): per
   azioni ed ETC/ETN tiene conto dello **zainetto fiscale** indicato in Posizioni (sezione chiusa sotto la tabella,
-  `portafoglio/fiscale.json`); per gli ETF UCITS no, perché i guadagni sono redditi di capitale. Senza zainetto una nota
-  avverte che l'imposta reale può essere più bassa. Stima indicativa, non consulenza fiscale. Regole di disciplina,
-  **non verificate da un backtest**. (Tolte nella Fase 21: R1, R2 e A3 sui limiti di peso, e con loro "Riduci".)
+  `portafoglio/fiscale.json`); per gli ETF UCITS no, perché i guadagni sono redditi di capitale. Stima indicativa, non consulenza
+  fiscale. Regole di disciplina, **non verificate da un backtest**: le verifica il diario delle posizioni.
+- **Diario delle posizioni** (`pos_diary.py`, Fase 26): ogni sera, dopo la chiusura di Wall Street, il livello di ogni posizione,
+  le regole scattate, la pagella, il verdetto di mercato e il prezzo in euro in `portafoglio/diario_posizioni/` (un file per
+  seduta, mai modificato, con la versione delle regole: il test conta solo i giorni salvati con le regole in vigore).
+  Test fissato il 4 novembre 2026, prima di vedere i risultati: a 3 mesi «Valuta la vendita» funziona se le posizioni segnalate
+  fanno peggio delle altre posizioni dello stesso giorno in almeno il 60% dei casi, con una differenza mediana di almeno 2 punti;
+  «Accumula» al contrario; sotto i 30 casi "dati ancora insufficienti". Le posizioni vendute prima dei 3 mesi escono dal conto.
 - **Portafoglio → Posizioni** (in quest'ordine: caricamento del file su una riga con la data del file attuale,
   riepilogo con valore, guadagno/perdita, effetto cambio e variazione di oggi, tabella delle posizioni, zainetto
   fiscale in una sezione chiusa): le mie posizioni reali, dall'export Excel di Fineco ("Portafoglio sintesi") messo nella cartella
@@ -340,7 +363,7 @@ lunedì al venerdì, ora locale:
 
 - **08:30** riepilogo del mattino (`morning_job.py`, Fase 23): se c'è qualcosa di rilevante compare una finestra con gli
   eventi macro di oggi (orario italiano), le trimestrali dei miei titoli (preferiti e portafoglio) nei prossimi 5 giorni,
-  il numero di posizioni in "Rivedi la tesi" e le sedute mancanti nel diario; pulsanti "Chiudi" e "Apri la pagina Oggi"
+  il numero di posizioni in "Valuta la vendita" e le sedute mancanti nel diario; pulsanti "Chiudi" e "Apri la pagina Oggi"
   (apre la dashboard su Oggi, avviando l'app se è chiusa). Senza niente di rilevante, nessuna finestra. È una finestra e
   non una notifica perché su macOS il clic su una notifica creata da uno script apre l'Editor di Script, non il browser;
   si chiude da sola dopo 30 minuti. Il report del mattino non viene più generato. Prova a mano:
@@ -502,7 +525,10 @@ consecutivi, sovrapposizione, regole «si sovrappone / diversifica / neutro»).
 |---|---|
 | `server.py` | Server: scarica i dati e li serve alla pagina web |
 | `signals.py` | Report tecnico della sera (archivio in `reports/`, generato dal job serale) |
-| `actions.py` | Tesi delle posizioni, azione proposta (Mantieni / Accumula / Rivedi la tesi) con le sue regole, stima fiscale e zainetto |
+| `actions.py` | Livello proposto per ogni posizione (Valuta la vendita / Attenzione / Accumula / Mantieni) con le regole S, T, B, stima fiscale e zainetto |
+| `pillars.py` | Pagella del titolo controllata ogni giorno, registro dei cambi, dati delle azioni e dei fondi fuori dagli elenchi |
+| `stop_auto.py` | Stop automatico di ogni posizione, mai abbassato |
+| `pos_diary.py` | Diario serale dei livelli delle posizioni e test fissato a 3 mesi |
 | `analysts.py` | Dati degli analisti e valutazione (scaricati una volta al giorno) |
 | `score.py` | Segnale finale (analisti + valutazione + notizie) e Trend a parte |
 | `backtest.py` | Backtest del Trend e, con `--patterns`, test dei pattern tecnici (a mano) |

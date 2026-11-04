@@ -105,6 +105,21 @@ def sma200():
     return {t: float(c.iloc[-200:].mean()) for t, c in closes.items() if len(c) >= 200}
 
 
+def below200_sessions():
+    """{ticker: how many of the last closes in a row are below their 200-day average} (0 = the last close is above),
+    for the V9 rule of actions.py ("just fell below the 200-day average")."""
+    with _lock:
+        closes = dict(_hist["closes"])
+    out = {}
+    for t, c in closes.items():
+        c = c.dropna()
+        if len(c) < 200:
+            continue
+        below = (c < c.rolling(200).mean()).iloc[199:][::-1]
+        out[t] = int(below.cumprod().sum())
+    return out
+
+
 # ---------------------------------------------------------------- the numbers
 
 def _eur(close, currency, fx):

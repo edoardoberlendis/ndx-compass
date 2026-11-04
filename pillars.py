@@ -1,10 +1,9 @@
-"""Pillars of the thesis (phase 26, step 1): 2-4 measurable reasons per position, checked automatically every day.
+"""Pagella del titolo (phase 26): the same automatic checks for every position, nothing written or chosen by me
+(the thesis was removed on 4 November 2026: portafoglio/tesi.json is no longer read, never deleted).
 
-The user picks the pillars from a list (only measurable ones, so the dashboard can check them) plus at most one
-written in words, which they confirm by hand. Thresholds approved by the user on 4 November 2026 (change them only
-on request):
+Checks and thresholds approved by the user on 4 November 2026 (change them only on request):
   ricavi       revenue of the last annual report up at least 10% on the year before (12 months each: Yahoo gives
-               only 5 quarters, not the 8 needed for "last 12 months vs the 12 before"); per-position threshold allowed
+               only 5 quarters, not the 8 needed for "last 12 months vs the 12 before")
   stime        next year's EPS estimate not cut more than 3% in 90 days
   consenso     analysts' consensus at least "Acquisto" (Yahoo recommendationKey buy or strong_buy)
   margine      operating margin of the last annual report stable or rising: at most 1 point below the year before
@@ -12,10 +11,12 @@ on request):
   trend        price above the 200-day average
   diversifica  (ETF and ETC) weekly correlation in EUR over 2 years with the rest of the portfolio below 0.60,
                the threshold already used in the ETF tab (etf.CORR_LOW)
+A check that cannot be computed is "?": it never counts as fallen (actions.py).
 
-Stocks outside the Nasdaq-100 have no analyst data in analysts.py: this module downloads it once a day for them
-(same fetch, plus the price ratios from Yahoo) into portafoglio/dati_titoli.json, because the list of tickers says
-what I own. A pillar changing state (true <-> false) is written with its date in the thesis' log (portafoglio/tesi.json).
+Every switch true <-> false is written with its date in portafoglio/pagella.json (the log). Positions outside the
+Nasdaq-100 and outside the ETF list get their data once a day in portafoglio/dati_titoli.json (the list of tickers
+says what I own): analyst data and price ratios for the stocks, daily prices for all of them (decision rules and
+automatic stop, server.position_market).
 """
 import json
 import logging
@@ -31,12 +32,12 @@ import portfolio
 log = logging.getLogger("pillars")
 
 FILE = os.path.join(portfolio.PORTFOLIO_DIR, "dati_titoli.json")
+LOG = os.path.join(portfolio.PORTFOLIO_DIR, "pagella.json")      # {isin: {"last": {id: {state, since, initial}}, "log": [...]}}
 REV_MIN = 10.0          # ricavi: growth of the last annual revenue, percent
 EPS_CUT_90 = -3.0       # stime: next year's EPS estimate change in 90 days, percent
 MARGIN_DROP = 1.0       # margine: at most 1 percentage point lower than the year before = "stable"
 CORR_MAX = 0.60         # diversifica: same threshold as etf.CORR_LOW
 MIN_WEEKS = 30          # diversifica: at least 30 common weeks, as in the ETF tab
-MANUAL_DAYS = 92        # the pillar written in words is confirmed by hand every 3 months
 RETRY_MIN = 15
 BUY_KEYS = ("buy", "strong_buy")
 REC_IT = {"strong_buy": "Forte acquisto", "buy": "Acquisto", "hold": "Mantenere", "underperform": "Sottoperformance", "sell": "Vendita"}
@@ -44,7 +45,7 @@ MONTHS = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", 
 
 # id, short name, the rule as shown in the panel
 STOCK = [
-    ("ricavi", "Ricavi in crescita", "Ricavi dell'ultimo bilancio annuale in crescita di almeno il {rev}% sull'anno prima"),
+    ("ricavi", "Ricavi in crescita", "Ricavi dell'ultimo bilancio annuale in crescita di almeno il 10% sull'anno prima"),
     ("stime", "Stime di utile non tagliate", "Stima di utile del prossimo anno non tagliata più del 3% in 90 giorni"),
     ("consenso", "Consenso degli analisti", "Consenso degli analisti almeno «Acquisto»"),
     ("margine", "Margine operativo stabile o in crescita", "Margine operativo dell'ultimo bilancio annuale non sceso più di 1 punto rispetto all'anno prima"),
@@ -127,30 +128,14 @@ def diversification(corr, weeks):
     return ("ok" if corr < CORR_MAX else "ko"), f"correlazione {it(corr, 2)} su {weeks} settimane (soglia 0,60)"
 
 
-def manual(m, today=None):
-    """The pillar written in words: {"text", "state": ok|ko, "date"} confirmed by hand every 3 months."""
-    if not m or not m.get("text"):
-        return None
-    today = today or date.today()
-    if not m.get("date"):
-        return "na", "da confermare: premi «Vale ancora» o «È caduto»"
-    days = (today - date.fromisoformat(m["date"])).days
-    if m.get("state") == "ko":
-        return "ko", f"segnato come caduto il {date.fromisoformat(m['date']).strftime('%d/%m/%Y')}"
-    if days > MANUAL_DAYS:
-        return "na", f"confermato l'ultima volta {days} giorni fa: va riconfermato ogni 3 mesi"
-    return "ok", f"confermato il {date.fromisoformat(m['date']).strftime('%d/%m/%Y')}"
-
-
 # ---------------------------------------------------------------- all the pillars of a position
 
-def evaluate(p, th, d):
-    """Every pillar of the position's list, with its state today and whether I chose it.
-    p: position; th: its thesis (or {}); d: {"years", "epsRev90", "rec", "valLabel", "valWhy", "sma200", "corr", "weeks"}.
-    Returns {"list": [{"id", "name", "rule", "state", "detail", "chosen"}], "draft": bool, "manual": {...} | None}."""
-    rev_min = (th.get("pillarOpts") or {}).get("ricavi") or REV_MIN
+def evaluate(p, d):
+    """Every check of the position's list with its state today.
+    d: {"years", "epsRev90", "rec", "valLabel", "valWhy", "sma200", "corr", "weeks"}.
+    Returns {"list": [{"id", "name", "rule", "state", "detail"}], "score": {"n", "ok", "ko", "na"}}."""
     calc = {
-        "ricavi": lambda: revenue_growth(d.get("years"), rev_min),
+        "ricavi": lambda: revenue_growth(d.get("years")),
         "stime": lambda: estimates(d.get("epsRev90")),
         "consenso": lambda: consensus(d.get("rec")),
         "margine": lambda: operating_margin(d.get("years")),
@@ -158,40 +143,57 @@ def evaluate(p, th, d):
         "trend": lambda: trend(p.get("price"), d.get("sma200")),
         "diversifica": lambda: diversification(d.get("corr"), d.get("weeks") or 0),
     }
-    chosen = th.get("pillars")
-    draft = chosen is None                     # no choice saved yet: propose the pillars that hold today
     out = []
     for pid, name, rule in catalog(p.get("kind")):
         state, detail = calc[pid]()
-        out.append({"id": pid, "name": name, "rule": rule.format(rev=it(rev_min, 0)), "state": state, "detail": detail,
-                    "chosen": (state == "ok") if draft else pid in chosen})
-    m = th.get("manual") or {}
-    ms = manual(m)
-    return {"list": out, "draft": draft, "revMin": rev_min,
-            "manual": {"text": m["text"], "state": ms[0], "detail": ms[1]} if ms else None}
-
-
-def score(ev):
-    """Counts of the chosen pillars (the manual one included): {"n", "ok", "ko", "na"}."""
-    xs = [x["state"] for x in ev["list"] if x["chosen"]] + ([ev["manual"]["state"]] if ev.get("manual") else [])
-    return {"n": len(xs), "ok": xs.count("ok"), "ko": xs.count("ko"), "na": xs.count("na")}
+        out.append({"id": pid, "name": name, "rule": rule, "state": state, "detail": detail})
+    st = [x["state"] for x in out]
+    return {"list": out, "score": {"n": len(st), "ok": st.count("ok"), "ko": st.count("ko"), "na": st.count("na")}}
 
 
 def changes(ev, last, today=None):
-    """Log entries for the chosen pillars that turned true <-> false since the last check, and the new "last" states.
-    "Not computable" does not change anything (a missing figure is not news)."""
+    """Log entries for the checks that turned true <-> false since the last check, and the new "last" states.
+    "Not computable" does not change anything (a missing figure is not news). The first check only records the
+    starting state, marked "initial" (it is not a fall: rule T1 of actions.py ignores it)."""
     today = (today or date.today()).isoformat()
     last = dict(last or {})
     entries = []
     for x in ev["list"]:
-        if not x["chosen"] or x["state"] == "na":
+        if x["state"] == "na":
             continue
         prev = (last.get(x["id"]) or {}).get("state")
         if prev != x["state"]:
-            if prev:                                               # the first check only records the starting state
+            if prev:
                 entries.append({"date": today, "pillar": x["id"], "name": x["name"], "from": prev, "to": x["state"], "detail": x["detail"]})
-            last[x["id"]] = {"state": x["state"], "since": today}
+            last[x["id"]] = {"state": x["state"], "since": today, "initial": not prev}
     return entries, last
+
+
+def load_log():
+    try:
+        with open(LOG) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def record(updates):
+    """{isin: (entries, last)}: append the changes to the log and keep the new states. Writes only on changes."""
+    all_ = load_log()
+    dirty = False
+    for isin, (entries, last) in updates.items():
+        cur = all_.setdefault(isin, {"last": {}, "log": []})
+        if not entries and cur.get("last") == last:
+            continue
+        cur["log"] = (cur.get("log") or []) + entries
+        cur["last"] = last
+        dirty = True
+    if dirty:
+        os.makedirs(os.path.dirname(LOG), exist_ok=True)
+        with open(LOG + ".tmp", "w") as f:
+            json.dump(all_, f, indent=1, ensure_ascii=False)
+        os.replace(LOG + ".tmp", LOG)
 
 
 # ---------------------------------------------------------------- data of the stocks outside the Nasdaq-100 (daily)
@@ -216,31 +218,63 @@ def read():
         return {"date": None, "data": {}}
 
 
-def _fetch(tickers):
+COMPANY_KEYS = ("revenueGrowth", "earningsGrowth", "profitMargins", "freeCashflow", "totalRevenue", "totalDebt", "totalCash",
+                "earningsTimestamp", "earningsTimestampStart", "targetMeanPrice", "numberOfAnalystOpinions")
+STOCK_YEARS, FUND_YEARS = "2y", "5y"       # daily prices: 200-day average and 52 weeks; 5 years for "arrivati tardi"
+
+
+def _daily(df):
+    """Daily OHLCV as compact lists (JSON), or None."""
+    if df is None or df.empty or "Close" not in df:
+        return None
+    df = df.dropna(subset=["Close"])
+    idx = df.index.tz_localize(None) if df.index.tz is not None else df.index
+    col = lambda k: [None if v != v else round(float(v), 6) for v in df[k]] if k in df else None
+    return {"d": [str(x.date()) for x in idx], "o": col("Open"), "h": col("High"), "l": col("Low"), "c": col("Close"), "v": col("Volume")}
+
+
+def frame(x):
+    """The daily prices saved by _daily, back as a DataFrame (None if missing)."""
+    d = (x or {}).get("daily")
+    if not d or not d.get("c"):
+        return None
+    df = pd.DataFrame({"Open": d["o"], "High": d["h"], "Low": d["l"], "Close": d["c"], "Volume": d["v"]}, index=pd.to_datetime(d["d"]))
+    return df.astype(float)
+
+
+def _fetch(stocks, funds):
     import analysts
     import yfinance as yf
     from concurrent.futures import ThreadPoolExecutor
+
+    from server import download
     t0 = time.time()
     with ThreadPoolExecutor(analysts.THREADS) as ex:
-        data = dict(ex.map(analysts.fetch_one, tickers))
-    analysts.add_year_end_prices(data)
+        data = dict(ex.map(analysts.fetch_one, stocks)) if stocks else {}
+    if stocks:
+        analysts.add_year_end_prices(data)
     out = {}
-    for t in tickers:
+    for t in stocks:
         try:
             info = yf.Ticker(t).info or {}
         except Exception:
             info = {}
         row = {k: next((info.get(s) for s in src if info.get(s) is not None), None) for k, src in INFO_KEYS.items()}
-        out[t] = {"a": data.get(t) or {}, "row": row}
-    log.info("pillars: data of %d stocks outside the Nasdaq-100 in %.1fs", len(out), time.time() - t0)
+        out[t] = {"a": data.get(t) or {}, "row": row, "info": {k: info.get(k) for k in COMPANY_KEYS}}
+    for tickers, period in ((stocks, STOCK_YEARS), (funds, FUND_YEARS)):
+        if tickers:
+            px = download(list(tickers), period=period, interval="1d")
+            for t in tickers:
+                out.setdefault(t, {})["daily"] = _daily(px.get(t))
+    log.info("pillars: data of %d stocks and %d funds outside the lists in %.1fs", len(stocks), len(funds), time.time() - t0)
     return out
 
 
-def _load(tickers):
+def _load(stocks, funds):
     try:
-        data = _fetch(tickers)
-        ok = sum(1 for x in data.values() if x["a"].get("years") or x["row"].get("rec"))
-        if tickers and not ok:
+        data = _fetch(stocks, funds)
+        ok = sum(1 for x in data.values() if (x.get("a") or {}).get("years") or (x.get("row") or {}).get("rec") or x.get("daily"))
+        if data and not ok:
             raise RuntimeError("Yahoo non ha dato dati")
         os.makedirs(os.path.dirname(FILE), exist_ok=True)
         with open(FILE + ".tmp", "w") as f:
@@ -254,19 +288,22 @@ def _load(tickers):
         _state["loading"] = False
 
 
-def extra(tickers):
-    """{ticker: {"a": analyst data, "row": price ratios}} for stocks outside the Nasdaq-100. Returns what is saved
-    (also yesterday's) at once and starts the daily download in the background when needed."""
+def extra(stocks, funds=()):
+    """{ticker: {"a", "row", "info", "daily"}} for stocks outside the Nasdaq-100 and {ticker: {"daily"}} for funds
+    outside the ETF list. Returns what is saved (also yesterday's) at once and starts the daily download in the
+    background when needed."""
     c = read()
-    tickers = sorted(set(tickers))
-    if not tickers:
+    stocks, funds = sorted(set(stocks)), sorted(set(funds))
+    if not stocks and not funds:
         return {}
-    stale = c.get("date") != _today() or any(t not in c["data"] for t in tickers)
+    have = c["data"]
+    stale = (c.get("date") != _today() or any(t not in have or "daily" not in have[t] for t in stocks + funds)
+             or any("info" not in have[t] for t in stocks if t in have))
     with _lock:
         if stale and not _state["loading"] and time.time() - _state["failedAt"] > RETRY_MIN * 60:
             _state["loading"] = True
-            threading.Thread(target=_load, args=(tickers,), daemon=True).start()
-    return c["data"]
+            threading.Thread(target=_load, args=(stocks, funds), daemon=True).start()
+    return have
 
 
 def extra_valuation(x):
