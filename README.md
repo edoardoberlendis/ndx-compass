@@ -19,16 +19,19 @@ Oppure dal Terminale:
 
 ## Cosa contiene
 
-La dashboard ha **tre schede** (Fase 21); ognuna raggruppa le pagine descritte sotto. All'avvio si apre **Portafoglio**.
+La dashboard ha **cinque schede** (Fase 21, Opportunità aggiunta nella Fase O1); ognuna raggruppa le pagine descritte sotto.
+All'avvio (senza un link con `#`) si apre **Opportunità**; prima della Fase O1 si apriva Portafoglio.
 
 | Scheda | Domanda | Sotto-schede |
 |---|---|---|
+| **Opportunità** | Quali titoli meritano di essere approfonditi? | Una sola pagina con due classifiche: Trading (breve periodo) e Investimento (medio-lungo); vedi sotto |
 | **Mercato** | Cosa sta succedendo? | Oggi (con eventi macro USA e trimestrali) · Settori (con la mappa di rotazione) |
 | **Portafoglio** | Cosa ho e come sta andando? | Posizioni · Performance · Concentrazione · Rischio |
 | **Azioni** | Quali azioni del Nasdaq-100 potrei comprare? | Screener · In osservazione (i preferiti ★) · Diario dei segnali (compare quando ha almeno 3 mesi di dati); da qui si apre la scheda del titolo con la sezione Decisione |
 | **ETF** | Quali ETF potrei comprare? | Una sola pagina (Fase 24): vedi sotto |
 
-I vecchi link portano alla pagina più vicina: `#overview` → Oggi, `#sectors` e `#ideas` (il vecchio Report) → Settori,
+Cambiare a mano solo la parte dopo `#` (o usare il tasto Indietro) apre la pagina corrispondente anche senza ricaricare
+(Fase O2). I vecchi link portano alla pagina più vicina: `#overview` → Oggi, `#sectors` e `#ideas` (il vecchio Report) → Settori,
 `#portfolio` e `#rules` → Posizioni, `#screener` e `#trade` (i vecchi Pattern tecnici) → Screener, `#watch` → In
 osservazione, `#diary` → Diario se visibile, altrimenti Screener. `#mercato`, `#portafoglio` e `#azioni` aprono la
 scheda sull'ultima pagina usata; `#ricerca` (la vecchia scheda) porta allo Screener, `#etf` alla scheda ETF.
@@ -45,6 +48,79 @@ pesi (titolo, ETF, tema, settore, paese, leva) con il riquadro "Rispetto delle r
 azioni (quindi l'azione "Riduci") e la regola D3 del verdetto; il verdetto "Entra su rottura" (diventa "Attendi: a
 ridosso del massimo"); gli avvisi di calendario dentro le card (ora una piccola ⚠ in alto, solo negli ultimi 30 giorni).
 
+- **Opportunità** (Fase O1, `opportunity_scanner.py`, `/api/opportunities`): due classifiche **esplorative** dei titoli del
+  Nasdaq-100 da approfondire, fino a 10 ciascuna. **Non sono segnali di acquisto**: le condizioni non sono verificate da un
+  backtest, non ci sono probabilità né rendimenti attesi, e lo stato è solo «Da approfondire» o «Dati insufficienti».
+  - **Trading · breve periodo (3–30 sedute)**, solo prezzi su **sedute chiuse**: T1 meglio di QQQ a 21 sedute; T2 meglio di QQQ
+    a 63 sedute; T3 chiusura sopra le medie 20 e 50; T4 media 20 più alta di 5 sedute prima; T5 volume medio di 20 sedute almeno
+    pari a quello di 60 (solo se almeno 57 delle ultime 60 sedute hanno volume). Servono almeno 4 condizioni su 5.
+    Avvisi: tirato (soglie della regola D5), sotto la media 200, ATR oltre il 4% del prezzo, trimestrale entro 5 giorni, pattern
+    che **non ha superato** il test della Fase 11 (mostrato solo come avviso, mai come motivo).
+  - **Investimento · medio-lungo periodo (3–24 mesi)**: le sei voci della Pagella (`pillars.py`, stesse funzioni e soglie
+    approvate il 4 novembre 2026) — I1 ricavi +10%, I2 margine operativo stabile, I3 stime non tagliate oltre il 3% in 90 giorni,
+    I4 consenso almeno «Acquisto», I5 valutazione non «Cara» — e I6 trend di fondo della regola B2 (prezzo sopra la media 200 e
+    media 50 sopra la media 200, su sedute chiuse). Servono almeno 5 condizioni su 6. Avvisi: più downgrade che upgrade
+    (come T4), stime tagliate oltre il 3% in 30 giorni (come T3), trimestrale entro 5 giorni, notizie dal tono negativo
+    (punteggio ≤ −20), prezzo sotto la media 50. Accanto: rendimento contro la mediana del settore a 6 mesi e le note della
+    valutazione.
+  - **Ordine**: più condizioni soddisfatte, poi meno avvisi, poi (Trading) la differenza con QQQ a 1 mese più alta o
+    (Investimento) la valutazione più bassa rispetto a settore e storia. Un dato mancante conta **sempre** come condizione non
+    soddisfatta, mai come neutra, e il titolo diventa «Dati insufficienti».
+  - Per ogni titolo: settore, prezzo con l'ora dell'ultimo dato, rendimenti dell'orizzonte (1 settimana e 1 mese, oppure 6 mesi
+    e 1 anno), trend, motivo principale, avvisi e stato; «Dettagli» mostra ogni condizione con valore e soglia, i valori
+    misurati e i dati mancanti; un clic sulla riga apre la scheda del titolo (il verdetto della sezione Decisione non cambia).
+  - **Dati**: solo quelli già in memoria (storico giornaliero, dati societari, analisti, valutazioni, notizie): nessun
+    download in più, nessun job programmato, calcolo in circa 0,1 secondi e rifatto al massimo ogni 10 minuti. I prezzi dei
+    criteri sono sedute chiuse fino a una data (`as_of`): i test verificano che i giorni dopo non vengano mai letti. Analisti,
+    valutazione e notizie sono i dati di oggi (non hanno storico). Nessun dato del portafoglio.
+  - **Forza relativa e andamento (Fase O2)**: la riga del **mercato** (QQQ a 1 e 3 mesi, trend rispetto alle medie 50 e 200,
+    quota di titoli sopra la media 200) e, per ogni titolo, il rendimento **assoluto** (Trading: 1 e 3 mesi) separato da quello
+    **rispetto a QQQ**. Chi batte QQQ mentre il suo prezzo scende (o ha trend ribassista) porta la scritta «⚠ più forte di
+    QQQ ma in calo»: è un'informazione, **non cambia l'ordine** e non è una nuova soglia.
+  - **Copertura dei dati (Fase O2)**: per ogni condizione, quanti titoli la possono valutare. Se una condizione è valutabile
+    per meno dell'80% dei titoli la classifica è dichiarata **«incompleta»** con un avviso in vista e l'elenco dei titoli
+    senza il dato in «Come è fatta la classifica».
+  - **Parametri sperimentali**: ATR oltre il 4%, minimo 4 condizioni su 5 (Trading), 5 su 6 (Investimento) e la copertura
+    dell'80% sono proposte della Fase O1 **non validate**: restano per compatibilità, sono segnate «sperimentale» nella pagina
+    e salvate ogni giorno nel diario, e non si cambiano senza una valutazione specifica. Versione del modello: `MODEL_VERSION`
+    in `opportunity_scanner.py` (O2.1), da cambiare a ogni modifica di condizioni, soglie o ordine.
+- **Diario delle opportunità** (Fase O2, `opportunity_diary.py`): ogni seduta chiusa salva **entrambe le classifiche per tutti
+  i titoli** (in classifica e no, non solo i primi 10) e poi misura cosa è successo ai prezzi.
+  - **Dove**: `data/opportunita.sqlite3` (SQLite), solo dati pubblici di mercato, separato da `portafoglio/` e dagli altri
+    diari, fuori da Git (`data/` è in `.gitignore`; circa 0,85 MB per seduta, circa 200 MB l'anno).
+  - **Cosa**: per ogni seduta (`runs`) data e ora del calcolo con fuso orario, seduta dei prezzi, fonte (dashboard, job serale,
+    comando manuale), tipo di prezzo, versione del modello e tutti i parametri, contesto di mercato, copertura dei dati;
+    per ogni titolo e classifica (`observations`) identificativo `yahoo:TICKER`, nome, settore, prezzo di riferimento,
+    posizione in classifica (vuota se non selezionato), primi 10 sì/no, condizioni soddisfatte, non soddisfatte e mancanti,
+    dettaglio di ogni condizione, avvisi, motivo, diagnosi e tutti i valori misurati. Così si ricostruisce perché un titolo
+    era in classifica quel giorno (`opportunity_diary.observations(seduta, "trading")`).
+  - **Quando**: dopo la chiusura, dal ciclo della dashboard e dal job serale già esistente (`server.run_daily_job`), una volta
+    per seduta e versione del modello: una seconda esecuzione non duplica nulla. Un errore del diario finisce nel log e non
+    ferma né i prezzi né il resto del job. Nessuno scheduler nuovo.
+  - **Nessuna informazione futura**: si registra solo una seduta chiusa (almeno 15 minuti dopo la chiusura, mai con mercato
+    aperto o in pre-apertura) e solo se lo storico giornaliero contiene la sua barra finale ed è stato aggiornato dopo la
+    chiusura; la classifica usa solo sedute fino a quella data; le righe salvate **non si possono modificare né cancellare**
+    (blocchi nel database); analisti, valutazione e notizie sono salvati come erano in quel momento, senza ricostruire il passato.
+  - **Risultati** (`outcomes`): Trading a 5, 10 e 21 sedute, Investimento a 63 e 126, contati sulle date di borsa di QQQ;
+    un risultato si calcola solo quando la seduta finale esiste («in attesa» prima). Rendimento del titolo, di QQQ nello stesso
+    intervallo, differenza, e mediana di tutti i titoli salvati quel giorno nello stesso intervallo (`universe_medians`). Prezzi
+    rettificati per dividendi e frazionamenti, presi dalla stessa serie a entrambe le estremità. Prezzo o QQQ mancanti:
+    «prezzo mancante» / «benchmark mancante» (il prezzo che arriva dopo viene misurato allora).
+  - **Pannello «Monitoraggio risultati»** (sezione chiusa sotto la classifica): da quando è attivo, giornate, osservazioni,
+    maturate, in attesa, prezzi mancanti e casi usati per ogni orizzonte, Trading e Investimento separati. Le medie compaiono
+    solo con almeno 100 casi maturati in almeno 20 giornate (come il Diario dei segnali); prima si legge «in raccolta».
+    Non è un backtest: nessuna percentuale di successo e nessuna conclusione dai primi casi.
+  - **Comandi**: `.venv/bin/python opportunity_diary.py status` (cosa è registrato) e `.venv/bin/python opportunity_diary.py update`
+    (registra l'ultima seduta chiusa se manca e misura i risultati maturati, solo con i dati già in `cache/`, senza download;
+    con il mercato aperto o in pre-apertura risponde che si registra dopo la chiusura). Indirizzo `/api/opportunities/diary`.
+  - **Per i test futuri** (Parte D): `opportunity_diary.dataset("trading", 21)` dà una riga per osservazione con risultato,
+    contesto di mercato e versione del modello: confronto selezionati / resto dello stesso giorno, configurazioni diverse del
+    ranking (dalle condizioni e dai valori salvati), mercati in salita e in calo, prove fuori campione per data o versione,
+    confronto con QQQ e con la mediana dei titoli come strategia passiva. Limiti da ricordare: **non esiste uno storico gratuito
+    della composizione del Nasdaq-100**, quindi un test sul passato con i titoli di oggi ha il survivorship bias (dal giorno
+    di avvio il diario salva anche la composizione); analisti, stime e notizie non hanno storico (solo da ora in avanti); le
+    condizioni Trading, che usano solo i prezzi, si possono provare sul passato con lo stesso metodo della Fase 11 (condizioni
+    fissate prima, controllo casuale), senza toccare `backtest.py` né i risultati salvati.
 - **Oggi**: 4 indicatori (Nasdaq-100, titoli in rialzo/ribasso, % di titoli sopra le medie 20/40/60 e 200, volatilità VIX e VXN con la fascia: calmo/normale/nervosismo/paura),
   mappa del mercato (clic sul nome di un settore per ingrandirlo), grafico intraday del Nasdaq-100, chi si è mosso e perché, trimestrali dei prossimi 7 giorni
   (i miei titoli in cima).
@@ -308,7 +384,9 @@ ridosso del massimo"); gli avvisi di calendario dentro le card (ora una piccola 
     P/E atteso) e stima le capitalizzazioni passate dal prezzo, ignorando buyback e diluizione.
   - **Analisti**: giudizi oggi e 3 mesi fa, upgrade/downgrade e target degli ultimi 30 giorni, stime di utili e
     ricavi con la loro revisione a 30/90 giorni, ultime azioni delle banche d'affari.
-  Questi dati si scaricano una volta al giorno in background (circa 15 secondi) in `cache/analysts.json`.
+  Questi dati si scaricano una volta al giorno in background (circa 15 secondi) in `cache/analysts.json`. La cache porta una
+  versione dei campi (`analysts.SCHEMA`, Fase O2): una cache scritta da codice più vecchio, per esempio senza l'utile
+  operativo dei bilanci aggiunto nella Fase 26, viene riscaricata una volta sola anche se è del giorno stesso.
   Si apre cliccando un titolo o con `http://localhost:8100/#NVDA`.
 
 - **Spiegazioni ⓘ**: passando il mouse (o cliccando) sull'icona ⓘ compare una spiegazione breve: volatilità in Oggi, indicatori
@@ -540,6 +618,8 @@ consecutivi, sovrapposizione, regole «si sovrappone / diversifica / neutro»).
 | `earnings.py` | Dettagli delle trimestrali in Oggi (ultima trimestrale, movimento tipico nel giorno di reazione) |
 | `tests/`, `requirements-dev.txt` | Test automatici con dati finti (pytest) |
 | `diary.py` | Diario dei segnali: salva ogni giorno i verdetti e misura com'è andata ogni categoria dopo 1, 3 e 6 mesi |
+| `opportunity_scanner.py` | Scheda Opportunità: le due classifiche esplorative (Trading e Investimento) con condizioni, valori misurati, avvisi, dati mancanti, diagnosi, copertura e parametri |
+| `opportunity_diary.py` | Diario delle opportunità (SQLite in `data/`): classifiche di ogni seduta per tutti i titoli e risultati a 5–126 sedute |
 | `decision.py` | Sezione Decisione della scheda titolo: cinque blocchi, verdetto e piani operativi con regole esplicite |
 | `technical.py` | Numeri della sezione Analisi tecnica nella scheda del titolo (ATR, livelli, pattern, settore e tema) |
 | `portfolio.py` | Portafoglio: lettura dell'export Fineco, ticker Yahoo, valori in euro |

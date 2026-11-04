@@ -28,8 +28,9 @@
 </header>
 
 <nav class="tabs">
-  <!-- three tabs (phase 21); each one groups older pages as sub-tabs, whose ids and links are unchanged -->
+  <!-- tabs (phase 21, Opportunità first from phase O1); each one groups older pages as sub-tabs, whose ids and links are unchanged -->
   <div class="tablist" role="tablist">
+    <button class="tab" data-main="opportunita" title="Quali titoli meritano di essere approfonditi?">Opportunità</button>
     <button class="tab" data-main="mercato" title="Cosa sta succedendo?">Mercato</button>
     <button class="tab" data-main="portafoglio" title="Cosa ho e come sta andando?">Portafoglio</button>
     <button class="tab" data-main="azioni" title="Quali azioni del Nasdaq-100 potrei comprare?">Azioni</button>
@@ -42,6 +43,9 @@
 <main>
   <div id="verBanner" class="warn-box ver-banner" hidden></div>
   <div id="loading" class="loading"><div class="spinner"></div><p>Caricamento dati di mercato…</p><small>Il primo caricamento scarica circa 110 serie da Yahoo Finance e richiede una decina di secondi (meno se riavvii il server nello stesso giorno).</small></div>
+
+  <!-- OPPORTUNITÀ (phase O1, opportunity_scanner.py): two exploratory rankings, never a buy signal -->
+  <section id="view-opps" class="view" hidden><div id="oppsBody"></div></section>
 
   <!-- TODAY (view id "overview" kept for saved links) -->
   <section id="view-overview" class="view" hidden>

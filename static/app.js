@@ -11,7 +11,7 @@ const LS = {
 const state = {
   snap: null,
   bySym: new Map(),
-  view: "portfolio",      // the tab opened at start (a link like #screener or #metodo overrides it, see boot)
+  view: "opps",           // the tab opened at start: Opportunità from phase O1 (a link like #screener overrides it, see boot)
   tf: LS.get("tf", "1D"),
   size: "mcap",   // map tiles sized by market cap
   cvd: false,
@@ -168,7 +168,7 @@ function spark(values, w = 80, h = 22, base = null, color = null) {
 
 // ------------------------------------------------------------ data
 // must equal DASHBOARD_VERSION in server.py: otherwise the server runs old code and the page says so
-const PAGE_VERSION = "2026-11-04b";
+const PAGE_VERSION = "2026-11-04d";
 async function load() {
   const r = await fetch("/api/snapshot", { cache: "no-store" });
   const sv = r.headers.get("X-Dashboard-Version");
@@ -221,6 +221,7 @@ function renderAll() {
   renderTape();
   renderStatus();
   syncTfSegs();
+  if (state.view === "opps") loadOpps();
   if (state.view === "overview") renderOverview();
   if (state.view === "watch") renderMyStocks();
   if (PF_SUBS.includes(state.view)) loadPortfolio();
@@ -2720,6 +2721,143 @@ function etfDiaryHTML(E, hz) {
 etfDiaryHTML.more = "";
 document.addEventListener("click", e => { const b = e.target.closest("[data-dz]"); if (b) { diary.hz = b.dataset.dz; renderDiary(); } });
 
+// ------------------------------------------------------------ Opportunità (phases O1-O2, opportunity_scanner.py)
+// Two exploratory rankings computed by the server on closed sessions: stocks to study, never a buy signal.
+// Phase O2: relative strength, absolute direction and market context shown apart; coverage of the data; the
+// "Monitoraggio risultati" panel of the opportunity diary (opportunity_diary.py), closed by default.
+const opps = { data: null, at: 0, err: null, mode: LS.get("opp.mode", "trading"), open: new Set(), diary: null, diaryErr: null };
+const OPP_MODES = { trading: "Trading · breve periodo", invest: "Investimento · medio-lungo periodo" };
+const OPP_LIMITS = [
+  ["Condizioni non verificate", "Nessuna condizione è stata provata con un backtest. Nel test della Fase 11 i pattern di forza (Leader di momentum, momentum 12-1, massimi a 52 settimane) non hanno superato le condizioni: la classifica Trading usa misure simili, quindi indica solo titoli da guardare, non titoli che salgono."],
+  ["Classifica relativa", "«Più forte del Nasdaq-100» vuol dire meglio di QQQ: in un mercato in calo può significare «scende meno». Per questo la tabella mostra a parte il rendimento del titolo e quello rispetto a QQQ, e segnala chi è più forte di QQQ ma in calo."],
+  ["Dati di oggi", "Analisti, valutazione, notizie e date delle trimestrali sono quelli di oggi: non hanno uno storico gratuito e non si possono provare sul passato. Il diario delle opportunità li salva da ora in avanti."],
+  ["Fondamentali da Yahoo Finance", "Bilanci, stime e consenso possono mancare o arrivare in ritardo; Yahoo dà pochi anni di bilanci. Un dato mancante non conta mai come condizione soddisfatta."],
+  ["Solo i titoli di oggi", "La classifica guarda i titoli che oggi sono nel Nasdaq-100: niente altri mercati e niente ETF in questa fase."],
+];
+async function loadOpps() {
+  if (!opps.data || Date.now() - opps.at > 5 * 60_000) {
+    opps.at = Date.now();
+    try {
+      const r = await fetch("/api/opportunities", { cache: "no-store" });
+      if (r.status === 503) { opps.err = "loading"; opps.at = 0; }
+      else if (!r.ok) { opps.err = (await r.json().catch(() => ({}))).error || r.statusText; opps.at = 0; }
+      else { opps.data = await r.json(); opps.err = null; }
+    } catch (e) { opps.err = e.message; opps.at = 0; }
+    try { opps.diary = await getJSON("/api/opportunities/diary"); opps.diaryErr = null; } catch (e) { opps.diaryErr = e.message; }
+  }
+  renderOpps();
+}
+const oppTime = iso => iso ? new Date(iso).toLocaleString("it-IT", { timeZone: tz, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) + " ora NY" : "";
+const oppPct = v => `<span class="${sign(v)}">${fPct(v, 1)}</span>`;
+function oppMarketLine(M) {
+  if (!M || !isNum(M.qqq1m)) return "";
+  return `<p class="small opp-mkt"><b>Mercato (QQQ, sedute chiuse):</b> 1 mese ${oppPct(M.qqq1m)} · 3 mesi ${oppPct(M.qqq3m)} · trend ${esc((M.qqqTrend || "non calcolabile").toLowerCase())}
+    (${fPct(M.qqqVs50, 1)} dalla media 50, ${fPct(M.qqqVs200, 1)} dalla media 200)${isNum(M.above200) ? ` · titoli sopra la media 200: ${fNum(M.above200, 0)}% di ${M.above200n}` : ""}</p>`;
+}
+function oppDiaryHTML() {
+  const S = opps.diary;
+  if (!S) return `<p class="muted small">Diario non leggibile al momento${opps.diaryErr ? ` (${esc(opps.diaryErr)})` : ""}.</p>`;
+  if (!S.started) return `<p class="small">Il diario non ha ancora registrato nessuna seduta: la prima registrazione avviene dopo la prossima chiusura di Wall Street, con la dashboard accesa o con il job serale. I risultati si misurano solo quando sono passate le sedute necessarie.</p>`;
+  const lab = { trading: "Trading", invest: "Investimento" };
+  const cell = g => g.enough ? `${fPct(g.mean, 2)} · mediana ${fPct(g.median, 2)}` : `<span class="muted">in raccolta</span>`;
+  const vs = g => g.enough ? `${ptPts(g.excess)} · mediana ${ptPts(g.excessMedian)}` : "—";
+  const lists = Object.entries(S.lists).map(([k, L]) => `<h4 class="bt-h">${lab[k]} <span class="muted">· ${fNum(L.observations, 0)} osservazioni, di cui ${fNum(L.selected, 0)} in classifica e ${fNum(L.insufficient, 0)} con dati insufficienti</span></h4>
+    <div class="table-wrap"><table class="scr mini"><thead><tr><th class="l">Orizzonte</th><th>Maturate</th><th>In attesa</th><th>Prezzo mancante</th><th>Casi usati (in classifica)</th>
+      <th>Rendimento in classifica</th><th>Differenza con QQQ (punti)</th><th>Rispetto alla mediana dei titoli</th><th>Altri titoli: differenza con QQQ</th></tr></thead>
+    <tbody>${Object.entries(L.horizons).map(([h, H]) => { const g = H.groups.selected, o = H.groups.others;
+      return `<tr><td class="l">${h} sedute</td><td>${fNum(H.matured, 0)}</td><td>${fNum(H.pending, 0)}</td><td>${fNum(H.missingPrice, 0)}</td>
+        <td>${g.n} casi in ${g.days} ${g.days === 1 ? "giorno" : "giorni"}</td><td>${cell(g)}</td><td>${vs(g)}</td><td>${g.enough && isNum(g.vsUniverse) ? ptPts(g.vsUniverse) : "—"}</td>
+        <td>${o.enough ? ptPts(o.excess) : `<span class="muted">${o.n} casi: in raccolta</span>`}</td></tr>`; }).join("")}</tbody></table></div>`).join("");
+  return `<p class="small">Attivo dal <b>${esc(dayIT(S.first))}</b> · <b>${S.days}</b> ${S.days === 1 ? "giornata registrata" : "giornate registrate"} · ultima: ${esc(dayIT(S.last))}
+      (calcolo ${esc(oppTime(S.lastComputedAt))}, ${esc(S.lastSource)}) · versione del modello ${esc(S.versions.join(", "))}</p>
+    <p class="small">Le medie compaiono solo con almeno ${S.minCases} casi maturati in almeno ${S.minDays} giornate diverse; prima i dati sono <b>in raccolta</b>.
+      «Maturate» = osservazioni per cui sono passate le sedute dell'orizzonte. Riferimenti: QQQ nello stesso intervallo e mediana di tutti i titoli salvati lo stesso giorno.</p>
+    ${lists}
+    <h4 class="bt-h">Limiti</h4><ul class="why bt-lim">${S.limits.map(l => `<li><b>${esc(l.title)}.</b> ${esc(l.text)}</li>`).join("")}</ul>
+    <p class="muted small">Dati in <code>data/opportunita.sqlite3</code>: solo dati pubblici di mercato, separati dal portafoglio. Non è un backtest e non è una consulenza finanziaria.</p>`;
+}
+function renderOpps() {
+  const el = $("#oppsBody"), D = opps.data;
+  if (state.view !== "opps" || !el) return;
+  if (!D) {
+    el.innerHTML = `<div class="card empty">${opps.err === "loading" ? "I dati di mercato si stanno ancora caricando: le classifiche compaiono appena sono pronti."
+      : `Classifiche non disponibili al momento${opps.err ? ` (${esc(opps.err)})` : ""}.`} Nuovo tentativo al prossimo aggiornamento della pagina.</div>`;
+    return;
+  }
+  const keepOpen = [...el.querySelectorAll("details.fold[data-k]")].filter(d => d.open).map(d => d.dataset.k);
+  const mode = OPP_MODES[opps.mode] ? opps.mode : "trading", B = D[mode], items = B.items || [];
+  const trading = mode === "trading";
+  const perfLab = trading ? ["1 mese", "3 mesi"] : ["6 mesi", "1 anno"];
+  const ncols = trading ? 12 : 11;
+  const n = B.conditions.length;
+  const live = s => state.bySym.get(s.ticker);
+  const priceCell = s => {
+    const q = live(s), p = q?.price ?? s.price, t = state.snap?.lastQuote || state.snap?.asOf || s.priceTime;
+    return `${fPrice(p)} $<div class="muted small">${esc(oppTime(t))}</div>`;
+  };
+  const warnCell = s => s.warnings.length ? esc(s.warnings.map(w => w.short).join(" · ")) : `<span class="muted">nessuno</span>`;
+  const status = s => `<span class="act ${s.status === "Dati insufficienti" ? "rev" : ""}">${esc(s.status)}</span>`;
+  const flag = s => s.diag?.flag ? `<div class="opp-flag" title="${esc(s.diag.flag)}">⚠ più forte di QQQ ma ${s.diag.flag.includes("ribassista") ? "trend ribassista" : "in calo"}</div>` : "";
+  const ck = c => `<li class="ck-${c.state}"><b>${esc(c.id)} ${esc(c.name)}</b>: ${esc(c.detail)}</li>`;
+  const dg = d => d ? `<li>Rendimento del titolo: 1 mese ${fPct(d.abs21, 1)}, 3 mesi ${fPct(d.abs63, 1)}${d.direction ? ` (${esc(d.direction)})` : ""}</li>
+      <li>Rispetto a QQQ: 1 mese ${ptPts(d.rel21)}, 3 mesi ${ptPts(d.rel63)}</li><li>Trend (prezzo, media 50, media 200): ${esc(d.trend || "non calcolabile")}</li>
+      ${d.flag ? `<li><b>${esc(d.flag)}</b></li>` : ""}` : "<li>non disponibile</li>";
+  const detailRow = s => `<tr class="opp-x"><td colspan="${ncols}"><div class="opp-cols">
+      <div><h4>Condizioni (${s.ok} su ${s.n} soddisfatte)</h4><ul class="why">${s.conditions.map(ck).join("")}</ul></div>
+      <div><h4>Forza relativa e andamento</h4><ul class="why">${dg(s.diag)}</ul>
+        <h4>Valori misurati</h4><ul class="why">${s.values.map(v => `<li>${esc(v.label)}: ${esc(v.value)}</li>`).join("") || "<li>non disponibili</li>"}</ul></div>
+      <div><h4>Segnali contrari e dati mancanti</h4><ul class="why">${s.warnings.map(w => `<li>${esc(w.text)}</li>`).join("")}
+        ${s.missing.map(m => `<li>Manca: ${esc(m.name)} (${esc(m.detail)})</li>`).join("")}${!s.warnings.length && !s.missing.length ? "<li>nessuno</li>" : ""}</ul></div></div>
+      <p class="muted small">Prezzi: sedute chiuse fino al ${s.closeDate ? esc(dayIT(s.closeDate)) : "—"}. Analisti, valutazione e notizie: dati di oggi. Clic sul nome per aprire la scheda del titolo.</p></td></tr>`;
+  const table = items.length ? `<div class="table-wrap"><table class="scr opp-tbl"><thead><tr><th>#</th><th class="l">Titolo</th><th class="l">Settore</th><th>Prezzo</th>
+      ${perfLab.map(l => `<th>${l}</th>`).join("")}${trading ? "<th>Rispetto a QQQ (1 mese)</th>" : ""}<th class="l">Trend</th><th>Condizioni</th><th class="l">Motivo principale</th><th class="l">Attenzione</th><th class="l">Stato</th></tr></thead>
+    <tbody>${items.map(s => `<tr data-t="${esc(s.ticker)}"><td>${s.rank}</td><td class="l tk">${esc(s.ticker)}<div class="muted small">${esc(s.name)}</div></td>
+      <td class="l">${esc(s.sector || "—")}</td><td>${priceCell(s)}</td>
+      ${s.perf.map(p => `<td>${oppPct(p.value)}</td>`).join("")}${trading ? `<td><span class="${sign(s.diag?.rel21)}">${ptPts(s.diag?.rel21)}</span></td>` : ""}
+      <td class="l">${esc(s.trend)}${flag(s)}</td><td>${s.ok} su ${s.n}</td>
+      <td class="l why-c">${esc(s.main)} <button class="opp-more" data-ox="${esc(s.ticker)}">${opps.open.has(mode + s.ticker) ? "Chiudi" : "Dettagli"}</button></td>
+      <td class="l warn-c">${warnCell(s)}</td><td class="l">${status(s)}</td></tr>${opps.open.has(mode + s.ticker) ? detailRow(s) : ""}`).join("")}</tbody></table></div>`
+    : `<div class="empty">Oggi nessun titolo soddisfa almeno ${B.min} condizioni su ${n}.${mode === "invest" && !D.analystsReady ? " I dati degli analisti non sono ancora stati scaricati: riprova tra qualche minuto." : ""}</div>`;
+  const ne = D.notEvaluable || [];
+  const cov = (B.coverage || []).filter(c => c.available < c.total);
+  const params = D.model?.params || [];
+  const S = opps.diary;
+  const diarySum = !S ? "" : S.started ? `dal ${dayIT(S.first)} · ${S.days} ${S.days === 1 ? "giornata" : "giornate"} · ${fNum(Object.values(S.lists).reduce((a, L) => a + L.observations, 0), 0)} osservazioni` : "non ancora avviato";
+  el.innerHTML = `<p class="warn-box"><b>Classifica preliminare, non un segnale di acquisto.</b> Sono titoli da <b>approfondire</b>, scelti con condizioni semplici
+      scritte qui sotto e <b>non verificate da un backtest</b>: nessuna probabilità e nessun rendimento atteso. Prima di qualsiasi decisione apri la scheda
+      del titolo e leggi la sezione Decisione. Non è una consulenza finanziaria.</p>
+    <div class="card"><div class="card-h"><h2>${esc(OPP_MODES[mode])}</h2>
+      <div class="seg">${Object.entries(OPP_MODES).map(([k, l]) => `<button data-opm="${k}" class="${k === mode ? "on" : ""}">${esc(l.split(" · ")[0])}</button>`).join("")}</div>
+      <span class="card-meta">orizzonte ${esc(B.horizon)} · prezzi delle sedute chiuse fino al ${D.asOf ? esc(dayIT(D.asOf)) : "—"} · ${B.qualified} titoli con almeno ${B.min} condizioni su ${n}, mostrati i primi ${items.length}${B.complete ? "" : " · <b>classifica incompleta</b>"}</span></div>
+      ${oppMarketLine(D.market)}
+      ${B.coverageNote ? `<p class="warn-box"><b>Copertura dei dati insufficiente.</b> ${esc(B.coverageNote)} L'elenco dei titoli senza il dato è in «Come è fatta la classifica».</p>` : ""}
+      ${table}
+      <details class="fold" data-k="rules"><summary><span class="small">Come è fatta la classifica</span></summary>
+        <ul class="why">${B.conditions.map(c => `<li><b>${esc(c.id)} ${esc(c.name)}</b>: ${esc(c.rule)}</li>`).join("")}</ul>
+        <p class="small">${esc(B.order)} Un dato mancante conta come condizione non soddisfatta e il titolo è segnato «Dati insufficienti».
+          ${trading ? "Gli avvisi: tirato (regola D5), sotto la media 200, oscillazione giornaliera oltre il 4%, trimestrale entro 5 giorni, pattern che non ha superato il test della Fase 11. «Più forte di QQQ ma in calo» è solo un'informazione: non cambia l'ordine."
+            : "Gli avvisi: più downgrade che upgrade in 30 giorni, stime tagliate oltre il 3% in 30 giorni, trimestrale entro 5 giorni, notizie dal tono negativo, prezzo sotto la media 50."}</p>
+        ${cov.length ? `<p class="small"><b>Copertura dei dati:</b> ${cov.map(c => `${esc(c.id)} ${esc(c.name)} valutabile per ${c.available} titoli su ${c.total}${c.missing.length <= 25 ? ` (mancano: ${esc(c.missing.join(", "))})` : ""}`).join("; ")}.</p>` : `<p class="small">Copertura dei dati: ogni condizione è valutabile per tutti i titoli.</p>`}
+        <p class="small"><b>Parametri del modello ${esc(D.model?.version || "")}</b> (quelli <b>sperimentali</b> sono proposte non validate, tenute per compatibilità: non sono strategie):
+          ${params.map(p => `${esc(p.text)}: ${esc(String(p.value))}${p.experimental ? " <b>(sperimentale)</b>" : ""}`).join(" · ")}.</p>
+        <p class="muted small">Titoli valutati: ${D.evaluated} su ${D.universe}${ne.length ? ` · non valutabili: ${ne.map(x => `${esc(x.ticker)} (${esc(x.why)})`).join(", ")}` : ""}.
+          ${D.newsReady ? "" : "Notizie non ancora scaricate. "}Calcolo delle ${esc(oppTime(D.generated))}.</p>
+        <h4 class="bt-h">Limiti</h4><ul class="why bt-lim">${OPP_LIMITS.map(([a, b]) => `<li><b>${esc(a)}.</b> ${esc(b)}</li>`).join("")}</ul>
+      </details></div>
+    <div class="card"><details class="fold" data-k="diary"><summary><h3>Monitoraggio risultati</h3><span class="card-meta">${esc(diarySum)}</span></summary>${oppDiaryHTML()}</details></div>`;
+  keepOpen.forEach(k => { const d = el.querySelector(`details.fold[data-k="${k}"]`); if (d) d.open = true; });
+}
+document.addEventListener("click", e => {
+  const box = e.target.closest("#oppsBody");
+  if (!box) return;
+  const m = e.target.closest("[data-opm]");
+  if (m) { opps.mode = m.dataset.opm; LS.set("opp.mode", opps.mode); renderOpps(); return; }
+  const x = e.target.closest("[data-ox]");
+  if (x) { const k = opps.mode + x.dataset.ox; opps.open.has(k) ? opps.open.delete(k) : opps.open.add(k); renderOpps(); return; }
+  const tr = e.target.closest("tr[data-t]");
+  if (tr) openDetail(tr.dataset.t);
+});
+
 // ------------------------------------------------------------ search
 const qEl = $("#q"), sugg = $("#sugg");
 let suggSel = 0, suggList = [];
@@ -2756,6 +2894,7 @@ document.addEventListener("keydown", e => {
 // in the background in any case). Removed pages (Report, Pattern tecnici, Le mie regole) send old links to the nearest one.
 const DIARY_READY = 63;
 const GROUPS = [
+  { id: "opportunita", label: "Opportunità", ask: "Quali titoli meritano di essere approfonditi?", views: [["opps", "Opportunità"]] },
   { id: "mercato", label: "Mercato", ask: "Cosa sta succedendo?", views: [["overview", "Oggi"], ["sectors", "Settori"]] },
   { id: "portafoglio", label: "Portafoglio", ask: "Cosa ho e come sta andando?", views: [["portfolio", "Posizioni"], ["pfperf", "Performance"], ["pfconc", "Concentrazione"], ["pfrisk", "Rischio"]] },
   { id: "azioni", label: "Azioni", ask: "Quali azioni del Nasdaq-100 potrei comprare?", views: [["screener", "Screener"], ["watch", "In osservazione"], ["diary", "Diario dei segnali"]] },
@@ -2777,7 +2916,7 @@ const viewFromHash = h => {
 };
 function lastSub(g) { const v = LS.get("sub." + g.id, g.views[0][0]); return shownViews(g).some(x => x[0] === v) ? v : g.views[0][0]; }
 function setView(v) {
-  if (!VIEWS.includes(v) || (v === "diary" && !diaryReady())) v = viewFromHash(v) || "portfolio";
+  if (!VIEWS.includes(v) || (v === "diary" && !diaryReady())) v = viewFromHash(v) || "opps";
   const g = groupOf(v);
   state.view = v; LS.set("view", v); LS.set("sub." + g.id, v);
   if (location.hash.slice(1) !== v) history.replaceState(null, "", "#" + v);
@@ -2794,6 +2933,15 @@ function setView(v) {
   window.scrollTo({ top: 0 });
 }
 $$(".tab").forEach(t => t.addEventListener("click", () => setView(lastSub(GROUPS.find(g => g.id === t.dataset.main)))));
+// phase O2: a link changed without reloading (only the part after #, e.g. typed in the address bar or the browser's
+// back button) opens that page too; the page itself writes the hash with replaceState, which fires no event
+addEventListener("hashchange", () => {
+  if (!state.snap) return;
+  const h = decodeURIComponent(location.hash.slice(1));
+  const v = viewFromHash(h);
+  if (v) { if (v !== state.view) setView(v); return; }
+  if (h && quoteFor(h.toUpperCase())) openDetail(h.toUpperCase());
+});
 $("#subtabs").addEventListener("click", e => { const b = e.target.closest("[data-view]"); if (b) setView(b.dataset.view); });
 document.addEventListener("click", e => { const b = e.target.closest("[data-goto]"); if (b) setView(b.dataset.goto); });
 
@@ -2830,7 +2978,7 @@ addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { set
   nextAt = Date.now() + refreshMs();
   await loadWatch();
   const h = decodeURIComponent(location.hash.slice(1));
-  setView(viewFromHash(h) || "portfolio");          // without a link the dashboard opens on Portafoglio
+  setView(viewFromHash(h) || "opps");               // without a link the dashboard opens on Opportunità (phase O1; before: Portafoglio)
   if (h && !viewFromHash(h) && quoteFor(h.toUpperCase())) openDetail(h.toUpperCase());
 })();
 })();

@@ -940,3 +940,19 @@ table.my td.nw { max-width: 280px; }
 .pil-log li { padding: 3px 0; }
 #pilNote { flex: 1 1 200px; min-width: 0; }
 .act-todo { background: var(--surface-2); border-left: 3px solid var(--line-strong); padding: var(--sp-2) var(--sp-3); border-radius: 0 var(--r-ctrl) var(--r-ctrl) 0; }
+
+/* ---------- Opportunità (phase O1): the two rankings, same table and badges as the rest of the page */
+.opp-tbl td.l { white-space: normal; }
+.opp-tbl td.why-c { min-width: 220px; max-width: 360px; color: var(--ink-2); }
+.opp-tbl td.warn-c { min-width: 160px; max-width: 280px; color: var(--ink-2); }
+.opp-tbl .opp-more { border: 0; background: none; color: var(--accent); font-weight: 600; font-size: var(--fs-xs); padding: 0 2px; }
+.opp-tbl tr.opp-x td { background: var(--surface-2); white-space: normal; text-align: left; cursor: default; }
+.opp-tbl tr.opp-x:hover td { background: var(--surface-2); }
+.opp-x .opp-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--sp-3); padding: 4px 0; }
+.opp-x h4 { margin: 0 0 4px; font-size: var(--fs-sm); color: var(--ink); }
+.opp-x .ck-ok::marker { content: "✅ "; }
+.opp-x .ck-ko::marker { content: "❌ "; }
+.opp-x .ck-na::marker { content: "❓ "; }
+.opp-x .why { padding-left: 22px; }
+.opp-tbl .opp-flag { color: var(--warn); font-size: var(--fs-xs); font-weight: 600; margin-top: 2px; white-space: normal; }
+.opp-mkt { margin: 0 0 var(--sp-3); color: var(--ink-2); }

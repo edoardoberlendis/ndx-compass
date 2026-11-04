@@ -31,6 +31,9 @@ from server import CACHE_DIR, ET, clean, download
 
 log = logging.getLogger("ndx")
 CACHE = os.path.join(CACHE_DIR, "analysts.json")
+# version of the cached fields: a cache written by older code (without a field added since) is not "fresh" and is
+# downloaded again once. 2 = annual "operatingIncome" (phase 26, for the margin check of the Pagella and Opportunità)
+SCHEMA = 2
 THREADS = 4                    # parallel tickers; each makes ~6 small Yahoo requests
 MIN_PEERS = 3                  # below this the sector comparison is skipped (history only)
 FEW_PEERS = 5                  # below this the note says the sector has few stocks
@@ -129,14 +132,14 @@ def read_cache():
 def load(tickers, force=False):
     """{ticker: analyst data}. Downloads only if the cache is not from today (ET) or misses tickers."""
     c = read_cache()
-    if c and not force and c.get("date") == today_et() and all(t in c["data"] for t in tickers):
+    if c and not force and c.get("date") == today_et() and c.get("schema") == SCHEMA and all(t in c["data"] for t in tickers):
         return c["data"]
     t0 = time.time()
     with ThreadPoolExecutor(THREADS) as ex:
         data = dict(ex.map(fetch_one, tickers))
     add_year_end_prices(data)
     with open(CACHE, "w") as f:
-        json.dump({"date": today_et(), "data": data}, f, default=clean)
+        json.dump({"date": today_et(), "schema": SCHEMA, "data": data}, f, default=clean)
     log.info("analysts & valuation history: %d tickers in %.1fs", len(data), time.time() - t0)
     return data
 
@@ -148,8 +151,9 @@ def cached_data():
 
 
 def is_fresh():
+    """Downloaded today with the current fields (SCHEMA): otherwise one background download refreshes it."""
     c = read_cache()
-    return bool(c and c.get("date") == today_et())
+    return bool(c and c.get("date") == today_et() and c.get("schema") == SCHEMA)
 
 
 # ---------------------------------------------------------------- analyst summary

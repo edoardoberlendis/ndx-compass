@@ -827,6 +827,7 @@ def run_daily_job():
         snap, infos = store.snapshot, dict(store.infos)
     history.record(portfolio.snapshot(snap, infos))
     save_signal_diary()
+    save_opportunity_diary(source="job serale")         # phase O2: logs its own errors, the rest of the job goes on
     save_etf_diary(wait=True)
     for _ in range(60):                                  # positions diary: wait for the 2 years of prices (risk.py)
         import pos_diary
@@ -937,6 +938,7 @@ def worker():
             store.build()
             portfolio.refresh()
             save_signal_diary()
+            save_opportunity_diary()                             # opportunity diary (phase O2): never stops the loop
             save_etf_diary()
             save_pos_diary()
             macro_calendar.refresh()                             # does real work at most once a day (more on release days)
@@ -1149,7 +1151,7 @@ def movers_why(n=8):
 app = Flask(__name__, static_folder=None)
 # version of the code that serves the page: change it together with PAGE_VERSION in static/app.js whenever the data
 # sent to the page changes, so that a server left running with old code is noticed (the page asks to restart it)
-DASHBOARD_VERSION = "2026-11-04b"
+DASHBOARD_VERSION = "2026-11-04d"
 
 
 @app.route("/")
@@ -1806,6 +1808,150 @@ def api_market_news():
 # ---------------------------------------------------------------- trend reports (signals.py)
 
 REPORT_DIR = os.path.join(ROOT, "reports")
+
+
+_opps = {"key": None, "data": None}
+OPPS_TTL_S = 600     # the valuation follows the live price: rankings rebuilt at most every 10 minutes (or with new data)
+
+
+def opportunities(keep_all=False, now=None):
+    """Both rankings of the "Opportunità" tab (opportunity_scanner.py) from the data already in memory: no download.
+    Prices on closed sessions only; live price and time are added for display. None while the first data load runs.
+    keep_all=True (opportunity diary): every stock with its figures, computed fresh and never cached."""
+    import opportunity_scanner
+    import technical  # local import: technical imports this module
+    with store.lock:
+        snap, daily, ta = store.snapshot, store.daily, store.ta
+    if snap is None or not daily:
+        return None
+    key = (id(daily), id(store.analysts), id(store.news_all), id(store.infos), int(time.time() // OPPS_TTL_S))
+    if _opps["key"] == key and not keep_all:
+        return _opps["data"]
+    now = now or datetime.now(ET)
+    rows = {r["ticker"]: r for r in snap["stocks"]}
+    universe = [{"ticker": t, "name": r.get("name"), "sector": r.get("sector")} for t, r in rows.items()]
+    closed = technical.closed_sessions({t: daily[t] for t in [*rows, SIGNAL_BENCH] if t in daily}, now)
+    quote_time = snap.get("lastQuote") or snap.get("asOf")
+    fund = {}
+    for t, r in rows.items():
+        info, sig = store.infos.get(t) or {}, store.signals.get(t) or {}
+        nws = next((c for c in sig.get("components") or [] if c["key"] == "news" and c["used"]), None)
+        fund[t] = {"years": (store.analysts.get(t) or {}).get("years"), "epsRev90": r.get("epsRev90"), "epsRev30": r.get("epsRev30"),
+                   "up30": r.get("up30"), "down30": r.get("down30"), "rec": r.get("rec"), "valLabel": r.get("valLabel"),
+                   "valRatio": r.get("valRatio"), "valNotes": (store.valuations.get(t) or {}).get("notes"),
+                   "earningsTs": r.get("earningsTs"), "epsGrowth": clean(info.get("earningsGrowth")), "margin": r.get("margin"),
+                   "news": {"score": nws["score"], "reasons": nws["reasons"]} if nws else None}
+    ptest = patterns_test() or {}
+    favorable = set(ptest.get("favorable") or [])
+    failed = {p["key"]: p["name"] for p in ptest.get("patterns", []) if p["key"] not in favorable}
+    data = opportunity_scanner.scan(
+        universe, closed, closed.get(SIGNAL_BENCH), fund,
+        patterns={t: [p["key"] for p in (ta.get(t) or {}).get("patterns", [])] for t in rows}, failed=failed,
+        quotes={t: {"price": r.get("price"), "time": quote_time} for t, r in rows.items()}, today=now.date(), keep_all=keep_all)
+    data["generated"] = now.isoformat(timespec="seconds")
+    data["newsReady"] = store.news_all is not None
+    data["analystsReady"] = bool(store.analysts)
+    if not keep_all:
+        _opps.update(key=key, data=data)
+    return data
+
+
+_od = {"measured": None}     # last session for which the matured results were measured (once per new closed session)
+
+
+def save_opportunity_diary(source="dashboard"):
+    """Opportunity diary (opportunity_diary.py, phase O2): after the close, both rankings of the last closed session for
+    every stock, once per session and model version; then the results that have matured. Public market data only
+    (data/opportunita.sqlite3), never portafoglio/. Any failure is logged and never stops the price refresh.
+    Returns a short text of what happened (for the manual command and the log)."""
+    try:
+        import opportunity_diary as od
+        import opportunity_scanner
+        import technical  # local import: technical imports this module
+        now = datetime.now(ET)
+        if market_status(now) in ("open", "pre"):
+            return "mercato aperto o pre-apertura: si registra dopo la chiusura"
+        day = last_closed_session(now)
+        with store.lock:
+            bench, last_daily, daily = store.daily.get(SIGNAL_BENCH), store.last_daily, store.daily
+        if bench is None or not len(bench):
+            return "storico dei prezzi non ancora caricato"
+        msg = "seduta già registrata"
+        if not od.exists(day, opportunity_scanner.MODEL_VERSION):
+            last_bar = str(bench["Close"].dropna().index[-1].date())
+            if last_bar != day:
+                return f"lo storico dei prezzi arriva al {last_bar}, non ancora alla seduta {day}: nuovo tentativo più tardi"
+            if not last_daily or datetime.fromtimestamp(last_daily, ET) < od.session_closed_at(day):
+                return f"storico dei prezzi aggiornato prima della chiusura del {day}: nuovo tentativo dopo il prossimo aggiornamento"
+            data = opportunities(keep_all=True, now=now)
+            if not data:
+                return "classifiche non calcolabili"
+            saved, msg = od.record(data, day, now.isoformat(timespec="seconds"), source)
+            if saved:
+                log.info("opportunity diary: %s for %s (%s)", msg, day, source)
+        if _od["measured"] != day:
+            closed = technical.closed_sessions(daily, now)
+            new = od.update_outcomes({t: od.as_map(df["Close"]) for t, df in closed.items() if t != SIGNAL_BENCH},
+                                     od.as_map(closed[SIGNAL_BENCH]["Close"]) if SIGNAL_BENCH in closed else {}, now)
+            _od["measured"] = day
+            msg += f"; risultati maturati misurati: {new} nuovi"
+        return msg
+    except Exception:
+        log.exception("opportunity diary not saved")
+        return "errore: vedi cache/server.log"
+
+
+def update_opportunity_diary_offline():
+    """The manual command (opportunity_diary.py update): the same save, with the data already in cache/ and no
+    download. The private folder is never read: the count of the signal diary is not needed here."""
+    import analysts
+    import technical
+    global diary_days
+    counter, diary_days = diary_days, (lambda: 0)          # build() would only count the files of portafoglio/diario
+    cons = read_cache("constituents.json", 30 * 86400)
+    if not cons:
+        return "elenco dei titoli non in cache: apri prima la dashboard"
+    store.constituents = [{**r, "sector": SECTOR_IT.get(r["sector"], r["sector"]), "industry": INDUSTRY_IT.get(r["industry"], r["industry"])} for r in cons]
+    infos = read_cache("infos.json", 30 * 86400)
+    store.infos = infos.get("data", {}) if isinstance(infos, dict) else {}
+    store.analysts = analysts.cached_data()
+    cached_daily = load_daily_cache()
+    if not cached_daily:
+        return "storico dei prezzi non in cache: apri prima la dashboard"
+    store.daily, store.last_daily = cached_daily
+    store.tech = store.technicals(store.daily)
+    store.ta = technical.build(store.daily, store.constituents, store.tech)
+    try:
+        store.build()
+    finally:
+        diary_days = counter
+    return save_opportunity_diary(source="comando manuale")
+
+
+@app.route("/api/opportunities")
+def api_opportunities():
+    """The two exploratory rankings of the "Opportunità" tab (screening, never a buy signal)."""
+    if store.error:
+        return jsonify({"error": store.error}), 500
+    try:
+        data = opportunities()
+    except Exception:
+        log.exception("opportunity scan failed")
+        return jsonify({"error": "calcolo delle classifiche non riuscito"}), 500
+    if data is None:
+        return jsonify({"error": "loading"}), 503
+    return app.response_class(json.dumps(data, default=clean, allow_nan=False), mimetype="application/json")
+
+
+@app.route("/api/opportunities/diary")
+def api_opportunities_diary():
+    """The opportunity diary: what is recorded and the results matured so far (never a validated backtest)."""
+    import opportunity_diary
+    try:
+        return app.response_class(json.dumps(opportunity_diary.stats(), default=clean, allow_nan=False), mimetype="application/json")
+    except Exception:
+        log.exception("opportunity diary stats failed")
+        return jsonify({"error": "diario delle opportunità non leggibile"}), 500
 
 
 @app.route("/api/patterns")

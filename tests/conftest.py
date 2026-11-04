@@ -35,4 +35,6 @@ def private_folder(tmp_path, monkeypatch):
     monkeypatch.setattr(etf_buy, "DIR", str(tmp_path / "diario_etf"))
     monkeypatch.setattr(etf_holdings, "PRIVATE", str(tmp_path / "etf_composizioni.json"))
     monkeypatch.setattr(etf_holdings, "PUBLIC", str(tmp_path / "etf_holdings.json"))
+    import opportunity_diary   # phase O2: the opportunity diary (public data, data/) is never the real one in a test
+    monkeypatch.setattr(opportunity_diary, "DB", str(tmp_path / "data" / "opportunita.sqlite3"))
     return tmp_path

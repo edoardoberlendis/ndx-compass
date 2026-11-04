@@ -13,3 +13,6 @@ portafoglio/
 
 # pagine salvate a mano dai siti di borse ed emittenti (Fase 25): fuori da Git
 fonti/
+
+# diario delle opportunità (Fase O2, SQLite con dati pubblici di mercato): resta sul Mac, fuori dai commit
+data/
