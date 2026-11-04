@@ -1,0 +1,31 @@
+{
+ "version": "R1",
+ "checked": "2026-11-04",
+ "criteria": [
+  "Criteri fissati il 4 novembre 2026 PRIMA di rielaborare lo studio della Fase 3 e senza guardare l'effetto sui rendimenti.",
+  "Un dato diventa «errore verificato» solo se una fonte indipendente o ufficiale lo smentisce (quotazione principale, comunicato della società, borsa). Un movimento diventa «movimento reale confermato» solo con fonti di notizie indipendenti. Tutto il resto segnalato dai controlli automatici resta «dato sospetto, non verificato».",
+  "Nella rielaborazione si escludono SOLO i tratti marcati exclude=true: tratti in cui la serie di Yahoo non rappresenta lo strumento quotato regolarmente al Nasdaq. Il titolo viene trattato come quotato dal primo giorno verificato (come un titolo entrato in borsa più tardi). Nessun prezzo viene corretto, riempito o inventato.",
+  "I dati sospetti non verificati restano nello studio e sono elencati nel rapporto di qualità con il periodo che possono influenzare.",
+  "Le variazioni estreme non vengono mai eliminate automaticamente."
+ ],
+ "listings": [
+  {"ticker": "FER", "regular": "2024-05-09", "note": "Ferrovial: quotazione delle azioni ordinarie al Nasdaq dal 9 maggio 2024 (prima solo Madrid e Amsterdam).",
+   "sources": ["https://newsroom.ferrovial.com/wp-content/uploads/sites/4/2024/05/20240509-f-pr-commencement-of-trading.pdf"]},
+  {"ticker": "HONA", "regular": "2026-06-29", "note": "Honeywell Aerospace: negoziazione «when-issued» dal 15 giugno 2026, quotazione regolare al Nasdaq dal 29 giugno 2026.",
+   "sources": ["https://www.sec.gov/Archives/edgar/data/0000773840/000077384026000072/exhibit991-pressrelease652.htm"]}
+ ],
+ "reviews": [
+  {"ticker": "FER", "from": "2015-10-01", "to": "2024-05-08", "status": "errore", "exclude": true,
+   "note": "Prima del 9 maggio 2024 la serie FER di Yahoo non è il titolo del Nasdaq: volume zero in 1.748 sedute, prezzo fermo per giorni e scambi sporadici di poche centinaia di azioni. I salti segnalati sono smentiti dalla quotazione principale di Madrid (FER.MC, convertita con EUR/USD): il 21 maggio 2018 la serie segna 11,99 (−30%) e il 23 maggio torna a 16,97 (+42%), mentre a Madrid il titolo sale dell'1% (17,375 → 17,54 €); a marzo 2020 la serie salta tra 27,94 e 19,51 (12, 13 e 16 marzo), mentre a Madrid il calo è graduale (26,42 € il 6 marzo, 20,20 € il 12, 17,49 € il 18).",
+   "sources": ["https://newsroom.ferrovial.com/wp-content/uploads/sites/4/2024/05/20240509-f-pr-commencement-of-trading.pdf", "Yahoo Finance FER.MC e EURUSD=X, chiusure non rettificate, scaricate il 4 novembre 2026"]},
+  {"ticker": "HONA", "from": "2026-06-15", "to": "2026-06-26", "status": "errore", "exclude": true,
+   "note": "Negoziazione «when-issued» prima della distribuzione (volumi da 400 a 44.000 azioni), non la quotazione regolare: il +35% del 16 giugno 2026 cade in questo tratto.",
+   "sources": ["https://www.sec.gov/Archives/edgar/data/0000773840/000077384026000072/exhibit991-pressrelease652.htm"]},
+  {"ticker": "MRNA", "from": "2026-08-19", "to": "2026-08-20", "status": "reale", "exclude": false,
+   "note": "+177% il 19 agosto 2026 (da 62,96 a 174,38 $, circa 185–199 milioni di azioni) dopo i risultati di fase 3 del vaccino personalizzato contro il melanoma con Merck; −23,5% il giorno dopo con volumi ancora molto alti.",
+   "sources": ["https://www.fool.com/investing/2026/08/19/why-moderna-stock-skyrocketed-today/", "https://www.bloomberg.com/news/articles/2026-08-19/moderna-s-160-surge-burns-shorts-in-painful-5-billion-loss", "https://www.biopharmadive.com/news/moderna-merck-intismeran-melanoma-vaccine-stock-reaction/828332/"]},
+  {"ticker": "HON", "from": "2026-06-29", "to": "2026-06-29", "status": "sospetto", "exclude": false,
+   "note": "Scorporo di Honeywell Aerospace (1 azione HONA ogni 2 HON) annunciato insieme a una riduzione del numero di azioni: la serie rettificata di Yahoo scende solo del 6,5% il 29 giugno 2026. Rettifica non verificata con una fonte indipendente.",
+   "sources": ["https://ground.news/article/honeywell-to-hand-investors-aerospace-shares-then-halve-stock-count"]}
+ ]
+}

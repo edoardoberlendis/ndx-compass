@@ -944,6 +944,15 @@ table.my td.nw { max-width: 280px; }
 /* ---------- Opportunità (phase O1): the two rankings, same table and badges as the rest of the page */
 .opp-tbl td.l { white-space: normal; }
 .opp-tbl td.why-c { min-width: 220px; max-width: 360px; color: var(--ink-2); }
+.inv-tbl td.why-c { min-width: 300px; max-width: 380px; }
+.inv-tbl td.why-c .small { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.inv-tbl th, .inv-tbl td { padding-left: 6px; padding-right: 6px; }
+.inv-tbl .inv-s { font: inherit; color: inherit; white-space: nowrap; }
+.inv-tbl .act { white-space: normal; max-width: 92px; text-align: center; }
+.inv-tbl td.why-c { min-width: 260px; }
+#dInv .scr td { white-space: normal; }
+#dInv .scr td.l:first-child { min-width: 150px; }
+#dInv .scr.mini tbody tr { cursor: default; }
 .opp-tbl td.warn-c { min-width: 160px; max-width: 280px; color: var(--ink-2); }
 .opp-tbl .opp-more { border: 0; background: none; color: var(--accent); font-weight: 600; font-size: var(--fs-xs); padding: 0 2px; }
 .opp-tbl tr.opp-x td { background: var(--surface-2); white-space: normal; text-align: left; cursor: default; }
@@ -956,3 +965,60 @@ table.my td.nw { max-width: 280px; }
 .opp-x .why { padding-left: 22px; }
 .opp-tbl .opp-flag { color: var(--warn); font-size: var(--fs-xs); font-weight: 600; margin-top: 2px; white-space: normal; }
 .opp-mkt { margin: 0 0 var(--sp-3); color: var(--ink-2); }
+.opp-state { margin: 0 0 var(--sp-2); color: var(--ink-2); }
+.scr td.wrap { white-space: normal; min-width: 260px; }
+
+/* Valutazione e scenari (phase 5B): range bar prudent → favourable, base tick, price dot */
+.vbar { position: relative; height: 14px; min-width: 150px; margin: 4px 0 2px; }
+.vbar::before { content: ""; position: absolute; left: 0; right: 0; top: 6px; height: 2px; background: var(--line); }
+.vbar .rng { position: absolute; top: 3px; height: 8px; background: var(--accent); opacity: .35; border-radius: 4px; min-width: 2px; }
+.vbar .tick { position: absolute; top: 0; width: 2px; height: 14px; margin-left: -1px; background: var(--accent); }
+.vbar .px { position: absolute; top: 2px; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%; background: var(--ink); border: 2px solid var(--surface); }
+.vbar.big { height: 40px; margin: 8px 0 4px; }
+.vbar.big .lb { position: absolute; top: 18px; font-size: var(--fs-xs); color: var(--ink-2); white-space: nowrap; transform: translateX(-10%); }
+.vbar.big .lb.mid { top: 28px; transform: translateX(-50%); }
+.vbar.big .lb.end { transform: translateX(-90%); }
+.val-tbl td.l { white-space: normal; }
+.val-tbl td:nth-child(4) { min-width: 170px; }
+.val-q { margin: 6px 0 10px; }
+.val-q td.l { white-space: normal; }
+.val-q td.l:first-child { color: var(--muted); width: 42%; }
+.val-tbl td:nth-child(7) { min-width: 150px; max-width: 220px; }
+.val-tbl td:nth-child(7) .small { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.val-tbl .act { white-space: normal; text-align: left; }
+.act.warn { color: var(--warn); border-color: var(--warn); }
+#dVal .scr td { white-space: normal; }
+#dVal .scr td.l:first-child { min-width: 150px; }
+#dVal .scr.mini tbody tr { cursor: default; }
+
+/* phase 6A: UCITS ETF catalogue and comparison (ETF tab, second mode) */
+#etfModeBar { margin: 0 0 12px; }
+.cat-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin: 4px 0 10px; }
+.cat-bar input[type=search] { flex: 1 1 260px; min-width: 0; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: var(--r-ctrl); background: var(--surface); color: var(--ink); font: inherit; }
+.cat-f { display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-xs); color: var(--muted); }
+.cat-f select { padding: 5px 6px; border: 1px solid var(--line-strong); border-radius: var(--r-ctrl); background: var(--surface); color: var(--ink); font: inherit; font-size: var(--fs-sm); max-width: 190px; }
+.cat-sel { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 0 10px; font-size: var(--fs-sm); }
+.cat-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border: 1px solid var(--line); border-radius: 999px; font-size: var(--fs-xs); color: var(--ink-2); background: var(--surface-2); white-space: nowrap; }
+.cat-chip.bad { color: var(--warn); border-color: currentColor; }
+.cat-chip button { border: 0; background: none; padding: 0 2px; color: inherit; cursor: pointer; }
+.cat-src { font-size: var(--fs-xs); color: var(--muted); }
+.cat-tbl tbody tr { cursor: pointer; }
+.cat-tbl tbody tr.on { background: var(--surface-2); }
+.cat-tbl td, .cat-tbl th { vertical-align: top; }
+.cat-ck { width: 18px; height: 18px; cursor: pointer; }
+.cat-kv { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
+.cat-kv th, .cat-kv td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+.cat-kv th { width: 32%; font-weight: 500; color: var(--ink-2); }
+.cat-kv td:last-child { width: 22%; }
+.cat-detail .fold, .cat-cmp .fold { margin-top: 8px; }
+.cat-detail .card-h .btn, .cat-cmp .card-h .btn { margin-left: auto; }
+.cmp-tbl th.l:first-child { min-width: 130px; }
+.cmp-tbl td { min-width: 150px; white-space: normal; }
+.cmp-tbl tr.same td { color: var(--muted); }
+@media (max-width: 640px) {
+  .cat-kv th { width: 40%; }
+  .cat-kv td:last-child { display: none; }
+  .cat-f select { max-width: 150px; }
+  .cmp-tbl td { min-width: 120px; }
+  .cmp-tbl th.l:first-child { min-width: 100px; }
+}

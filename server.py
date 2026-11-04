@@ -917,6 +917,7 @@ def worker():
         if not analysts.is_fresh():
             store.refresh_analysts(tickers)
         store.refresh_news_all(tickers)
+        refresh_fundamentals(tickers)                            # statements for the fundamental engine, in background
     except Exception as e:
         store.error = str(e)
         log.exception("startup failed")
@@ -939,6 +940,7 @@ def worker():
             portfolio.refresh()
             save_signal_diary()
             save_opportunity_diary()                             # opportunity diary (phase O2): never stops the loop
+            refresh_fundamentals(tickers)                        # at most every 30 minutes, only stocks that need it
             save_etf_diary()
             save_pos_diary()
             macro_calendar.refresh()                             # does real work at most once a day (more on release days)
@@ -1151,7 +1153,7 @@ def movers_why(n=8):
 app = Flask(__name__, static_folder=None)
 # version of the code that serves the page: change it together with PAGE_VERSION in static/app.js whenever the data
 # sent to the page changes, so that a server left running with old code is noticed (the page asks to restart it)
-DASHBOARD_VERSION = "2026-11-04d"
+DASHBOARD_VERSION = "2026-11-04k"
 
 
 @app.route("/")
@@ -1198,6 +1200,7 @@ def api_stock(ticker):
         "ta": store.ta.get(ticker),
         "fx": cached(("fx",), 900, eurusd) if ticker in store.ta else None,
         "decision": stock_decision(ticker, capital=request.args.get("capital", type=float)),
+        "accountsCurrency": accounts_currency(ticker),          # currency of the statements (Yahoo info figures use it)
     }, default=clean, allow_nan=False), mimetype="application/json")
 
 
@@ -1528,6 +1531,70 @@ def api_etf_why(isin):
     return (jsonify(w) if w is not None else (jsonify(error="ETF non trovato"), 404))
 
 
+@app.route("/api/etf/catalog")
+def api_etf_catalog():
+    """Catalogo ETF UCITS (phase 6A, etf_catalog.py): compact rows, filters and coverage. Public data only, read
+    from etf_catalog/ (rebuilt by hand with etf_catalog_build.py); never touches the portfolio."""
+    import etf_catalog
+    data = etf_catalog.load()
+    if not data:
+        return jsonify(status="missing", error="Catalogo non ancora costruito: .venv/bin/python etf_catalog_build.py")
+    a = request.args
+    filters = {k: a.get(k) for k in ("assetClass", "family", "issuer", "distribution", "replication", "hedged") if a.get(k)}
+    rows = etf_catalog.search(data, a.get("q", ""), filters)
+    excluded = [dict(etf_catalog.row(e), reason=e.get("exclusionReason")) for e in data["excluded"].values()]
+    return app.response_class(json.dumps({"status": "ok", "rows": rows, "facets": etf_catalog.facets(data), "summary": etf_catalog.summary(data),
+                                          "excluded": excluded, "notes": data["notes"],
+                                          "families": {r["family"]: r["familyLabel"] for r in etf_catalog.search(data, "")}},
+                                         default=clean), mimetype="application/json")
+
+
+@app.route("/api/etf/catalog/<key>")
+def api_etf_catalog_item(key):
+    """One catalogue entry (by ISIN or ticker) with its listings, exposure, sources, risks and similar ETFs."""
+    import etf_catalog
+    import etf_comparison
+    data = etf_catalog.load()
+    e = etf_catalog.find(data, key) or (data or {}).get("excluded", {}).get(key.upper()) if data else None
+    if not e:
+        return jsonify(error="ETF non trovato nel catalogo"), 404
+    similar = []
+    for other in data["items"].values():
+        if other["isin"] != e["isin"]:
+            lv, why = etf_comparison.pair_level(e, other)
+            if lv <= 3:
+                similar.append({"isin": other["isin"], "name": etf_catalog.val(other["identity"].get("name")), "level": lv,
+                                "label": etf_comparison.LEVELS[lv], "reasons": why, "tickers": etf_catalog.tickers(other)})
+    similar.sort(key=lambda s: (s["level"], s["name"] or ""))
+    used = set()
+
+    def walk(x):
+        if isinstance(x, dict):
+            if isinstance(x.get("src"), str):
+                used.add(x["src"])
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+    walk(e)
+    out = dict(e, risks=etf_comparison.risks(e), similar=similar[:12],
+               sources={s: data["sources"].get(s) for s in sorted(used) if data["sources"].get(s)}, disclaimer=etf_comparison.DISCLAIMER)
+    return app.response_class(json.dumps(out, default=clean), mimetype="application/json")
+
+
+@app.route("/api/etf/compare")
+def api_etf_compare():
+    """Comparison of 2-4 ETFs from the catalogue (etf_comparison.py): separate dimensions, no winner, no score."""
+    import etf_catalog
+    import etf_comparison
+    keys = [k for k in (request.args.get("isins") or "").split(",") if k.strip()]
+    out = etf_comparison.compare(etf_catalog.load(), keys)
+    if out.get("error"):
+        return jsonify(out), 400
+    return app.response_class(json.dumps(out, default=clean), mimetype="application/json")
+
+
 @app.route("/api/etf")
 def api_etf():
     """Ricerca → ETF (etf.py): public data of the day, plus "Ha senso per il mio portafoglio?" and "Ha senso comprare?"
@@ -1856,6 +1923,168 @@ def opportunities(keep_all=False, now=None):
     return data
 
 
+_inv = {"key": None, "data": None}
+INV_REFRESH_S = 30 * 60      # how often the worker checks whether some company's statements need a new download
+_inv_check = {"at": 0.0}
+
+
+def _inv_invalidate():
+    _inv.update(key=None, data=None)
+
+
+def investment_analysis(now=None, fresh=False):
+    """Fundamental analysis engine (investment_engine.py, phase 5A) on the data already on disk / in memory: no download.
+    Statements from cache/fundamentals.json, today's Yahoo info, analysts, trend on closed sessions, the unchanged
+    Pagella (Investimento ranking) only shown next to it. None while the first data load runs or without statements.
+    Cached like the rankings (10 minutes, or as soon as one of its inputs changes); fresh=True for the diary."""
+    import fundamentals
+    import investment_engine as ie
+    import opportunity_scanner
+    import technical  # local import: technical imports this module
+    with store.lock:
+        snap, daily = store.snapshot, store.daily
+    if snap is None or not daily:
+        return None
+    try:
+        fmtime = os.path.getmtime(fundamentals.CACHE)
+    except OSError:
+        return None
+    key = (id(daily), id(store.analysts), id(store.infos), fmtime, int(time.time() // OPPS_TTL_S))
+    if _inv["key"] == key and not fresh:
+        return _inv["data"]
+    now = now or datetime.now(ET)
+    fund = fundamentals.read()
+    if not fund.get("data"):
+        return None
+    rows = {r["ticker"]: r for r in snap["stocks"]}
+    universe = [{"ticker": t, "name": r.get("name"), "sector": r.get("sector")} for t, r in rows.items()]
+    closed = technical.closed_sessions({t: daily[t] for t in [*rows, SIGNAL_BENCH] if t in daily}, now)
+    bench = closed.get(SIGNAL_BENCH)
+    bclose = bench["Close"].dropna() if bench is not None else None
+    techs = {t: opportunity_scanner.tech(closed.get(t), bclose) for t in rows}
+    q252 = float(bclose.iloc[-1] / bclose.iloc[-253] - 1) * 100 if bclose is not None and len(bclose) > 253 else None
+    opp = opportunities(keep_all=True, now=now) or {}
+    pagella = {e["ticker"]: {"ok": e["ok"], "n": e["n"], "status": e["status"], "rank": e.get("rank"),
+                             "conditions": [{"id": c["id"], "name": c["name"], "state": c["state"]} for c in e["conditions"]]}
+               for e in (opp.get("invest") or {}).get("all") or []}
+    import analysts
+    infos_file = read_cache("infos.json", 400 * 86400) or {}
+    data = ie.analyze_all(universe, fund, store.infos, store.analysts, techs, now, q252=q252, pagella=pagella,
+                          infos_date=infos_file.get("date"), analysts_date=(analysts.read_cache() or {}).get("date"))
+    if not fresh:
+        _inv.update(key=key, data=data)
+    return data
+
+
+def refresh_fundamentals(tickers, force=False):
+    """Background download of the statements that need it (fundamentals.py rules), at most every INV_REFRESH_S."""
+    import fundamentals
+    if not force and time.time() - _inv_check["at"] < INV_REFRESH_S:
+        return False
+    _inv_check["at"] = time.time()
+    return fundamentals.refresh_async(tickers, on_done=_inv_invalidate)
+
+
+def save_investment_diary(day, now, source):
+    """Judgements of the fundamental engine for a session the opportunity diary has already recorded (same file, new
+    tables: investment_diary.py). Never the first record of a diary, never twice; a failure never stops the loop."""
+    try:
+        import investment_diary as invd
+        import investment_engine as ie
+        import opportunity_diary as od
+        import opportunity_scanner
+        if not od.exists(day, opportunity_scanner.MODEL_VERSION):
+            return "analisi fondamentale: diario delle opportunità non registrato per questa seduta"
+        if invd.exists(day, ie.VERSION):
+            return "analisi fondamentale già registrata"
+        if _inv_check.get("diaryDay") == day and time.time() - _inv_check.get("diaryAt", 0) < INV_REFRESH_S:
+            return "analisi fondamentale: nuovo tentativo tra poco"
+        _inv_check.update(diaryDay=day, diaryAt=time.time())
+        data = investment_analysis(now=now, fresh=True)
+        if not data:
+            return "analisi fondamentale non calcolabile (bilanci non ancora scaricati)"
+        saved, why = invd.record(data, day, now.isoformat(timespec="seconds"), source, opportunity_scanner.MODEL_VERSION)
+        if saved:
+            log.info("investment diary: %s for %s (%s)", why, day, source)
+        return "analisi fondamentale: " + why
+    except Exception:
+        log.exception("investment diary not saved")
+        return "analisi fondamentale: errore, vedi cache/server.log"
+
+
+_val = {"key": None, "data": None}
+
+
+def valuation_analysis(now=None, fresh=False, closing=False):
+    """Valuation and scenarios (investment_valuation.py, phase 5B) on top of the phase 5A analysis, from the data already
+    on disk / in memory: no download. Page: current quote with its time; closing=True (diary): the closing prices of
+    the last closed session. Cached together with the 5A analysis (same key)."""
+    import fundamentals
+    import investment_valuation as iv
+    inv = investment_analysis(now=now, fresh=fresh)
+    if not inv:
+        return None
+    key = (id(inv), int(time.time() // OPPS_TTL_S))
+    if _val["key"] == key and not fresh and not closing:
+        return _val["data"]
+    now = now or datetime.now(ET)
+    with store.lock:
+        snap = store.snapshot
+    closes = {x["ticker"]: {"close": x["price"], "date": x["priceDate"]} for x in inv["items"]}
+    quotes = None
+    if not closing and snap:
+        qt = snap.get("lastQuote") or snap.get("asOf")
+        quotes = {r["ticker"]: {"price": r.get("price"), "time": qt} for r in snap["stocks"]}
+    data = iv.analyze_all(inv, fundamentals.read(), store.infos, store.analysts, now, quotes=quotes, closes=closes)
+    if not fresh and not closing:
+        _val.update(key=key, data=data)
+    return data
+
+
+def save_valuation_diary(day, now, source):
+    """Valuations of a session the opportunity diary has already recorded (valuation_diary.py), with the closing
+    prices of that session. Never the first record of a diary, never twice; a failure never stops the loop."""
+    try:
+        import investment_valuation as iv
+        import opportunity_diary as od
+        import opportunity_scanner
+        import valuation_diary as vd
+        if not od.exists(day, opportunity_scanner.MODEL_VERSION):
+            return "valutazioni: diario delle opportunità non registrato per questa seduta"
+        if vd.exists(day, iv.VERSION):
+            return "valutazioni già registrate"
+        if _val.get("diaryDay") == day and time.time() - _val.get("diaryAt", 0) < INV_REFRESH_S:
+            return "valutazioni: nuovo tentativo tra poco"
+        _val.update(diaryDay=day, diaryAt=time.time())
+        data = valuation_analysis(now=now, fresh=True, closing=True)
+        if not data:
+            return "valutazioni non calcolabili (bilanci non ancora scaricati)"
+        saved, why = vd.record(data, day, now.isoformat(timespec="seconds"), source, opportunity_scanner.MODEL_VERSION)
+        if saved:
+            log.info("valuation diary: %s for %s (%s)", why, day, source)
+        return "valutazioni: " + why
+    except Exception:
+        log.exception("valuation diary not saved")
+        return "valutazioni: errore, vedi cache/server.log"
+
+
+_acc = {"mtime": None, "map": {}}
+
+
+def accounts_currency(ticker):
+    """Currency of the company's statements (fundamentals cache), so the page never labels CNY or EUR figures with "$".
+    None when not known."""
+    import fundamentals
+    try:
+        mt = os.path.getmtime(fundamentals.CACHE)
+    except OSError:
+        return None
+    if _acc["mtime"] != mt:
+        _acc.update(mtime=mt, map={t: (e.get("info") or {}).get("financialCurrency")
+                                   for t, e in (fundamentals.read().get("data") or {}).items()})
+    return _acc["map"].get(ticker)
+
+
 _od = {"measured": None}     # last session for which the matured results were measured (once per new closed session)
 
 
@@ -1889,6 +2118,8 @@ def save_opportunity_diary(source="dashboard"):
             saved, msg = od.record(data, day, now.isoformat(timespec="seconds"), source)
             if saved:
                 log.info("opportunity diary: %s for %s (%s)", msg, day, source)
+        msg += "; " + save_investment_diary(day, now, source)
+        msg += "; " + save_valuation_diary(day, now, source)
         if _od["measured"] != day:
             closed = technical.closed_sessions(daily, now)
             new = od.update_outcomes({t: od.as_map(df["Close"]) for t, df in closed.items() if t != SIGNAL_BENCH},
@@ -1952,6 +2183,134 @@ def api_opportunities_diary():
     except Exception:
         log.exception("opportunity diary stats failed")
         return jsonify({"error": "diario delle opportunità non leggibile"}), 500
+
+
+@app.route("/api/investment")
+def api_investment():
+    """Fundamental analysis engine (phase 5A, experimental): one compact row per company, model, coverage, groups.
+    Analytic profiles, never buy/sell signals. Without statements yet: available=false with the reason (the worker
+    downloads them in background; nothing is downloaded by this request)."""
+    import fundamentals
+    import investment_diary
+    import investment_engine as ie
+    if store.error:
+        return jsonify({"error": store.error}), 500
+    try:
+        data = investment_analysis()
+    except Exception:
+        log.exception("investment analysis failed")
+        return jsonify({"error": "analisi fondamentale non riuscita"}), 500
+    try:
+        diary = investment_diary.stats()
+    except Exception:
+        log.exception("investment diary stats failed")
+        diary = None
+    if data is None:
+        why = ("dati di mercato in caricamento" if store.snapshot is None else
+               "bilanci non ancora scaricati: il download parte in background (qualche minuto)")
+        if store.snapshot is not None and store.constituents:
+            refresh_fundamentals([c["ticker"] for c in store.constituents], force=True)
+        out = {"available": False, "reason": why, "fundamentals": fundamentals.status(), "diary": diary,
+               "model": {"version": ie.VERSION}}
+    else:
+        out = {"available": True, "model": data["model"], "generated": data["generated"], "coverage": data["coverage"],
+               "groups": data["groups"], "fx": data["fx"], "dataDates": data["dataDates"],
+               "items": [ie.compact(x) for x in data["items"]], "fundamentals": fundamentals.status(), "diary": diary}
+    return app.response_class(json.dumps(out, default=clean, allow_nan=False), mimetype="application/json")
+
+
+@app.route("/api/investment/<ticker>")
+def api_investment_one(ticker):
+    """Full analysis of one company (indicators with periods and sources, peers, limits, things to monitor)."""
+    try:
+        data = investment_analysis()
+    except Exception:
+        log.exception("investment analysis failed")
+        return jsonify({"error": "analisi fondamentale non riuscita"}), 500
+    if data is None:
+        return jsonify({"error": "analisi non ancora disponibile"}), 503
+    item = next((x for x in data["items"] if x["ticker"] == ticker.upper()), None)
+    if item is None:
+        return jsonify({"error": f"{ticker.upper()} non è nell'universo analizzato"}), 404
+    out = {**item, "engineVersion": data["model"]["version"], "generated": data["generated"]}
+    return app.response_class(json.dumps(out, default=clean, allow_nan=False), mimetype="application/json")
+
+
+@app.route("/api/valuation")
+def api_valuation():
+    """Valuation and scenarios (phase 5B, experimental): one compact row per company, model and parameters. Ranges of
+    values conditional on explicit assumptions: never a target price, a buy/sell signal or a probability."""
+    import investment_valuation as iv
+    import valuation_diary
+    if store.error:
+        return jsonify({"error": store.error}), 500
+    try:
+        data = valuation_analysis()
+    except Exception:
+        log.exception("valuation failed")
+        return jsonify({"error": "valutazione non riuscita"}), 500
+    try:
+        diary = valuation_diary.stats()
+    except Exception:
+        log.exception("valuation diary stats failed")
+        diary = None
+    if data is None:
+        out = {"available": False, "reason": "analisi fondamentale non ancora disponibile (dati in caricamento o bilanci "
+                                             "non ancora scaricati)", "model": {"version": iv.VERSION}, "diary": diary}
+    else:
+        out = {"available": True, "model": data["model"], "generated": data["generated"], "rates": data["rates"],
+               "fx": data["fx"], "counts": data["counts"], "dataDates": data["dataDates"],
+               "items": [iv.compact(x) for x in data["items"]], "diary": diary}
+    return app.response_class(json.dumps(out, default=clean, allow_nan=False), mimetype="application/json")
+
+
+@app.route("/api/valuation/<ticker>")
+def api_valuation_one(ticker):
+    """Full valuation of one company: scenarios with assumptions, sensitivity, implied expectations, data and limits."""
+    try:
+        data = valuation_analysis()
+    except Exception:
+        log.exception("valuation failed")
+        return jsonify({"error": "valutazione non riuscita"}), 500
+    if data is None:
+        return jsonify({"error": "valutazione non ancora disponibile"}), 503
+    item = next((x for x in data["items"] if x["ticker"] == ticker.upper()), None)
+    if item is None:
+        return jsonify({"error": f"{ticker.upper()} non è nell'universo analizzato"}), 404
+    out = {**item, "modelVersion": data["model"]["version"], "generated": data["generated"],
+           "params": data["model"]["params"], "groups": data["model"]["groups"]}
+    return app.response_class(json.dumps(out, default=clean, allow_nan=False), mimetype="application/json")
+
+
+@app.route("/api/opportunities/validation")
+def api_opportunities_validation():
+    """Summary of the latest study of the validation lab (phase O3): only read from data/validazione/riepilogo.json,
+    written by `opportunity_validation.py run`. Never computed here, so the dashboard is not slowed down."""
+    import opportunity_diary
+    import opportunity_validation
+    x = opportunity_validation.read_summary()
+    recheck = opportunity_validation.read_recheck()
+    try:
+        diary = opportunity_diary.stats()          # read only: an absent diary is not created
+    except Exception:
+        log.exception("opportunity diary stats failed")
+        diary = None
+    out = {"available": False} if x is None else {"available": True, **x}
+    out["recheck"] = recheck
+    out["diary"] = {"started": bool(diary and diary.get("started")), "days": (diary or {}).get("days", 0),
+                    "first": (diary or {}).get("first"), "last": (diary or {}).get("last")} if diary is not None else None
+    out["reliability"] = opportunity_validation.reliability(x, recheck, diary)
+    return app.response_class(json.dumps(out, default=clean, allow_nan=False), mimetype="application/json")
+
+
+@app.route("/api/opportunities/strategies")
+def api_opportunities_strategies():
+    """Summary of the experimental strategies of phase 4B: only read from data/strategie/riepilogo.json, written by
+    `opportunity_strategies.py run`. Never computed here (no slowdown, no influence on the scanner)."""
+    import opportunity_strategies
+    x = opportunity_strategies.read_summary()
+    out = {"available": False} if x is None else {"available": True, "summary": x}
+    return app.response_class(json.dumps(out, default=clean, allow_nan=False), mimetype="application/json")
 
 
 @app.route("/api/patterns")

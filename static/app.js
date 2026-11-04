@@ -168,7 +168,7 @@ function spark(values, w = 80, h = 22, base = null, color = null) {
 
 // ------------------------------------------------------------ data
 // must equal DASHBOARD_VERSION in server.py: otherwise the server runs old code and the page says so
-const PAGE_VERSION = "2026-11-04d";
+const PAGE_VERSION = "2026-11-04k";
 async function load() {
   const r = await fetch("/api/snapshot", { cache: "no-store" });
   const sv = r.headers.get("X-Dashboard-Version");
@@ -2117,19 +2117,20 @@ async function loadDetailInfo() {
       ${stat("PEG", fNum(data.valuation?.peg ?? s.peg, 2))}${stat("P/S", fNum(i.priceToSalesTrailing12Months, 1))}
       ${stat("EV/EBITDA", fNum(i.enterpriseToEbitda, 1))}${stat("Crescita ricavi", isNum(i.revenueGrowth) ? fPct(i.revenueGrowth * 100, 1) : "—")}
       ${stat("Margine lordo", pctOf(i.grossMargins))}${stat("Margine netto", pctOf(i.profitMargins))}
-      ${stat("Flusso di cassa libero", "$" + fBig(i.freeCashflow))}${stat("ROE", pctOf(i.returnOnEquity))}
+      ${stat("Flusso di cassa libero", accMoney(i.freeCashflow, data.accountsCurrency))}${stat("ROE", pctOf(i.returnOnEquity))}
       ${stat("Utile per azione (12 mesi)", fNum(i.trailingEps, 2))}${stat("Utile per azione atteso", fNum(i.forwardEps, 2))}
-      ${stat("Ricavi (12 mesi)", "$" + fBig(i.totalRevenue))}${stat("Rendimento dividendo", isNum(i.dividendYield) && i.dividendYield > 0 ? fNum(i.dividendYield, 2) + "%" : "—")}
+      ${stat("Ricavi (12 mesi)", accMoney(i.totalRevenue, data.accountsCurrency))}${stat("Rendimento dividendo", isNum(i.dividendYield) && i.dividendYield > 0 ? fNum(i.dividendYield, 2) + "%" : "—")}
     </div>`;
   // index stocks: the Trend block lives inside "Decisione" (block 3), not twice
   const hasTA = !!(s.ticker && data.decision);
   Object.assign(dTA, { t, ta: data.ta || null, D: hasTA ? data.decision : null, fx: data.fx, trend: trend.replace('<div class="d-sec"><h3>Trend</h3>', '<div>'), sel: {} });
   drawer.querySelector(".d-rest").innerHTML = `${hasTA ? `<div class="d-sec ta" id="dTA"></div>` : ""}<div class="d-cols">
       <div class="d-col">${hasTA ? "" : trend}${s.ticker ? valuationHTML(data.valuation, fundamentals) : ""}</div>
-      <div class="d-col">${s.ticker ? analystsHTML(data.analysts, s, tgt) : ""}${newsSec}</div></div>${company}`;
+      <div class="d-col">${s.ticker ? analystsHTML(data.analysts, s, tgt, data.accountsCurrency) : ""}${newsSec}</div></div>${s.ticker ? `<div class="d-sec" id="dInv"><h3>Analisi investimento</h3><div class="muted small">Carico…</div></div><div class="d-sec" id="dVal"><h3>Valutazione e scenari</h3><div class="muted small">Carico…</div></div>` : ""}${company}`;
   drawer.querySelector(".d-sum").innerHTML = signalHTML(data.signal);
   if (hasTA) { renderTA(); taEnsure(); }
   renderDetailNews();
+  if (s.ticker) { loadDetailInv(t); loadDetailVal(t); }
   const more = $("#aboutMore");
   if (more) more.onclick = () => { $("#about").classList.toggle("clamp"); more.textContent = $("#about").classList.contains("clamp") ? "Mostra altro" : "Mostra meno"; };
 }
@@ -2213,7 +2214,15 @@ function valuationHTML(v, table = "") {
     (P/E e P/S alle ultime chiusure di bilancio). Giudizio: Economica sotto −15%, Cara sopra +18%.</div></div>`;
 }
 const ACT_IT = { up: "Upgrade", down: "Downgrade", init: "Avvio copertura", main: "Conferma", reit: "Conferma" };
-function analystsHTML(a, s, tgt = "") {
+// Figures in the currency of the statements (phase 5B fix): "$" only when the accounts are in USD; PDD (CNY) or ASML
+// (EUR) amounts from Yahoo are in their own currency, not in dollars. Unknown currency: said in words.
+function accMoney(v, cur) {
+  if (!isNum(v)) return "—";
+  if (cur === "USD") return "$" + fBig(v);
+  return fBig(v) + (cur ? " " + cur : " (valuta del bilancio)");
+}
+
+function analystsHTML(a, s, tgt = "", accCur = null) {
   if (!a) return `<div class="d-sec"><h3>Analisti</h3>${tgt}<div class="muted">Dati degli analisti in caricamento (si aggiornano una volta al giorno)</div></div>`;
   const rt = a.recTrend || [], now = rt[0], old = rt[3];
   const KEYS = [["strongBuy", "Forte acquisto"], ["buy", "Acquisto"], ["hold", "Mantenere"], ["sell", "Vendita"], ["strongSell", "Forte vendita"]];
@@ -2228,7 +2237,7 @@ function analystsHTML(a, s, tgt = "") {
     ${cnt(x => x.action === "init")} nuove coperture · target alzati ${cnt(x => x.ptAction === "Raises")}, abbassati ${cnt(x => x.ptAction === "Lowers")}`;
   const e = a.eps || {}, r = a.rev || {}, tr = (a.epsTrend || {})["+1y"] || {}, rv = (a.revisions || {})["+1y"] || {};
   const chg = (x, y) => isNum(x) && isNum(y) && y ? (x / y - 1) * 100 : null;
-  const cell = (o, big) => o ? `<td class="num">${big ? "$" + fBig(o.avg) : fNum(o.avg, 2)}</td><td class="num ${sign(o.growth)}">${isNum(o.growth) ? fPct(o.growth * 100, 1) : "—"}</td>` : "<td>—</td><td>—</td>";
+  const cell = (o, big) => o ? `<td class="num">${big ? accMoney(o.avg, accCur) : fNum(o.avg, 2)}</td><td class="num ${sign(o.growth)}">${isNum(o.growth) ? fPct(o.growth * 100, 1) : "—"}</td>` : "<td>—</td><td>—</td>";
   const est = `<table class="est"><thead><tr><th class="l">Stime medie</th><th colspan="2">Anno in corso</th><th colspan="2">Prossimo anno</th></tr>
     <tr><th></th><th>valore</th><th>crescita</th><th>valore</th><th>crescita</th></tr></thead>
     <tbody><tr><td class="l">Utile per azione</td>${cell(e["0y"])}${cell(e["+1y"])}</tr><tr><td class="l">Ricavi</td>${cell(r["0y"], true)}${cell(r["+1y"], true)}</tr></tbody></table>
@@ -2469,6 +2478,8 @@ function etfNotice(D) {
   return out.length ? `<p class="warn-box etf-notice">${out.join("<br>")}</p>` : "";
 }
 function renderEtf() {
+  etfModeBar();                                                       // phase 6A: market table or UCITS catalogue
+  if (etfC.mode === "cat") { if (!etfC.drawn) loadEtfCat(); return; }
   const el = $("#etfBody"), D = etfS.data;
   if (!D || D.status === "error") { el.innerHTML = `<div class="card empty"><b>Prezzi degli ETF non disponibili</b>${D?.error ? ` (${esc(D.error)})` : ""}.${D?.retryAt ? ` Nuovo tentativo alle ${hm(D.retryAt)}.` : ""}</div>`; return; }
   if (D.status === "loading") { el.innerHTML = `<div class="card empty">Calcolo in corso: scarico i prezzi di 63 ETF e le composizioni (qualche minuto la prima volta al giorno)…</div>`; return; }
@@ -2524,6 +2535,229 @@ async function loadEtfDiary() {
   const el = $("#etfDiaryBody");
   try { el.innerHTML = etfDiaryHTML(await getJSON("/api/etf/diary"), "1 mese") + etfDiaryHTML.more; } catch { el.textContent = "Diario degli ETF non disponibile al momento."; }
 }
+// ---------------------------------------------------------------- phase 6A: UCITS ETF catalogue and comparison
+// A second mode of the ETF tab, next to the market table above (which stays as it is). Public data from etf_catalog/
+// (rebuilt by hand with etf_catalog_build.py): identity, listings, costs, structure, exposure, sources. No verdict,
+// no score, no winner; the portfolio is never read here.
+const etfC = { mode: LS.get("etfMode", "market"), data: null, err: null, q: "", f: {}, sel: [], detail: null, item: null, cmp: null, cmpErr: null, drawn: false };
+const ETF_CAT_AC = { azionario: "Azionari", obbligazionario: "Obbligazionari", monetario: "Monetari", materie_prime: "Materie prime" };
+const CMP_LEVEL_CLS = { 1: "acc", 2: "wait", 3: "rev", 4: "red" };
+const ETF_CAT_INFO = `<b>Come leggere il catalogo.</b> L'<b>ISIN</b> identifica la classe del fondo: lo stesso ETF può avere più ticker su borse diverse,
+  ma resta una sola riga. La <b>valuta di negoziazione</b> (in cui lo compri) non è l'<b>esposizione valutaria</b> (le valute dei titoli che possiede),
+  a meno che la classe sia coperta (hedged). Ogni dato ha la sua fonte e la sua data; un dato mancante resta «n.d.», mai zero.
+  La disponibilità presso il tuo broker (Fineco) <b>non è verificata</b>.`;
+const yn = v => v === true ? "coperta" : v === false ? "non coperta" : "n.d.";
+const catPct = v => isNum(v) ? fNum(v, 2) + "%" : "n.d.";
+const srcTag = f => f && (f.src || f.asOf) ? `<span class="cat-src">${esc(f.src || "")}${f.asOf ? ` · ${esc(dayIT(f.asOf.slice(0, 10)))}` : ""}</span>` : "";
+const fvText = (f, fmt) => f == null || f.v == null || (Array.isArray(f.v) && !f.v.length) ? "n.d." : fmt ? fmt(f.v) : f.v === true ? "sì" : f.v === false ? "no" : String(f.v);
+function etfModeBar() {
+  const bar = $("#etfModeBar");
+  if (!bar) return;
+  bar.innerHTML = `<div class="seg etf-mode">${[["market", "Mercato ETF"], ["cat", "Catalogo UCITS e confronto"]].map(([k, l]) =>
+    `<button data-etfmode="${k}" class="${etfC.mode === k ? "on" : ""}">${l}</button>`).join("")}</div>`;
+  $("#etfBody").hidden = etfC.mode === "cat";
+  $("#etfCatBody").hidden = etfC.mode !== "cat";
+}
+async function loadEtfCat() {
+  if (!etfC.data) {
+    try { etfC.data = await getJSON("/api/etf/catalog"); etfC.err = etfC.data.status === "ok" ? null : etfC.data.error; }
+    catch { etfC.err = "server non raggiungibile"; }
+  }
+  renderEtfCat();
+}
+function etfCatRows() {
+  const D = etfC.data, words = etfC.q.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").split(/\s+/).filter(Boolean);
+  return (D?.rows || []).filter(r => {
+    const hay = [r.isin, r.name, r.issuer, r.index, r.category, r.familyLabel, ...(r.tickers || [])].join(" ").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+    if (!words.every(w => hay.includes(w))) return false;
+    return Object.entries(etfC.f).every(([k, v]) => !v || (k === "hedged" ? String(!!r.hedged) === v : String(r[k]) === v));
+  });
+}
+function etfCatListHTML() {
+  const rows = etfCatRows(), full = etfC.sel.length >= 4;
+  if (!rows.length) return `<p class="empty">Nessun ETF corrisponde alla ricerca e ai filtri.</p>`;
+  return `<div class="table-wrap"><table class="scr cat-tbl"><thead><tr><th class="l">ETF</th><th class="l p3">ISIN · ticker</th><th>TER</th>
+      <th class="l p4">Proventi</th><th class="l p4">Cambio</th><th class="l p3">Dati</th><th>Confronta</th></tr></thead><tbody>
+    ${rows.map(r => { const on = etfC.sel.includes(r.isin);
+      return `<tr data-catisin="${esc(r.isin)}" class="${etfC.detail === r.isin ? "on" : ""}"><td class="l"><b>${esc(r.category || "")}</b>${r.theme ? ` <span class="cat-chip">tema</span>` : ""}
+        ${r.status?.startsWith("aggiunto") ? ` <span class="cat-chip">da approvare</span>` : ""}<div class="muted small">${esc(r.name || "")}</div>
+        <div class="muted sub2 s3">${esc(r.isin)} · ${esc((r.tickers || []).filter(t => !t.includes(".")).join(", "))}</div></td>
+        <td class="l p3 small">${esc(r.isin)}<div class="muted">${esc((r.tickers || []).filter(t => !t.includes(".")).join(", ") || "nessuna quotazione")}</div></td>
+        <td>${catPct(r.ter)}</td><td class="l p4 small">${esc(r.distribution || "n.d.")}</td><td class="l p4 small">${yn(r.hedged)}</td>
+        <td class="l p3 small">${esc(r.completeness)}${r.stale?.length ? " · datati" : ""}</td>
+        <td><input type="checkbox" class="cat-ck" data-catsel="${esc(r.isin)}" ${on ? "checked" : ""} ${!on && full ? "disabled" : ""} aria-label="Confronta ${esc(r.category || r.isin)}"></td></tr>`; }).join("")}
+    </tbody></table></div><p class="muted small">${rows.length} ETF · clic su una riga per la scheda · spunta fino a 4 ETF per confrontarli.</p>`;
+}
+function etfCatSelHTML() {
+  const D = etfC.data, name = i => D.rows.find(r => r.isin === i)?.category || i;
+  return etfC.sel.length ? `<div class="cat-sel">Da confrontare: ${etfC.sel.map(i => `<span class="cat-chip">${esc(name(i))} <button data-catsel="${esc(i)}" aria-label="Togli">✕</button></span>`).join(" ")}
+      <button class="btn" data-catcmp ${etfC.sel.length < 2 ? "disabled" : ""}>Confronta (${etfC.sel.length})</button> <button class="btn ghost" data-catclear>Svuota</button></div>`
+    : `<p class="muted small">Spunta 2–4 ETF nell'elenco (o usa «Confronta» dalla scheda di un ETF) per vederli affiancati.</p>`;
+}
+function renderEtfCat() {
+  const el = $("#etfCatBody"), D = etfC.data;
+  if (!el) return;
+  etfC.drawn = true;
+  if (etfC.err || !D) { el.innerHTML = `<div class="card empty">${D || etfC.err ? `Catalogo non disponibile: ${esc(etfC.err || "")}` : "Carico il catalogo…"}</div>`; return; }
+  const S = D.summary, F = D.facets || {};
+  const opt = (k, label, values, lab = x => x) => `<label class="cat-f"><span>${label}</span><select data-catf="${k}"><option value="">tutti</option>
+      ${values.filter(v => v != null && v !== "null").map(v => `<option value="${esc(v)}" ${String(etfC.f[k] ?? "") === String(v) ? "selected" : ""}>${esc(lab(v))}</option>`).join("")}</select></label>`;
+  el.innerHTML = `<p class="warn-box"><b>Catalogo informativo, non una classifica.</b> Serve a identificare e confrontare ETF UCITS con dati verificabili:
+      nessun segnale di acquisto o vendita, nessun punteggio, nessun «vincitore». Un costo più basso non rende un ETF migliore da solo. Non è una consulenza finanziaria. ${info(ETF_CAT_INFO)}</p>
+    <div class="card"><div class="card-h"><h2>Catalogo ETF UCITS</h2><span class="card-meta">${S.etfs} ETF · ${S.listings} quotazioni · completezza media ${fNum(S.completenessAvg * 100, 0)}% ·
+      aggiornato il ${esc(dayIT(S.builtAt.slice(0, 10)))} (a mano, con etf_catalog_build.py)</span></div>
+      <div class="cat-bar"><input type="search" id="etfCatQ" placeholder="Cerca per nome, ticker, ISIN, emittente, indice…" value="${esc(etfC.q)}" aria-label="Cerca nel catalogo">
+        ${opt("assetClass", "Tipo", Object.keys(F.assetClass || {}), v => ETF_CAT_AC[v] || v)}
+        ${opt("family", "Categoria", Object.keys(D.families || {}), v => D.families[v] || v)}
+        ${opt("issuer", "Emittente", Object.keys(F.issuer || {}).sort())}
+        ${opt("distribution", "Proventi", Object.keys(F.distribution || {}))}
+        ${opt("hedged", "Cambio", ["true", "false"], v => v === "true" ? "coperto" : "non coperto")}</div>
+      <div id="etfCatSel">${etfCatSelHTML()}</div>
+      <div id="etfCatList">${etfCatListHTML()}</div></div>
+    <div id="etfCatCmp">${etfCmpHTML()}</div>
+    <div id="etfCatDetail">${etfDetailHTML()}</div>
+    <details class="card fold"><summary><span class="small"><b>Prodotti esclusi dal catalogo ordinario</b> (${D.excluded.length}): ETC, ETN, leva, inversi, non UCITS</span></summary>
+      <ul class="why">${D.excluded.map(x => `<li><b>${esc(x.category || x.isin)}</b> ${esc(x.name || "")} (${esc(x.isin)}): ${esc(x.reason || "")}</li>`).join("") || "<li>nessuno</li>"}</ul>
+      <p class="muted small">Restano visibili nella scheda «Mercato ETF» come prima: qui sono tenuti separati perché non sono fondi UCITS o hanno rischi diversi.</p></details>
+    <details class="card fold"><summary><span class="small"><b>Limiti dei dati</b></span></summary><ul class="why">${(D.notes || []).map(n => `<li>${esc(n)}</li>`).join("")}
+      <li>I dati di justETF sono la copia salvata l'8 ottobre 2026 (non vengono riscaricati in automatico); paesi e settori hanno la data indicata da justETF.</li>
+      <li>Le classi «da approvare» sono state aggiunte nella Fase 6A per mostrare la differenza tra fondo e classe: non sono nella scheda «Mercato ETF».</li></ul></details>`;
+}
+function etfDetailHTML() {
+  const e = etfC.item;
+  if (!etfC.detail) return "";
+  if (!e) return `<div class="card empty">Carico la scheda…</div>`;
+  if (e.error) return `<div class="card empty">${esc(e.error)}</div>`;
+  const I = e.identity, Fd = e.fund, C = e.costs, X = e.exposure || {}, B = e.bond || {}, K = e.classification || {};
+  const line = (label, f, fmt, extra = "") => `<tr><th class="l">${label}</th><td class="l">${esc(fvText(f, fmt))}${extra}${f?.note ? `<div class="muted small">${esc(f.note)}</div>` : ""}</td><td class="l">${srcTag(f)}</td></tr>`;
+  const st = s => s ? ` <span class="cat-chip ${s === "discordante" ? "bad" : ""}">${esc(s)}</span>` : "";
+  const list = v => v.map(x => `${etfIt(x.name)} ${fNum(x.weight, 1)}%`).join(", ");
+  const listings = (e.listings || []).map(l => `<tr><td class="l">${esc(l.venue)}</td><td class="l">${esc(l.mic)}</td><td class="l"><b>${esc(l.ticker)}</b></td>
+      <td class="l">${esc(fvText(l.currency))}</td><td>${isNum(l.avgTurnover3m?.v) ? fNum(l.avgTurnover3m.v, 0) : "n.d."}</td>
+      <td class="l small">${l.spread ? (l.spread.representative ? catPct(l.spread.v) : `book letto a mercato chiuso (${esc(l.spread.at.slice(11, 16))}), non rappresentativo`) : "n.d."}</td></tr>`).join("");
+  const bond = K.assetClass === "obbligazionario" || K.assetClass === "monetario";
+  return `<div class="card cat-detail"><div class="card-h"><h2>${esc(K.label || "")}: ${esc(fvText(I.name))}</h2>
+      <span class="card-meta">${esc(e.isin)} · ${esc(e.status || "")}${e.statusNote ? ` (${esc(e.statusNote)})` : ""}</span>
+      <button class="btn ghost" data-catclose aria-label="Chiudi la scheda">Chiudi</button></div>
+    <p class="small">Completezza: <b>${esc(e.completeness.state)}</b> (${fNum(e.completeness.share * 100, 0)}%)${e.completeness.missing.length ? ` · mancano: ${esc(e.completeness.missingLabels.join(", "))}` : ""}
+      ${e.freshness.stale.length ? ` · <b>dati datati</b>: ${esc(e.freshness.stale.join(", "))}` : ""}</p>
+    <details class="fold" open><summary><b>Identità e classe</b></summary><table class="cat-kv">
+      ${line("Nome", I.name)}${line("Fondo", I.fundName)}${line("Emittente", I.issuer)}${line("Società (Borsa Italiana)", I.legalEntity)}
+      ${line("Domicilio", I.domicile)}${line("UCITS", I.ucits)}${line("Tipo di prodotto", I.productType)}${line("Classe", I.shareClass)}
+      ${line("Valuta della classe (NAV)", Fd.baseCurrency, null, st(Fd.baseCurrencyState))}${line("Copertura del cambio", Fd.hedged, yn, st(Fd.hedgedState))}
+      ${line("Proventi", Fd.distribution, null, st(Fd.distributionState))}${line("Frequenza dei proventi", Fd.distributionFrequency)}
+      ${line("Indice", I.index)}${line("Benchmark su Borsa Italiana", I.benchmarkExchange)}</table></details>
+    <details class="fold" open><summary><b>Quotazioni</b> (stesso ISIN, borse e ticker diversi)</summary>
+      ${listings ? `<div class="table-wrap"><table class="scr"><thead><tr><th class="l">Borsa</th><th class="l">MIC</th><th class="l">Ticker</th><th class="l">Valuta</th><th>Scambi medi/giorno (3 mesi)</th><th class="l">Spread</th></tr></thead><tbody>${listings}</tbody></table></div>`
+        : `<p class="small">Nessuna quotazione trovata sulle borse controllate (Borsa Italiana, Xetra).</p>`}
+      <p class="muted small">Valuta di negoziazione = quella in cui compri. Volumi da Yahoo (indicativi), book da Borsa Italiana (ritardato 15 min). Disponibilità presso il broker: <b>non verificata</b>.</p></details>
+    <details class="fold"><summary><b>Costi</b></summary><table class="cat-kv">
+      ${line("TER / costi correnti", C.ter, catPct, st(C.terState))}
+      ${C.terChecks?.length > 1 ? `<tr><th class="l">Valori per fonte</th><td class="l" colspan="2">${C.terChecks.map(c => `${esc(c.src)}: ${catPct(c.v)}`).join(" · ")}</td></tr>` : ""}
+      ${line("Tracking difference", C.trackingDifference)}${line("Tracking error", C.trackingError)}${line("Commissioni del broker", C.brokerFees)}</table></details>
+    <details class="fold"><summary><b>Struttura, dimensione e documenti</b></summary><table class="cat-kv">
+      ${line("Replica", Fd.replication)}<tr><th class="l">Controparte</th><td class="l" colspan="2">${esc(Fd.counterpartyRisk || "n.d.")}</td></tr>
+      ${line("Patrimonio del fondo", Fd.sizeFund, v => fNum(v, 0) + " mln " + (Fd.sizeFund.unit || ""))}${line("Patrimonio della classe", Fd.sizeClass, v => fNum(v, 0) + " mln")}
+      ${line("Data di lancio", Fd.launch, v => dayIT(v))}${line("Data del KID", Fd.kidDate, v => dayIT(v))}${line("Data del prospetto", Fd.prospectusDate, v => dayIT(v))}</table></details>
+    <details class="fold"><summary><b>${bond ? "Obbligazioni ed esposizione" : "Esposizione"}</b></summary><table class="cat-kv">
+      ${bond ? line("Tipo", B.bondKind) + line("Duration (anni)", B.duration, v => fNum(v, 2)) + line("Rendimento a scadenza (al peggio)", B.yield, catPct)
+        + line("Rendimento distribuito 12 mesi", B.distYield, catPct) + line("Qualità del credito", B.credit) + line("Valuta", B.currency) : ""}
+      ${line("Numero di titoli", X.holdingsCount, v => fNum(v, 0))}${line("Peso dei primi 10", X.top10Weight, v => fNum(v * 100, 1) + "%")}
+      ${line("Primi 10 titoli", X.top10, v => v.map(h => `${h.name} ${isNum(h.weight) ? fNum(h.weight * 100, 1) + "%" : ""}`).join(", "))}
+      ${line("Paesi", X.countries, list)}${line("Settori", X.sectors, list)}
+      ${line("Esposizione valutaria (stima)", X.currencyExposure, v => v.map(c => c.currency + (isNum(c.weight) ? " " + fNum(c.weight, 0) + "%" : "")).join(", "))}</table></details>
+    <details class="fold"><summary><b>Rischi principali</b></summary><ul class="why">${e.risks.map(r => `<li>${esc(r)}</li>`).join("") || "<li>n.d.</li>"}</ul></details>
+    <details class="fold" open><summary><b>ETF simili nel catalogo</b></summary>${e.similar.length ? `<ul class="why">${e.similar.map(s => `<li><span class="act ${CMP_LEVEL_CLS[s.level]}">${s.level} · ${esc(s.label)}</span>
+        <b>${esc(s.name || s.isin)}</b> <span class="muted small">${esc(s.reasons.join("; "))}</span>
+        <button class="btn ghost" data-catpair="${esc(e.isin)},${esc(s.isin)}">Confronta</button></li>`).join("")}</ul>` : `<p class="small">Nessun ETF dello stesso tipo nel catalogo.</p>`}</details>
+    <details class="fold"><summary><b>Fonti</b></summary><ul class="why">${Object.entries(e.sources || {}).map(([k, s]) => `<li><b>${esc(k)}</b>: ${esc(s.publisher || "")}
+        ${s.url ? ` · <a href="${esc(s.url)}" target="_blank" rel="noopener">link</a>` : ""}${s.asOf ? ` · dati al ${esc(dayIT(s.asOf))}` : ""}${s.fetched ? ` · letto il ${esc(dayIT(s.fetched))}` : ""}</li>`).join("")}</ul></details>
+    <p class="muted small">${esc(e.disclaimer)}</p></div>`;
+}
+function etfCmpHTML() {
+  if (etfC.cmpErr) return `<div class="card empty">${esc(etfC.cmpErr)}</div>`;
+  const c = etfC.cmp;
+  if (!c) return "";
+  const head = `<tr><th class="l"></th>${c.items.map(r => `<th class="l"><b>${esc(r.category || "")}</b><div class="muted small">${esc(r.isin)}</div></th>`).join("")}</tr>`;
+  const cellH = v => `<td class="l ${v.missing ? "muted" : ""}">${esc(v.text)}${v.state ? ` <span class="cat-chip ${v.state === "discordante" ? "bad" : ""}">${esc(v.state)}</span>` : ""}${v.note && !v.missing ? `<div class="muted small">${esc(v.note)}</div>` : ""}</td>`;
+  const dim = d => `<details class="fold" ${["indice", "costi"].includes(d.key) ? "open" : ""}><summary><b>${esc(d.label)}</b></summary>
+      <div class="table-wrap"><table class="scr cmp-tbl"><thead>${head}</thead><tbody>${d.rows.map(r => `<tr class="${r.same ? "same" : ""}"><th class="l">${esc(r.label)}</th>${r.values.map(cellH).join("")}</tr>`).join("")}</tbody></table></div>
+      ${d.note ? `<p class="muted small">${esc(d.note)}</p>` : ""}</details>`;
+  const o = c.overlap;
+  return `<div class="card cat-cmp"><div class="card-h"><h2>Confronto</h2><span class="act big ${CMP_LEVEL_CLS[c.level]}">Livello ${c.level} · ${esc(c.levelLabel)}</span>
+      <button class="btn ghost" data-catcmpclose>Chiudi</button></div>
+    <p class="small">${esc(c.levelText)}</p>
+    ${c.pairs.length > 1 || c.pairs[0].reasons.length ? `<ul class="why">${c.pairs.map(p => `<li><b>${esc(p.a)} – ${esc(p.b)}</b>: livello ${p.level} (${esc(p.label)})${p.reasons.length ? ": " + esc(p.reasons.join("; ")) : ""}</li>`).join("")}</ul>` : ""}
+    ${c.differences.length ? `<h4>Cosa cambia tra loro</h4><ul class="why">${c.differences.map(d => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}
+    ${c.dimensions.map(dim).join("")}
+    <details class="fold"><summary><b>Titoli in comune</b> (primi 10)</summary>${o.available ? `<p class="small">${esc(o.note)}</p>
+      ${o.common.length ? `<ul class="why">${o.common.map(x => `<li>${esc(x.name)}: ${x.weights.map(w => isNum(w) ? fNum(w * 100, 1) + "%" : "n.d.").join(" / ")}</li>`).join("")}</ul>` : ""}
+      ${o.warnings.length ? `<p class="muted small">${esc(o.warnings.join(" · "))}</p>` : ""}<p class="muted small">Date delle composizioni: ${o.dates.map(d => esc(dayIT(d))).join(" / ")}.</p>`
+      : `<p class="small">${esc(o.reason)}</p>`}</details>
+    <p class="muted small">Righe in grigio = valore uguale per tutti. ${esc(c.disclaimer)}</p></div>`;
+}
+async function etfCatOpen(isin) {
+  etfC.detail = isin; etfC.item = null; $("#etfCatDetail").innerHTML = etfDetailHTML();
+  try { const r = await fetch("/api/etf/catalog/" + encodeURIComponent(isin)); etfC.item = r.ok ? await r.json() : { error: "ETF non trovato nel catalogo" }; }
+  catch { etfC.item = { error: "server non raggiungibile" }; }
+  if (etfC.detail !== isin) return;
+  $("#etfCatDetail").innerHTML = etfDetailHTML();
+  $("#etfCatDetail").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+async function etfCatCompare(isins) {
+  etfC.cmpErr = null; etfC.cmp = null;
+  try { const r = await fetch("/api/etf/compare?isins=" + encodeURIComponent(isins.join(","))); const j = await r.json(); if (r.ok) etfC.cmp = j; else etfC.cmpErr = j.error; }
+  catch { etfC.cmpErr = "server non raggiungibile"; }
+  $("#etfCatCmp").innerHTML = etfCmpHTML();
+  $("#etfCatCmp").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function etfCatRefreshList() { $("#etfCatList").innerHTML = etfCatListHTML(); $("#etfCatSel").innerHTML = etfCatSelHTML(); }
+document.addEventListener("click", e => {
+  const m = e.target.closest("[data-etfmode]");
+  if (m) { etfC.mode = m.dataset.etfmode; LS.set("etfMode", etfC.mode); etfModeBar(); if (etfC.mode === "cat") loadEtfCat(); else renderEtf(); return; }
+  if (!e.target.closest("#etfCatBody")) return;
+  const s = e.target.closest("[data-catsel]");
+  if (s) { const i = s.dataset.catsel; etfC.sel = etfC.sel.includes(i) ? etfC.sel.filter(x => x !== i) : etfC.sel.concat(i).slice(0, 4); etfCatRefreshList(); return; }
+  if (e.target.closest("[data-catclear]")) { etfC.sel = []; etfCatRefreshList(); return; }
+  if (e.target.closest("[data-catcmp]")) { etfCatCompare(etfC.sel); return; }
+  if (e.target.closest("[data-catcmpclose]")) { etfC.cmp = null; etfC.cmpErr = null; $("#etfCatCmp").innerHTML = ""; return; }
+  if (e.target.closest("[data-catclose]")) { etfC.detail = null; etfC.item = null; $("#etfCatDetail").innerHTML = ""; etfCatRefreshList(); return; }
+  const p = e.target.closest("[data-catpair]");
+  if (p) { etfC.sel = p.dataset.catpair.split(","); etfCatRefreshList(); etfCatCompare(etfC.sel); return; }
+  const r = e.target.closest("tr[data-catisin]");
+  if (r && !e.target.closest("input")) { etfCatOpen(r.dataset.catisin); etfCatRefreshList(); }
+});
+document.addEventListener("input", e => {
+  if (e.target.id === "etfCatQ") { etfC.q = e.target.value; $("#etfCatList").innerHTML = etfCatListHTML(); }
+});
+document.addEventListener("change", e => {
+  const f = e.target.closest("[data-catf]");
+  if (f) { etfC.f[f.dataset.catf] = f.value; $("#etfCatList").innerHTML = etfCatListHTML(); }
+});
+// Opportunità → ETF: no ranking, only the way into the catalogue and the comparison
+const OPP_ETF_EXAMPLES = [["Mondo: stesso indice", "SWDA,XDWD"], ["USA: accumulo e distribuzione", "CSSPX,VUSA"], ["USA: con e senza copertura del cambio", "CSSPX,IUSE"],
+  ["Tecnologia: USA, mondo, semiconduttori", "QDVE,XDWT,SMH"], ["Titoli di Stato euro 1-3 anni", "IBGS,X13E"]];
+function oppEtfHTML() {
+  return `<p class="warn-box"><b>Per gli ETF qui non c'è una classifica.</b> Nessun ETF viene segnalato come opportunità: il catalogo serve a capire cosa contiene
+      ciascun ETF e a confrontare prodotti simili su costi, struttura, valuta, liquidità e rischi. Non è una consulenza finanziaria.</p>
+    <div class="card"><div class="card-h"><h2>${esc(OPP_MODES.etf)}</h2>
+      <div class="seg">${Object.entries(OPP_MODES).map(([k, l]) => `<button data-opm="${k}" class="${k === "etf" ? "on" : ""}">${esc(l.split(" · ")[0])}</button>`).join("")}</div></div>
+      <p class="small">Apri il catalogo per cercare per nome, ticker o ISIN, oppure parti da un confronto di esempio:</p>
+      <div class="chips">${OPP_ETF_EXAMPLES.map(([l, k]) => `<button data-oppetf="${esc(k)}">${esc(l)}</button>`).join("")}</div>
+      <p><button class="btn" data-oppetf="">Apri il catalogo ETF</button></p></div>`;
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-oppetf]");
+  if (!b) return;
+  etfC.mode = "cat"; LS.set("etfMode", "cat");
+  const keys = b.dataset.oppetf;
+  setView("etf");
+  loadEtfCat().then(() => {
+    if (!keys || !etfC.data?.rows) return;
+    const isins = keys.split(",").map(k => etfC.data.rows.find(r => r.tickers.includes(k))?.isin).filter(Boolean);
+    etfC.sel = isins; etfCatRefreshList(); etfCatCompare(isins);
+  });
+});
 const ETF_DIV_INFO = `<b>Cosa diversifica di più</b>: per ogni ETF calcola come cambierebbero tecnologia, USA e dollaro (stimato dagli USA) se investissi il 10% del
   portafoglio. In cima gli ETF che abbassano di più la tua concentrazione più alta; esclusi quelli che ne farebbero salire anche una sola, i temi e i prodotti a leva.
   A parità di effetto (stesso valore al decimo di punto) viene prima chi abbassa di più anche le altre due, poi il TER più basso. Un ETF per categoria.
@@ -2725,8 +2959,10 @@ document.addEventListener("click", e => { const b = e.target.closest("[data-dz]"
 // Two exploratory rankings computed by the server on closed sessions: stocks to study, never a buy signal.
 // Phase O2: relative strength, absolute direction and market context shown apart; coverage of the data; the
 // "Monitoraggio risultati" panel of the opportunity diary (opportunity_diary.py), closed by default.
-const opps = { data: null, at: 0, err: null, mode: LS.get("opp.mode", "trading"), open: new Set(), diary: null, diaryErr: null };
-const OPP_MODES = { trading: "Trading · breve periodo", invest: "Investimento · medio-lungo periodo" };
+const opps = { data: null, at: 0, err: null, mode: LS.get("opp.mode", "trading"), open: new Set(), diary: null, diaryErr: null,
+  inv: null, invAt: 0, invErr: null, invLoading: false, invFilter: "all", invSort: { k: "order", dir: 1 },
+  val: null, valAt: 0, valErr: null, valLoading: false, valFilter: "all" };
+const OPP_MODES = { trading: "Trading · breve periodo", invest: "Investimento · medio-lungo periodo", etf: "ETF · catalogo e confronto" };
 const OPP_LIMITS = [
   ["Condizioni non verificate", "Nessuna condizione è stata provata con un backtest. Nel test della Fase 11 i pattern di forza (Leader di momentum, momentum 12-1, massimi a 52 settimane) non hanno superato le condizioni: la classifica Trading usa misure simili, quindi indica solo titoli da guardare, non titoli che salgono."],
   ["Classifica relativa", "«Più forte del Nasdaq-100» vuol dire meglio di QQQ: in un mercato in calo può significare «scende meno». Per questo la tabella mostra a parte il rendimento del titolo e quello rispetto a QQQ, e segnala chi è più forte di QQQ ma in calo."],
@@ -2744,6 +2980,8 @@ async function loadOpps() {
       else { opps.data = await r.json(); opps.err = null; }
     } catch (e) { opps.err = e.message; opps.at = 0; }
     try { opps.diary = await getJSON("/api/opportunities/diary"); opps.diaryErr = null; } catch (e) { opps.diaryErr = e.message; }
+    try { opps.lab = await getJSON("/api/opportunities/validation"); } catch (e) { opps.lab = null; }
+    try { opps.strat = await getJSON("/api/opportunities/strategies"); } catch (e) { opps.strat = null; }
   }
   renderOpps();
 }
@@ -2776,9 +3014,402 @@ function oppDiaryHTML() {
     <h4 class="bt-h">Limiti</h4><ul class="why bt-lim">${S.limits.map(l => `<li><b>${esc(l.title)}.</b> ${esc(l.text)}</li>`).join("")}</ul>
     <p class="muted small">Dati in <code>data/opportunita.sqlite3</code>: solo dati pubblici di mercato, separati dal portafoglio. Non è un backtest e non è una consulenza finanziaria.</p>`;
 }
+// phase 4A: validation state of the rule behind the list shown (documented criteria, computed by the server)
+function oppStateLine(trading) {
+  const R = opps.lab?.reliability;
+  const it = R?.items?.find(x => x.id === (trading ? "C4" : "INV"));
+  const extra = trading ? R?.items?.find(x => x.id === "C5") : null;
+  if (!it) return `<p class="small opp-state"><b>Screening esplorativo</b> · stato di validazione non disponibile al momento.
+    Il numero di condizioni soddisfatte non è una previsione di rendimento.</p>`;
+  return `<p class="small opp-state"><b>${esc(R.screening)}</b> · regola ${trading ? "4 su 5" : "5 su 6"}: <b>${esc(it.shortLabel)}</b> (${esc(it.short)})${extra ? `
+    · tutte e 5: <b>${esc(extra.shortLabel)}</b>` : ""}. Il numero di condizioni soddisfatte non è una previsione di rendimento. Dettagli in «Qualità dei segnali».</p>`;
+}
+function oppReliabilityHTML(R) {
+  if (!R) return "";
+  return `<h4 class="bt-h">Stato di affidabilità</h4>
+    <div class="table-wrap"><table class="scr mini"><thead><tr><th class="l">Regola</th><th class="l">Stato</th><th class="l">Perché</th></tr></thead>
+    <tbody><tr><td class="l">Classifiche Trading e Investimento</td><td class="l"><b>${esc(R.screening)}</b></td><td class="l small wrap">${esc(R.note)}</td></tr>
+    ${R.items.map(x => `<tr><td class="l">${esc(x.name)}</td><td class="l"><b>${esc(x.label)}</b></td><td class="l small wrap">${esc(x.reason)}</td></tr>`).join("")}</tbody></table></div>
+    <details class="fold" data-k="labcrit"><summary><span class="small">Criteri degli stati</span></summary>
+      <ul class="why">${R.criteria.map(c => `<li><b>${esc(c.title)}</b>: ${esc(c.text)}</li>`).join("")}</ul></details>`;
+}
+const oppVerdict = x => !x ? "—" : x.startsWith("Evidenza") ? "insufficiente" : x.includes("non credibile") ? "non credibile"
+  : x.includes("credibile nello") ? (x.includes("peggiore") ? "peggiore, credibile" : "migliore, credibile")
+  : x.includes("non confermata") ? "non confermata" : "verifica impossibile";
+// phase 4B: experimental strategies (opportunity_strategies.py), separate from the current rule and from the diary
+function oppStratHTML() {
+  const X = opps.strat;
+  const head = `<h4 class="bt-h">2 · Strategie sperimentali (ricerca 4B, non usate dalla classifica)</h4>`;
+  if (!X) return `${head}<p class="muted small">Riepilogo non leggibile al momento.</p>`;
+  if (!X.available) return `${head}<p class="small">Nessuno studio salvato. Si avvia a mano dal Terminale: <code>.venv/bin/python opportunity_strategies.py run</code>.</p>`;
+  const S = X.summary, pt = x => x && isNum(x.mean) ? `${ptPts(x.mean)} <span class="muted">(t ${fNum(x.t, 1)})</span>` : "—";
+  const row = r => r.id === "C"
+    ? `<tr><td class="l">${esc(r.name)}</td><td class="l"><b>${esc(r.state)}</b></td><td colspan="3" class="l small wrap">Episodi ribassisti ${r.episodes.dev} nello sviluppo e ${r.episodes.ver} nella verifica
+        (ne servono ${r.episodes.need[0]} e ${r.episodes.need[1]}). Filtro «nessun ingresso con QQQ sotto la media 200»: ${r.filter.map(f => `${esc({ A_TOP: "A", B: "B", C4: "regola 4/5" }[f.strategy] || f.strategy)} rendimento/rischio ${fNum(f.raWithout, 2)} → ${fNum(f.raWith, 2)}`).join(" · ")}.</td>
+        <td class="l small wrap">${esc(r.note)}</td></tr>`
+    : `<tr><td class="l">${esc(r.name)}</td><td class="l"><b>${esc(r.state)}</b></td><td>${ptPts(r.dev)} → ${ptPts(r.ver)}</td>
+        <td>${pt(r.key)}<div class="muted small">${esc(r.key.label)}</div></td><td>${pt(r.vsOld)}</td><td class="l small wrap">${esc(r.note)}</td></tr>`;
+  return `${head}<details class="fold" data-k="labstrat"><summary><span class="small">A · forza nel settore — <b>${esc(S.rows[0].state)}</b> · B · ritracciamento nel trend — <b>${esc(S.rows[1].state)}</b> · C · contesto di mercato — <b>${esc(S.rows[2].state)}</b></span></summary>
+    <p class="small">Tre ipotesi scritte e registrate <b>prima</b> dei risultati (configurazione ${esc(S.version)}, impronta <code>${esc(S.configHash)}</code>), una sola configurazione ciascuna,
+      sugli stessi dati congelati della Fase 3 e solo fino al ${esc(dayIT(S.finalStart))} escluso: il periodo finale non viene letto. ${esc(S.label)}. Studio del ${esc(oppTime(S.createdAt))}.</p>
+    <div class="table-wrap"><table class="scr mini"><thead><tr><th class="l">Strategia (orizzonte ${S.horizon} sedute)</th><th class="l">Stato</th>
+      <th>Contro i non scelti: sviluppo → verifica (punti)</th><th>Confronto chiave</th><th>Contro la regola 4/5</th><th class="l">Limite</th></tr></thead>
+      <tbody>${S.rows.map(row).join("")}</tbody></table></div>
+    <p class="small">Stati possibili: ipotesi non verificabile, evidenza insufficiente, nessun vantaggio rilevato, risultato esplorativo promettente, candidato a verifica prospettica.
+      Nessuno stato significa «validata» e nessuna strategia sperimentale cambia la classifica o dà indicazioni di acquisto o vendita.</p>
+    <p class="muted small">Protocollo: <code>.venv/bin/python opportunity_strategies.py ipotesi</code> · report: <code>.venv/bin/python opportunity_strategies.py show</code> · registro: <code>.venv/bin/python opportunity_strategies.py registro</code></p>
+    </details>`;
+}
+// phase O3: summary of the last historical study (opportunity_validation.py), kept apart from the diary above
+function oppLabHTML() {
+  const L = opps.lab;
+  if (!L) return `<p class="muted small">Riepilogo non leggibile al momento (se in alto compare l'avviso del server vecchio, usa «Riavvia server»).</p>`;
+  const D = L.diary, X = L.recheck, S = L.sim;
+  const diary = `${oppStratHTML()}<h4 class="bt-h">3 · Diario prospettico (dal vivo, senza survivorship bias)</h4>
+    <p class="small">${!D ? "Stato del diario non leggibile." : D.started ? `Registra dal ${esc(dayIT(D.first))}: ${D.days} ${D.days === 1 ? "giornata" : "giornate"}, ultima ${esc(dayIT(D.last))}.`
+      : "Non ha ancora registrato sedute: la prima registrazione avviene dopo una chiusura di Wall Street, con la dashboard accesa o con il job serale (se installato)."}
+      È l'unica verifica senza informazioni future e con i titoli scelti davvero ogni giorno; i risultati sono in «Monitoraggio risultati» e non si mescolano con lo studio storico.</p>`;
+  if (!L.available) return `${oppReliabilityHTML(L.reliability)}<h4 class="bt-h">1 · Studio storico esplorativo</h4>
+    <p class="small">Nessuno studio salvato. Si avvia a mano dal Terminale: <code>.venv/bin/python opportunity_validation.py run --scarica</code>. Il calcolo non avviene mai dentro la dashboard.</p>${diary}`;
+  return `${oppReliabilityHTML(L.reliability)}
+    <h4 class="bt-h">1 · Studio storico esplorativo (con survivorship bias)</h4>
+    <p class="small"><b>${esc(L.label)}.</b> Le ${L.universe} azioni di oggi del Nasdaq-100 su tutto il periodo: mancano quelle uscite dall'indice,
+      quindi i rendimenti sono spinti verso l'alto. Non è una validazione e non dice cosa comprare.</p>
+    <p class="small">Giorni di segnale usati ${esc(dayIT(L.segments.tutto.from))} → ${esc(dayIT(L.segments.tutto.to))} (sviluppo e verifica; il periodo finale dal
+      ${esc(dayIT(L.segments.finale.from))} ${L.finalOpened ? "è stato aperto" : "resta sigillato"}) · ${fNum(L.observations, 0)} osservazioni · studio del ${esc(oppTime(L.createdAt))} · laboratorio ${esc(L.version)}, modello ${esc(L.scannerModel)}</p>
+    <div class="table-wrap"><table class="scr mini"><thead><tr><th class="l">Gruppo (orizzonte ${L.horizon} sedute)</th><th>Segnali</th>
+      <th>Rispetto agli altri titoli dello stesso giorno (punti)</th><th>Rispetto a QQQ (punti)</th><th class="l">Giudizio a 5 · 10 · 21 sedute</th></tr></thead>
+    <tbody>${L.rows.map(r => `<tr><td class="l">${esc(r.name)}</td><td>${fNum(r.n, 0)}</td><td>${ptPts(r.vsOthers)}</td><td>${ptPts(r.vsQqq)}</td>
+      <td class="l small">${Object.values(r.verdicts).map(x => `<span title="${esc(x || "")}">${esc(oppVerdict(x))}</span>`).join(" · ")}</td></tr>`).join("")}</tbody></table></div>
+    <p class="small">Rendimenti dalla chiusura del giorno del segnale (non ottenibili: il segnale si conosce dopo la chiusura); differenze medie di ogni giorno.
+      Giudizio per orizzonte (passa sopra con il mouse per il testo intero). «Credibile» solo con abbastanza periodi indipendenti, |t| almeno 2, fuori dal 95% delle scelte a caso e confermato nel periodo di verifica.
+      Battere QQQ di qualche decimo riesce a quasi tutti i gruppi, anche ai titoli deboli: viene dai sopravvissuti, non dalla selezione.</p>
+    ${X ? `<p class="small"><b>Rielaborazione con dati verificati</b> (${esc(X.reviews)}, ${esc(oppTime(X.at))}): esclusi ${X.removed.map(r => `${esc(r.ticker)} dal ${esc(dayIT(r.from))} al ${esc(dayIT(r.to))}`).join(" e ")}
+      (prezzi che non erano il titolo quotato regolarmente al Nasdaq). Studio originale ${X.reproducedOriginal ? "riprodotto identico" : "<b>non riprodotto</b>"};
+      differenza massima ${fNum(X.maxAbsDiff, 2)} punti; giudizi cambiati: ${X.verdictsChanged}${X.changes.length ? ` (${X.changes.map(c => `${esc(c.name)} a ${c.h} sedute: ${esc(oppVerdict(c.verdict[1]))}`).join("; ")})` : ""}.
+      I report originali restano invariati.</p>` : ""}
+    ${S ? `<p class="small"><b>Simulazione sperimentale — non è una prova di redditività.</b> Con la regola 4 su 5 (ingresso all'apertura dopo, 21 sedute, massimo 10 titoli, costo ipotetico ${fNum(S.cost, 2)}% per lato)
+      il totale è ${fPct(S.total, 0)}, ma una scelta <b>a caso</b> con le stesse regole fa ${fPct(S.randomMedian, 0)} (da ${fPct(S.randomP10, 0)} a ${fPct(S.randomP90, 0)}) e QQQ ${fPct(S.qqqTotal, 0)}:
+      il risultato viene soprattutto dall'universo dei sopravvissuti e dalla volatilità, non dalle condizioni.</p>` : ""}
+    ${diary}
+    <details class="fold" data-k="lablim"><summary><span class="small">Limiti dello studio storico</span></summary><ul class="why bt-lim">${L.limits.map(l => `<li>${esc(l)}</li>`).join("")}</ul></details>
+    <p class="muted small">Report completo: <code>.venv/bin/python opportunity_validation.py show</code>; qualità dei dati: <code>.venv/bin/python market_data_quality.py</code>. Non è una consulenza finanziaria.</p>`;
+}
+// ------------------------------------------------------------ Opportunità → Investimento: fundamental analysis (phase 5A)
+// investment_engine.py: six separate dimensions and an analytic profile per company. Descriptions, never buy/sell
+// signals; the Pagella ranking above is unchanged and only shown next to it for comparison.
+const INV_DIMS = [["quality", "Qualità"], ["growth", "Crescita"], ["solidity", "Solidità"], ["valuation", "Valutazione"], ["expectations", "Aspettative"], ["trend", "Trend"]];
+const INV_FILTERS = [
+  ["all", "Tutte", () => true],
+  ["qc", "Qualità e crescita", x => x.profile.id === "qualita_crescita"],
+  ["care", "Solide ma care", x => ["qualita_cara", "buona_cara"].includes(x.profile.id)],
+  ["risk", "Contenute con rischi", x => x.profile.id === "contenuta_rischi" || (x.dims.valuation.state === "Contenuta" && x.balance.neg > 0)],
+  ["crit", "Con criticità", x => x.balance.neg > 0],
+  ["nd", "Dati insufficienti o parziali", x => x.profile.id === "dati_insufficienti" || x.completeness.state !== "Completa"],
+];
+const INV_LIMITS = [
+  ["Non è un segnale", "Il profilo descrive i bilanci e il prezzo di oggi. Non dice se il titolo salirà: nessuna regola del motore è stata provata sul passato, e non si può farlo con i bilanci di oggi senza barare (il diario salva i giudizi da ora in avanti)."],
+  ["Fonte unica e gratuita", "Bilanci, calendario delle trimestrali, stime e capitalizzazioni vengono da Yahoo Finance: possono mancare, arrivare in ritardo di alcuni giorni dopo la trimestrale o essere riclassificati. Un dato mancante resta mancante, non diventa zero."],
+  ["Data di fine e data di pubblicazione", "Un trimestre chiuso il 30 settembre è diventato pubblico solo all'annuncio dei risultati: la scheda mostra entrambe le date. Quando l'annuncio non è nel calendario della fonte la data di pubblicazione è «non verificabile»."],
+  ["Confronti tra comparabili", "La valutazione è relativa: «Contenuta» vuol dire multipli più bassi del gruppo, non «sottovalutata». Gruppi con meno di 5 società non vengono confrontati."],
+  ["Valute e ADR", "Per i bilanci in un'altra valuta (EUR, CNY) i multipli usano il cambio del giorno; il P/E atteso di questi titoli non è calcolato."],
+  ["Ordine sperimentale", "L'ordine della tabella (completezza, poi giudizi positivi meno negativi su 5 dimensioni con lo stesso peso) è una scelta di lettura, non validata e non una probabilità."],
+];
+const invRank = (k, s) => { const D = opps.inv?.model?.dims?.find(d => d.id === k); const i = D ? D.states.indexOf(s) : -1; return i < 0 ? 99 : i; };
+const invCls = p => p === 1 ? "acc" : p === -1 ? "red" : "";
+const invBadge = (d, label) => d ? `<span class="act ${invCls(d.polarity)}" title="${esc(label)}${d.partial ? ": giudizio parziale" : ""}">${esc(d.state)}${d.partial ? "*" : ""}</span>` : "—";
+async function loadInv() {
+  if (opps.invLoading || (opps.inv && Date.now() - opps.invAt < 5 * 60_000)) return;
+  opps.invLoading = true;
+  try { opps.inv = await getJSON("/api/investment"); opps.invErr = null; opps.invAt = opps.inv.available ? Date.now() : Date.now() - 4 * 60_000; }
+  catch (e) { opps.invErr = e.message; opps.invAt = Date.now() - 4 * 60_000; }
+  opps.invLoading = false;
+  renderOpps();
+}
+function invCardHTML() {
+  const V = opps.inv;
+  const head = `<div class="card-h"><h2>Analisi fondamentale</h2><span class="card-meta">motore ${esc(V?.model?.version || "")} · <b>sperimentale</b> · sei giudizi separati per società, non un voto</span></div>`;
+  if (!V) return `<div class="card">${head}<div class="empty">${opps.invErr ? `Analisi non disponibile (${esc(opps.invErr)}).` : "Carico l'analisi fondamentale…"}</div></div>`;
+  if (!V.available) return `<div class="card">${head}<div class="empty">Analisi non ancora disponibile: ${esc(V.reason)}.${V.fundamentals?.running ? " Download dei bilanci in corso." : ""} Riprova tra qualche minuto.</div></div>`;
+  const f = INV_FILTERS.find(x => x[0] === opps.invFilter) || INV_FILTERS[0];
+  const S = opps.invSort || { k: "order", dir: 1 };
+  const key = {
+    order: x => x.order, ticker: x => x.ticker, sector: x => x.sector || "", comp: x => -x.completeness.share,
+    pag: x => -(x.pagella?.ok ?? -1), profile: x => x.profile.label,
+    ...Object.fromEntries(INV_DIMS.map(([k]) => [k, x => invRank(k, x.dims[k].state)])),
+  }[S.k] || (x => x.order);
+  const rows = V.items.filter(f[2]).sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : a.order - b.order) * S.dir; });
+  const th = (k, l, cls = "") => `<th class="${cls}"><button class="link-btn inv-s" data-isort="${k}">${esc(l)}${S.k === k ? (S.dir > 0 ? " ▲" : " ▼") : ""}</button></th>`;
+  const comp = c => `${esc(c.state)}<div class="muted small">${c.available} su ${c.applicable} dati</div>`;
+  const pag = p => p ? `${p.ok} su ${p.n}${p.rank ? `<div class="muted small">${p.rank}° in classifica</div>` : ""}` : "non calcolata";
+  const table = rows.length ? `<div class="table-wrap"><table class="scr opp-tbl inv-tbl"><thead><tr>${th("ticker", "Titolo", "l")}${th("sector", "Settore", "l")}<th>Prezzo</th>
+      ${INV_DIMS.map(([k, l]) => th(k, l)).join("")}${th("profile", "Profilo e punti principali", "l")}${th("comp", "Completezza")}${th("pag", "Pagella")}</tr></thead>
+    <tbody>${rows.map(x => `<tr data-t="${esc(x.ticker)}"><td class="l tk">${esc(x.ticker)}<div class="muted small">${esc(x.name)}</div></td>
+      <td class="l">${esc(x.sector || "settore non indicato")}<div class="muted small">${esc(x.model.label)}</div></td>
+      <td>${fPrice(x.price)} $<div class="muted small">chiusura ${x.priceDate ? esc(dayIT(x.priceDate)) : "non disponibile"}</div></td>
+      ${INV_DIMS.map(([k, l]) => `<td>${invBadge(x.dims[k], l)}${x.dims[k].shift ? `<div class="muted small">${esc(x.dims[k].shift)}</div>` : ""}</td>`).join("")}
+      <td class="l why-c"><b>${esc(x.profile.label)}</b><div class="small" title="${esc(x.mainStrength)}">+ ${esc(x.mainStrength)}</div><div class="small" title="${esc(x.mainWeakness)}">− ${esc(x.mainWeakness)}</div>
+        ${x.lagging ? `<div class="muted small">risultati del ${esc(dayIT(x.lagging))} non ancora nei bilanci della fonte</div>` : ""}</td>
+      <td>${comp(x.completeness)}</td><td>${pag(x.pagella)}</td></tr>`).join("")}</tbody></table></div>`
+    : `<div class="empty">Nessuna società in questo gruppo oggi.</div>`;
+  const M = V.model, dd = V.dataDates || {};
+  const covLow = (V.coverage || []).filter(c => c.applicable && c.ok < c.applicable);
+  const D = V.diary;
+  return `<div class="card">${head}
+    <p class="small">Per ogni società: <b>qualità</b> (redditività e cassa), <b>crescita</b>, <b>solidità</b> finanziaria, <b>valutazione</b> rispetto a società comparabili,
+      <b>aspettative</b> degli analisti e <b>trend</b> del prezzo, giudicati separatamente. Verde = giudizio favorevole, rosso = critico, * = giudizio parziale.
+      Il profilo è una descrizione, <b>non un'indicazione di acquisto o di vendita</b>. Clic su una riga per la scheda completa con indicatori, periodi e limiti.</p>
+    <p class="muted small">Bilanci scaricati il ${dd.statements ? esc(oppTime(dd.statements)) : "data non disponibile"} · capitalizzazioni del ${dd.marketData ? esc(dayIT(dd.marketData)) : "giorno non disponibile"} · analisti del ${dd.analysts ? esc(dayIT(dd.analysts)) : "giorno non disponibile"} · calcolo delle ${esc(oppTime(V.generated))}</p>
+    <div class="chips">${INV_FILTERS.map(([k, l, fn]) => `<button data-ifil="${k}" class="${k === f[0] ? "on" : ""}">${esc(l)}<span>${V.items.filter(fn).length}</span></button>`).join("")}</div>
+    <p class="muted small">I gruppi sono modi di filtrare la tabella, <b>non strategie validate</b>: anche i casi negativi restano visibili.</p>
+    ${table}
+    <details class="fold" data-k="invrules"><summary><span class="small">Come funziona il motore (regole e soglie)</span></summary>
+      <ul class="why">${M.params.map(p => `<li><b>${esc(p.name)}</b>: ${esc(p.text)}</li>`).join("")}</ul>
+      <h4 class="bt-h">Profili, nell'ordine in cui vengono controllati</h4>
+      <ul class="why">${M.profiles.map(p => `<li><b>${esc(p.label)}</b>: ${esc(p.rule)}</li>`).join("")}</ul>
+      <h4 class="bt-h">Modelli per settore</h4>
+      <ul class="why">${Object.values(M.models).map(m => `<li><b>${esc(m.label)}</b>: ${esc(m.note)}</li>`).join("")}</ul>
+      <p class="small">Ordine iniziale della tabella (<b>sperimentale</b>): prima le analisi complete, poi il numero di giudizi favorevoli meno quelli critici
+        su qualità, crescita, solidità, valutazione e aspettative, tutti con lo stesso peso. Il trend è mostrato a parte e non entra nell'ordine.</p></details>
+    <details class="fold" data-k="invcov"><summary><span class="small">Copertura dei dati e gruppi di confronto</span></summary>
+      ${covLow.length ? `<ul class="why">${covLow.map(c => `<li>${esc(c.label)}: disponibile per ${c.ok} società su ${c.applicable} a cui si applica</li>`).join("")}</ul>` : `<p class="small">Ogni indicatore è disponibile per tutte le società a cui si applica.</p>`}
+      <p class="small"><b>Gruppi di confronto</b> (almeno 5 società con lo stesso modello): ${V.groups.map(g => `${esc(g.name)} (${esc(g.kind)}, ${g.size})`).join(" · ")}.</p>
+      ${Object.keys(V.fx || {}).length ? `<p class="small"><b>Cambi usati</b> per i bilanci non in dollari: ${Object.entries(V.fx).map(([c, r]) => `1 ${esc(c)} = ${fNum(r.rate, 4)} USD (${esc(dayIT(r.date))})`).join(" · ")}.</p>` : ""}
+      <p class="small"><b>Diario</b>: ${D?.started ? `giudizi salvati per ${D.days} ${D.days === 1 ? "seduta" : "sedute"} (dal ${esc(dayIT(D.first))})` : "nessun giudizio salvato finora: si registra solo nelle sedute già salvate dal diario delle opportunità"}.</p></details>
+    <details class="fold" data-k="invlim"><summary><span class="small">Limiti dell'analisi</span></summary>
+      <ul class="why bt-lim">${INV_LIMITS.map(([a, b]) => `<li><b>${esc(a)}.</b> ${esc(b)}</li>`).join("")}</ul></details>
+  </div>`;
+}
+// detail drawer: "Analisi investimento" (loaded after the rest, so the other sections are not slowed down)
+async function loadDetailInv(t) {
+  const el = $("#dInv");
+  if (!el) return;
+  let X;
+  try { X = await getJSON(`/api/investment/${encodeURIComponent(t)}`); }
+  catch (e) { if (state.detail === t && $("#dInv")) $("#dInv").innerHTML = `<h3>Analisi investimento</h3><div class="muted small">Analisi fondamentale non disponibile per ora (i bilanci si scaricano in background).</div>`; return; }
+  if (state.detail !== t || !$("#dInv")) return;
+  $("#dInv").innerHTML = invDetailHTML(X);
+}
+function invPeriod(p) {
+  if (!p) return "";
+  if (!p.end) return esc(p.label);
+  const pub = p.announced ? `risultati annunciati il ${dayIT(p.announced)}` : "data di pubblicazione non verificabile";
+  const seen = p.firstSeen && !p.firstSeenInitial ? ` · nella fonte dal ${dayIT(p.firstSeen)}` : "";
+  return `${esc(p.label)}<div class="muted small">${esc(pub)}${esc(seen)}</div>`;
+}
+function invDetailHTML(X) {
+  const dimLab = Object.fromEntries(INV_DIMS);
+  const li = a => a.length ? a.map(s => `<li>${esc(s)}</li>`).join("") : "<li>nessuno</li>";
+  const ind = X.indicators.map(i => `<tr><td class="l">${esc(i.label)}</td>
+      <td>${i.status === "ok" ? esc(i.text ?? fNum(i.value, 2)) : `<span class="muted">${esc(i.status)}</span>`}${i.note ? `<div class="muted small">${esc(i.note)}</div>` : ""}</td>
+      <td class="l">${invPeriod(i.period)}</td><td class="l">${esc(i.source)}</td></tr>`).join("");
+  const peer = X.peers?.length ? `<div class="table-wrap"><table class="scr mini"><thead><tr><th class="l">Multiplo</th><th>${esc(X.ticker)}</th><th>Mediana del gruppo</th><th>Società confrontate</th><th>Più cara del</th></tr></thead>
+      <tbody>${X.peers.map(p => `<tr><td class="l">${esc(p.label)}</td><td>${p.key === "fcfYield" ? fNum(p.value, 1) + "%" : fNum(p.value, 1)}</td>
+        <td>${p.key === "fcfYield" ? fNum(p.median, 1) + "%" : fNum(p.median, 1)}</td><td>${p.n} su ${p.groupSize}</td><td>${fNum(p.rich * 100, 0)}% del gruppo</td></tr>`).join("")}</tbody></table></div>`
+    : `<p class="small">Nessun confronto: ${esc(X.dims.valuation.reasons[0] || "gruppo di società comparabili troppo piccolo")}.</p>`;
+  const g = X.dims.valuation.group;
+  const dims = INV_DIMS.map(([k, l]) => { const d = X.dims[k]; return `<li><b>${esc(l)}: ${esc(d.state)}${d.partial ? " (giudizio parziale)" : ""}</b>${d.shift ? ` · ${esc(d.shift)}` : ""}
+      <ul>${d.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul><div class="muted small">Regola: ${esc(d.rule)}</div></li>`; }).join("");
+  const P = X.pagella;
+  return `<h3>Analisi investimento <span class="muted small">motore ${esc(X.engineVersion)}, sperimentale · modello «${esc(X.model?.label || "")}»</span></h3>
+    <p><b>${esc(X.profile.label)}.</b> ${esc(X.view)}</p>
+    <div class="chip-row">${INV_DIMS.map(([k, l]) => `<span class="small">${esc(l)}</span> ${invBadge(X.dims[k], l)}`).join(" ")}</div>
+    <p class="muted small">Completezza: ${esc(X.completeness.state)} (${X.completeness.available} indicatori su ${X.completeness.applicable})
+      ${P ? ` · Pagella (classifica Investimento): ${P.ok} condizioni su ${P.n}` : ""}. Descrizione dei dati, non un'indicazione di acquisto o di vendita.</p>
+    <details class="fold"><summary><span class="small">Punti di forza e di debolezza</span></summary>
+      <div class="opp-cols"><div><h4>Punti di forza</h4><ul class="why">${li(X.strengths)}</ul></div><div><h4>Punti critici</h4><ul class="why">${li(X.weaknesses)}</ul></div></div></details>
+    <details class="fold"><summary><span class="small">Perché questi giudizi</span></summary><ul class="why">${dims}</ul>
+      <p class="muted small">Profilo «${esc(X.profile.label)}»: ${esc(X.profile.rule)}.</p></details>
+    <details class="fold"><summary><span class="small">Indicatori, con periodo e data di pubblicazione</span></summary>
+      <div class="table-wrap"><table class="scr mini"><thead><tr><th class="l">Indicatore</th><th>Valore</th><th class="l">Periodo</th><th class="l">Fonte</th></tr></thead><tbody>${ind}</tbody></table></div>
+      <p class="muted small">Bilanci in ${esc(X.currency?.accounts || "valuta non indicata")}, prezzo in ${esc(X.currency?.price || "USD")}. «12 mesi» = somma degli ultimi 4 trimestri consecutivi.
+        Dati: bilanci scaricati il ${X.dataDates?.statements ? esc(oppTime(X.dataDates.statements)) : "data non disponibile"}, prezzi fino al ${X.dataDates?.prices ? esc(dayIT(X.dataDates.prices)) : "giorno non disponibile"}.</p></details>
+    <details class="fold"><summary><span class="small">Confronto con le società comparabili${g ? ` (${esc(g.name)}, ${g.size})` : ""}</span></summary>${peer}
+      <p class="muted small">Multipli più bassi del gruppo non vogliono dire «sottovalutata»: possono riflettere più rischi o meno crescita.</p></details>
+    <details class="fold"><summary><span class="small">Dati mancanti e limiti (${X.missing.length + X.limits.length + (X.dataIssues?.length || 0)})</span></summary>
+      <ul class="why">${[...(X.dataIssues || []).map(esc), ...X.limits.map(esc), ...X.missing.map(m => `${esc(m.label)}: ${esc(m.status)}${m.note ? ` (${esc(m.note)})` : ""}`)].map(s => `<li>${s}</li>`).join("") || "<li>nessuno</li>"}</ul></details>
+    <details class="fold"><summary><span class="small">Da monitorare</span></summary><ul class="why">${li(X.monitor)}</ul>
+      ${X.nextEarnings ? `<p class="small">Prossima trimestrale: ${esc(dayIT(String(X.nextEarnings).slice(0, 10)))}.</p>` : ""}</details>`;
+}
+// ------------------------------------------------------------ Valutazione e scenari (phase 5B, experimental)
+// investment_valuation.py: DCF (FCFF) with three scenarios, implied expectations and sensitivity, next to the phase 5A
+// analysis. Ranges conditional on explicit assumptions: never a target price, a buy/sell signal or a probability.
+const VAL_FILTERS = [["all", "Tutte"], ["qualita_approfondire", "Qualità, prezzo da approfondire"], ["qualita_impegnativa", "Qualità, valutazione impegnativa"],
+  ["incerta", "Elevata incertezza"], ["nessuna_stima", "Nessuna stima affidabile"], ["altre", "Altre valutate"]];
+const VAL_LIMITS = [
+  ["Ipotesi, non previsioni", "Ogni valore dipende dalle ipotesi mostrate (crescita, margini, reinvestimenti, tasso di sconto). Cambiando le ipotesi cambia il valore: per questo ci sono tre scenari e la tabella di sensibilità. Nessuno scenario ha una probabilità."],
+  ["Non è un prezzo obiettivo", "I 5 anni sono la durata della previsione esplicita, non un orizzonte di prezzo. Il valore per azione è arrotondato apposta: le cifre in più sarebbero una precisione falsa."],
+  ["Parametri severi rispetto al mercato", "Con il tasso privo di rischio di oggi, un premio per il rischio del 4,5%, 5 anni di crescita esplicita e una crescita terminale del 2,5%, molti prezzi risultano sopra anche lo scenario favorevole. La verifica della Fase 5C ha escluso errori di calcolo come causa: il prezzo è compatibile con tassi di sconto più bassi o con una crescita che dura più di 5 anni. Il modello non dice quale delle due cose sia giusta, né che il mercato sbagli."],
+  ["Leasing e investimenti", "La fonte non separa i leasing operativi (il cui costo è già nel margine) da quelli finanziari: restano tutti nel debito, una scelta prudente; quando pesano molto la scheda lo dice. Gli investimenti finanziari a lungo termine sono aggiunti al valore di bilancio, non di mercato."],
+  ["Date dei dati", "Gli anni previsti partono dalla fine degli ultimi dati completi (12 mesi o esercizio) e sono scontati fino a oggi. Se la fonte pubblica un periodo incompleto si usano i periodi completi precedenti."],
+  ["Valore terminale", "Con 5 anni espliciti gran parte del valore viene dagli anni successivi: la scheda mostra quanto pesa e la valutazione è «molto sensibile» quando supera l'85%."],
+  ["Società escluse", "Banche, assicurazioni, società di pagamento e utility non hanno un DCF industriale; nemmeno le società con utile operativo negativo o margini molto instabili: «non valutabile» è un risultato, non un errore."],
+  ["Compensi in azioni", "L'utile operativo GAAP sottrae già i compensi in azioni: il modello non li toglie una seconda volta e usa le azioni diluite di oggi. Il flusso di cassa «economico» (cassa libera − compensi in azioni) è una misura rettificata di questa dashboard, non una grandezza contabile standard."],
+  ["Valute", "Bilanci in EUR o CNY convertiti al cambio del giorno (fonte e data indicate), lo stesso per tutti gli anni; il rischio paese non è nel tasso di sconto."],
+  ["Nessuna verifica storica", "I gruppi sono categorie di lettura, non una classifica predittiva: il diario salva le valutazioni da ora in avanti per verificarle più avanti."],
+];
+const valNum = v => isNum(v) ? fNum(v, Math.abs(v) < 10 ? 1 : 0) : "non calcolabile";
+const valPct = (v, d = 0) => isNum(v) ? fPct(v * 100, d) : "non calcolabile";
+const valPlain = (v, d = 0) => isNum(v) ? fNum(v * 100, d) + "%" : "non calcolabile";
+const vscCls = s => s === "adeguata" ? "acc" : s === "parziale" ? "" : s === "sensibile" ? "warn" : "red";
+const vscBadge = (s, l) => `<span class="act ${vscCls(s)}">${esc(l)}</span>`;
+async function loadVal() {
+  if (opps.valLoading || (opps.val && Date.now() - opps.valAt < 5 * 60_000)) return;
+  opps.valLoading = true;
+  try { opps.val = await getJSON("/api/valuation"); opps.valErr = null; opps.valAt = opps.val.available ? Date.now() : Date.now() - 4 * 60_000; }
+  catch (e) { opps.valErr = e.message; opps.valAt = Date.now() - 4 * 60_000; }
+  opps.valLoading = false;
+  renderOpps();
+}
+// range bar: prudent → favourable shaded, base tick, price marker; values ≤ 0 are drawn at the left edge and said in words
+function valBar(v, price, big = false) {
+  if (!v || !isNum(v.base)) return "";
+  const pts = [v.prudente, v.base, v.favorevole, price].filter(isNum);
+  const hi = Math.max(...pts) * 1.08, lo = Math.max(0, Math.min(...pts) * 0.85);
+  const x = n => `${Math.max(0, Math.min(100, (n - lo) / (hi - lo) * 100)).toFixed(1)}%`;
+  const a = Math.min(v.prudente, v.favorevole), b = Math.max(v.prudente, v.favorevole);
+  return `<div class="vbar${big ? " big" : ""}" role="img" aria-label="Scenari da ${valNum(v.prudente)} a ${valNum(v.favorevole)} USD, base ${valNum(v.base)}, prezzo ${valNum(price)}">
+    <i class="rng" style="left:${x(a)};width:calc(${x(b)} - ${x(a)})"></i><i class="tick" style="left:${x(v.base)}"></i>${isNum(price) ? `<i class="px" style="left:${x(price)}"></i>` : ""}
+    ${big ? `<span class="lb" style="left:${x(a)}">prudente ${valNum(v.prudente)}</span><span class="lb mid" style="left:${x(v.base)}">base ${valNum(v.base)}</span><span class="lb end" style="left:${x(b)}">favorevole ${valNum(v.favorevole)}</span>` : ""}</div>`;
+}
+function valPriceLine(p) {
+  if (!p || !isNum(p.value)) return "prezzo non disponibile";
+  return `${fPrice(p.value)} $<div class="muted small">${p.kind === "quotazione" ? `quotazione ${p.time ? esc(oppTime(p.time)) : "ora non disponibile"}` : `chiusura ${p.date ? esc(dayIT(p.date)) : "giorno non disponibile"}`}</div>`;
+}
+function valCardHTML() {
+  const V = opps.val;
+  const head = `<div class="card-h"><h2>Valutazione e scenari</h2><span class="card-meta">modello ${esc(V?.model?.version || "")} · <b>sperimentale</b> · intervalli condizionati alle ipotesi, non prezzi obiettivo</span></div>`;
+  if (!V) return `<div class="card">${head}<div class="empty">${opps.valErr ? `Valutazione non disponibile (${esc(opps.valErr)}).` : "Carico le valutazioni…"}</div></div>`;
+  if (!V.available) return `<div class="card">${head}<div class="empty">Valutazione non ancora disponibile: ${esc(V.reason)}. Riprova tra qualche minuto.</div></div>`;
+  const f = opps.valFilter || "all";
+  const rows = V.items.filter(x => f === "all" || x.group === f);
+  const G = Object.fromEntries(V.model.groups.map(g => [g.id, g]));
+  const rf = V.rates?.rf;
+  const implied = x => isNum(x.impliedGrowth) ? `${fPct(x.impliedGrowth * 100, 0)} il 1° anno<div class="muted small">ipotesi base ${valPct(x.baseGrowth)}</div>` : `<span class="muted small">${x.values ? "non univoca o fuori intervallo" : "—"}</span>`;
+  const table = rows.length ? `<div class="table-wrap"><table class="scr opp-tbl val-tbl"><thead><tr><th class="l">Titolo</th><th class="l">Profilo (Fase 5A)</th><th>Prezzo</th>
+      <th class="l">Scenari per azione (USD)</th><th class="l">Dove sta il prezzo</th><th>Crescita implicita nel prezzo</th><th class="l">Affidabilità</th></tr></thead>
+    <tbody>${rows.map(x => `<tr data-t="${esc(x.ticker)}"><td class="l tk">${esc(x.ticker)}<div class="muted small">${esc(x.name)}</div></td>
+      <td class="l">${esc(x.fundamental.profile.label)}<div class="muted small">qualità ${esc(x.fundamental.quality.toLowerCase())}</div></td>
+      <td>${valPriceLine(x.price)}</td>
+      <td class="l">${x.values ? `${valBar(x.values, x.price?.value)}<div class="small">${x.display.map(valNum).join(" · ")}</div>` : `<span class="muted small">nessuno scenario</span>`}</td>
+      <td class="l">${x.position ? esc(x.position.label) : `<span class="muted small">${esc(x.reason || "")}</span>`}</td>
+      <td>${implied(x)}</td>
+      <td class="l">${vscBadge(x.status, x.statusLabel)}${x.status !== "adeguata" && x.values && x.reason ? `<div class="muted small" title="${esc(x.reason)}">${esc(x.reason)}</div>` : ""}</td></tr>`).join("")}</tbody></table></div>`
+    : `<div class="empty">Nessuna società in questo gruppo oggi.</div>`;
+  const D = V.diary, C = V.counts || {};
+  const computed = (C.status?.adeguata || 0) + (C.status?.parziale || 0) + (C.status?.sensibile || 0);
+  return `<div class="card">${head}
+    <p class="small">Per le società con dati e modello adatti: valore per azione in <b>tre scenari</b> (prudente, base, favorevole) da un flusso di cassa scontato, confrontato con il prezzo.
+      Barra: tratto colorato = da prudente a favorevole, linea = scenario base, punto = prezzo. <b>Non è un prezzo obiettivo né un'indicazione di acquisto o di vendita.</b>
+      Clic su una riga per ipotesi, sensibilità e limiti.</p>
+    ${V.model.disclaimer ? `<p class="warn-box small">${esc(V.model.disclaimer)}</p>` : ""}
+    <p class="muted small">Valutate ${computed} società su ${V.items.length} · Treasury a 10 anni ${rf ? `${valPlain(rf.rate, 2)} (${esc(dayIT(rf.date))})` : "non disponibile"}
+      ${Object.keys(V.fx || {}).length ? ` · cambi: ${Object.entries(V.fx).map(([c, r]) => `1 ${esc(c)} = ${fNum(r.rate, 4)} USD (${esc(dayIT(r.date))})`).join(", ")}` : ""} · calcolo delle ${esc(oppTime(V.generated))}</p>
+    <div class="chips">${VAL_FILTERS.map(([k, l]) => `<button data-vfil="${k}" class="${k === f ? "on" : ""}" title="${esc(G[k]?.rule || "tutte le società")}">${esc(l)}<span>${k === "all" ? V.items.length : (C.group?.[k] || 0)}</span></button>`).join("")}</div>
+    <p class="muted small">${f === "all" ? "I gruppi sono categorie di lettura, <b>non una classifica predittiva validata</b>; la Pagella e la classifica sopra non cambiano." : `<b>${esc(G[f]?.label || "")}</b>: ${esc(G[f]?.rule || "")}. Categoria di lettura, non una classifica predittiva.`}</p>
+    ${table}
+    <details class="fold" data-k="valrules"><summary><span class="small">Metodo e parametri</span></summary>
+      <ul class="why">${V.model.params.map(p => `<li><b>${esc(p.name)}</b>: ${esc(p.text)}</li>`).join("")}</ul>
+      <h4 class="bt-h">Stati di affidabilità</h4><ul class="why">${Object.entries(V.model.statuses).map(([k, l]) => `<li>${vscBadge(k, l)}</li>`).join("")}</ul>
+      <p class="muted small">Gli stati descrivono dati e metodo: <b>non sono probabilità</b> che la stima sia giusta.</p>
+      ${V.model.corrections ? `<h4 class="bt-h">Modello ${esc(V.model.version)} rispetto a ${esc(V.model.previous)} (verifica della Fase 5C)</h4><ul class="why">${V.model.corrections.map(c => `<li><b>${esc(c.kind)}</b>: ${esc(c.text)}</li>`).join("")}</ul>
+      <p class="muted small">Le valutazioni registrate con ${esc(V.model.previous)} restano com'erano: ogni versione è salvata a parte.</p>` : ""}</details>
+    <details class="fold" data-k="vallim"><summary><span class="small">Limiti della valutazione</span></summary>
+      <ul class="why bt-lim">${VAL_LIMITS.map(([a, b]) => `<li><b>${esc(a)}.</b> ${esc(b)}</li>`).join("")}</ul>
+      <p class="small"><b>Diario</b>: ${D?.started ? `valutazioni salvate per ${D.days} ${D.days === 1 ? "seduta" : "sedute"} (dal ${esc(dayIT(D.first))})` : "nessuna valutazione salvata finora: si registra solo dopo la chiusura, nelle sedute già salvate dal diario delle opportunità"}.</p></details>
+  </div>`;
+}
+async function loadDetailVal(t) {
+  if (!$("#dVal")) return;
+  let X;
+  try { X = await getJSON(`/api/valuation/${encodeURIComponent(t)}`); }
+  catch (e) { if (state.detail === t && $("#dVal")) $("#dVal").innerHTML = `<h3>Valutazione e scenari</h3><div class="muted small">Valutazione non disponibile per ora (serve l'analisi fondamentale, che si calcola dai bilanci scaricati in background).</div>`; return; }
+  if (state.detail !== t || !$("#dVal")) return;
+  $("#dVal").innerHTML = valDetailHTML(X);
+}
+function valDetailHTML(X) {
+  const li = a => (a || []).length ? a.map(s => `<li>${esc(s)}</li>`).join("") : "<li>nessuno</li>";
+  const F = X.fundamental;
+  const head = `<h3>Valutazione e scenari <span class="muted small">modello ${esc(X.modelVersion)}, sperimentale</span></h3>
+    <p class="small">Prezzo ${valPriceLine(X.price).replace("<div", " <span").replace("</div>", "</span>")} · profilo fondamentale (Fase 5A): <b>${esc(F.profile.label)}</b>, qualità ${esc(F.quality.toLowerCase())}, solidità ${esc(F.solidity.toLowerCase())}.</p>`;
+  if (!X.scenarios) return `${head}<p>${vscBadge(X.status, X.statusLabel)}</p><ul class="why">${li(X.reasons)}</ul>
+    ${X.disclaimer ? `<p class="muted small">${esc(X.disclaimer)}</p>` : ""}
+    <p class="muted small">Nessuno scenario: mostrare un valore qui sarebbe una stima senza basi sufficienti.</p>
+    <details class="fold"><summary><span class="small">Rischi e condizioni da monitorare</span></summary><h4>Rischi</h4><ul class="why">${li(X.risks)}</ul><h4>Da monitorare</h4><ul class="why">${li(X.monitor)}</ul></details>`;
+  const S = X.scenarios, K = [["prudente", "Prudente"], ["base", "Base"], ["favorevole", "Favorevole"]];
+  const I = X.inputs, d = I.discount, R = X.reverse || {};
+  const vals = Object.fromEntries(K.map(([k], i) => [k, X.range.display[i]]));      // rounded, as in the table
+  const row = (lab, fn, note = "") => `<tr><td class="l">${esc(lab)}${note ? `<div class="muted small">${esc(note)}</div>` : ""}</td>${K.map(([k]) => `<td>${fn(S[k], S[k].assumptions)}</td>`).join("")}</tr>`;
+  const scTable = `<div class="table-wrap"><table class="scr mini val-sc"><thead><tr><th class="l">Ipotesi e risultato</th>${K.map(([, l]) => `<th>${l}</th>`).join("")}</tr></thead><tbody>
+    ${row("Crescita dei ricavi, 1° anno", (s, a) => valPct(a.g1), "poi in calo lineare fino alla crescita terminale")}
+    ${row("Ricavi dopo 5 anni", s => `${fNum(s.revMultiple, 1)} volte oggi`)}
+    ${row("Margine operativo", (s, a) => `${valPlain(a.m0, 1)} → ${valPlain(a.mT, 1)}`, "oggi → a regime (in 5 anni)")}
+    ${row("Tasse", (s, a) => valPlain(a.tax, 0))}
+    ${row("Ricavi per ogni dollaro investito", (s, a) => fNum(a.s2c, 2), "più alto = serve meno capitale per crescere")}
+    ${row("Reinvestimenti in 5 anni", s => isNum(s.reinvestShare) ? `${valPlain(s.reinvestShare, 0)} dell'utile operativo netto` : "non calcolabile")}
+    ${row("Rendimento del capitale a regime", (s, a) => valPlain(a.roicT, 1))}
+    ${row("Tasso di sconto (WACC)", (s, a) => valPlain(a.wacc, 1), "uguale nei tre scenari")}
+    ${row("Crescita terminale", (s, a) => valPlain(a.gT, 1))}
+    ${row("Peso del valore terminale", s => valPlain(s.tvShare, 0))}
+    ${row("Valore per azione (arrotondato)", s => `<b>${valNum(Number(X.range.display[K.findIndex(([k]) => k === s.kind)]))} $</b>`)}
+    ${row("Prezzo rispetto al valore", s => isNum(s.priceVsValue) ? `${fPct(s.priceVsValue * 100, 0)}` : "non calcolabile", "+ = prezzo sopra il valore dello scenario")}
+    </tbody></table></div>`;
+  const sens = `<div class="table-wrap"><table class="scr mini"><thead><tr><th class="l">Ipotesi dello scenario base</th><th>Più bassa</th><th>Più alta</th></tr></thead><tbody>
+    ${X.sensitivity.map(r => `<tr><td class="l">${esc(r.label)} (${r.key === "gT" ? "±0,5" : r.key === "g1" ? "±5" : r.key === "mT" ? "±2" : "±1"} punti)</td>${r.cells.map(c => `<td>${isNum(c.change) ? fPct(c.change * 100, 0) : `<span class="muted small">${esc(c.invalid || "non calcolabile")}</span>`}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  const rev = `<ul class="why">
+    <li>${isNum(R.growth) ? `Con i margini dello scenario base, il prezzo corrisponde a ricavi in crescita del <b>${fPct(R.growth * 100, 0)}</b> il primo anno (poi in calo fino al 2,5%), cioè ${fNum(R.growthRevMultiple, 1)} volte i ricavi di oggi in 5 anni. Lo scenario base ipotizza ${valPct(I.g1)}.` : `Crescita implicita: ${esc(R.growthNote || "non calcolabile")}.`}</li>
+    <li>${isNum(R.margin) ? `Con la crescita dello scenario base, il prezzo corrisponde a un margine operativo a regime del <b>${valPlain(R.margin, 0)}</b> (oggi ${valPlain(I.m0, 1)}).` : `Margine implicito: ${esc(R.marginNote || "non calcolabile")}.`}</li>
+    <li>${isNum(R.wacc) ? `Con crescita e margini dello scenario base, il prezzo corrisponde a un tasso di sconto del <b>${valPlain(R.wacc, 1)}</b> (modello ${valPlain(d.wacc, 1)}).` : `Tasso di sconto implicito: ${esc(R.waccNote || "non calcolabile")}.`}</li></ul>
+    ${R.combinations?.length ? `<p class="small"><b>Combinazioni che danno lo stesso prezzo</b> (${esc(R.identification)}):</p><ul class="why">${R.combinations.map(c => `<li>${esc(c.text)}</li>`).join("")}</ul>` : ""}
+    <p class="muted small">Non è una previsione: dice quali risultati il prezzo di oggi sembra già incorporare, con il tasso di sconto del modello.</p>`;
+  const lv = X.levels?.length ? `<ul class="why">${X.levels.map(l => `<li>${esc(l.text)}</li>`).join("")}</ul>`
+    : `<p class="small">${["adeguata", "parziale"].includes(X.status) ? "Il prezzo è già sotto il valore dello scenario base." : "Non mostrati: con una valutazione molto sensibile alle ipotesi un livello di prezzo darebbe una precisione che la stima non ha."}</p>`;
+  const B = I.bridge, C = I.cash || {}, H = I.fcffHist;
+  const big = v => isNum(v) ? fBig(v) + " $" : "non disponibile";
+  const wacc = `<ul class="why">
+    <li>Costo del capitale proprio ${valPlain(d.ke, 1)} = Treasury 10 anni ${valPlain(d.rf, 2)} (${esc(dayIT(d.rfDate))}) + beta ${fNum(d.beta, 2)}${isNum(d.betaRaw) ? ` (Yahoo ${fNum(d.betaRaw, 2)}, corretto verso 1)` : " (non disponibile)"} × premio ${valPlain(d.erp, 1)}</li>
+    <li>Costo del debito ${valPlain(d.kd, 1)} prima delle tasse (${esc(d.kdSrc)}), peso del debito ${valPlain(d.wd, 0)} → WACC ${valPlain(d.wacc, 1)}</li>
+    ${I.timing ? `<li>Date: ${esc(I.timing.text)}.</li>` : ""}
+    <li>Dal valore dell'impresa a quello delle azioni (scenario base): ${big(S.base.ev)} + liquidità ${big(B.cash)}${B.investments ? ` + investimenti a lungo termine ${big(B.investments)}` : ""} − debito con leasing ${big(B.debt)}${isNum(B.leases) ? ` (di cui leasing ${big(B.leases)})` : ""}${B.minority ? ` − minoranze ${big(B.minority)}` : ""}${B.preferred ? ` − privilegiate ${big(B.preferred)}` : ""} = ${big(S.base.equity)}, diviso ${fBig(I.shares)} azioni diluite${I.adr && I.adr > 1 ? ` (1 titolo quotato = ${I.adr} azioni ordinarie)` : ""}</li>
+    <li>Rapporto ricavi/capitale: ${esc(I.s2cSrc)}. Tasse: ${esc(I.taxSrc)}.</li>
+    <li>Cassa: flusso di cassa libero contabile ${big(C.fcf)}; compensi in azioni ${big(C.sbc)}${isNum(C.sbcShare) ? ` (${valPlain(C.sbcShare, 1)} dei ricavi)` : ""}; flusso «economico» (cassa libera − compensi in azioni, misura rettificata non standard) ${big(C.fcfEconomic)}. Il DCF parte dall'utile operativo, che i compensi li ha già sottratti: non sono tolti due volte.</li>
+    ${I.dilution ? `<li>Azioni diluite: ${fPct(I.dilution.perYear * 100, 1)} l'anno dal ${esc(dayIT(I.dilution.from))} al ${esc(dayIT(I.dilution.to))} (${I.dilution.perYear < 0 ? "riacquisti" : "diluizione"}); non entra nel valore per non contarla due volte.</li>` : ""}
+    ${H ? `<li>Flusso di cassa per tutti i finanziatori negli ultimi dati: dall'utile operativo ${big(H.fromEbit)}${H.wcMissing ? " (capitale circolante non disponibile)" : ""}; dal flusso di cassa operativo, meno i compensi in azioni ${big(H.fromOcf)}. Primo anno del modello (scenario base): ${big(X.limits?.year1Fcff)}.</li>` : ""}
+    ${X.limits?.clamps?.length ? X.limits.clamps.map(c => `<li>Limite attivo: ${esc(c.text)}${isNum(c.change) ? `; senza il limite il valore base cambierebbe del ${fPct(c.change * 100, 0)}` : ""}.</li>`).join("") : ""}
+    ${I.fx ? `<li>Cambio ${esc(I.fx.currency)}/USD ${fNum(I.fx.rate, 4)} del ${esc(dayIT(I.fx.date))} (${esc(I.fx.source)}), applicato a tutti gli anni.</li>` : ""}</ul>`;
+  return `${head}
+    <p>${vscBadge(X.status, X.statusLabel)} ${X.position ? `<b>${esc(X.position.label)}</b>` : ""}</p>
+    ${valBar(vals, X.price?.value, true)}
+    ${X.disclaimer ? `<p class="muted small">${esc(X.disclaimer)}</p>` : ""}
+    <div class="table-wrap"><table class="scr mini val-q"><tbody>
+      <tr><td class="l">Qualità fondamentale (Fase 5A)</td><td class="l">${esc(F.quality)} · crescita ${esc((F.growth || "").toLowerCase())}</td></tr>
+      <tr><td class="l">Prezzo e valutazione</td><td class="l">${X.position ? esc(X.position.label) : "—"}</td></tr>
+      <tr><td class="l">Rischio</td><td class="l">solidità ${esc(F.solidity.toLowerCase())}${X.blockers?.length ? ` · ${X.blockers.length} ${X.blockers.length === 1 ? "criticità" : "criticità"} nella stima` : ""}</td></tr>
+      <tr><td class="l">Affidabilità di dati e metodo</td><td class="l">${esc(X.statusLabel)}</td></tr>
+      <tr><td class="l">Capacità predittiva</td><td class="l">non ancora dimostrata: si potrà misurare solo con il diario, nei prossimi mesi</td></tr>
+    </tbody></table></div>
+    <p class="small">${esc(X.summary)}</p>
+    ${X.reasons?.length ? `<ul class="why small">${li(X.reasons)}</ul>` : ""}
+    <details class="fold" open><summary><span class="small">Tre scenari: ipotesi e risultati</span></summary>${scTable}
+      <ul class="why">${K.map(([k, l]) => `<li><b>${l}</b>: plausibile ${esc(S[k].text.plausible)}; poco plausibile ${esc(S[k].text.implausible)}.</li>`).join("")}</ul>
+      <p class="muted small">Nessuna probabilità è assegnata agli scenari e non c'è un «valore atteso»: sono condizioni, non previsioni.</p></details>
+    <details class="fold"><summary><span class="small">Cosa incorpora il prezzo (calcolo inverso)</span></summary>${rev}</details>
+    <details class="fold"><summary><span class="small">Sensibilità del valore base</span></summary>${sens}
+      <p class="muted small">Variazione del valore per azione dello scenario base quando cambia una sola ipotesi.</p>
+      ${X.limits?.horizon ? `<p class="small">Durata della crescita: nello scenario base i ricavi crescono ancora del ${valPct(X.limits.horizon.growthYear5, 1)} nel 5° anno, poi il 2,5%. ${esc(X.limits.horizon.text)}.</p>` : ""}</details>
+    <details class="fold"><summary><span class="small">Livelli di prezzo per una nuova analisi</span></summary>${lv}
+      <p class="muted small">Condizioni di valutazione, non ordini né prezzi di esecuzione; non tengono conto del momento di mercato.</p></details>
+    <details class="fold"><summary><span class="small">Rischi principali e condizioni da monitorare</span></summary>
+      <div class="opp-cols"><div><h4>Rischi</h4><ul class="why">${li(X.risks)}</ul></div><div><h4>Da monitorare</h4><ul class="why">${li(X.monitor)}</ul></div></div></details>
+    <details class="fold"><summary><span class="small">Tasso di sconto, valore delle azioni e cassa</span></summary>${wacc}</details>
+    <details class="fold"><summary><span class="small">Dati usati e dati mancanti</span></summary>
+      <h4>Usati</h4><ul class="why">${li(X.dataUsed)}</ul><h4>Mancanti, stimati o limitati</h4><ul class="why">${li([...(X.dataMissing || []), ...(X.notes || [])])}</ul>
+      <p class="muted small">Bilanci scaricati il ${X.dataDates?.statements ? esc(oppTime(X.dataDates.statements)) : "data non disponibile"} · calcolo delle ${esc(oppTime(X.generated))}. Non è una consulenza finanziaria.</p></details>`;
+}
 function renderOpps() {
   const el = $("#oppsBody"), D = opps.data;
   if (state.view !== "opps" || !el) return;
+  if (opps.mode === "etf") { el.innerHTML = oppEtfHTML(); return; }   // phase 6A: no ETF ranking, only catalogue and comparison
   if (!D) {
     el.innerHTML = `<div class="card empty">${opps.err === "loading" ? "I dati di mercato si stanno ancora caricando: le classifiche compaiono appena sono pronti."
       : `Classifiche non disponibili al momento${opps.err ? ` (${esc(opps.err)})` : ""}.`} Nuovo tentativo al prossimo aggiornamento della pagina.</div>`;
@@ -2823,12 +3454,13 @@ function renderOpps() {
   const params = D.model?.params || [];
   const S = opps.diary;
   const diarySum = !S ? "" : S.started ? `dal ${dayIT(S.first)} · ${S.days} ${S.days === 1 ? "giornata" : "giornate"} · ${fNum(Object.values(S.lists).reduce((a, L) => a + L.observations, 0), 0)} osservazioni` : "non ancora avviato";
-  el.innerHTML = `<p class="warn-box"><b>Classifica preliminare, non un segnale di acquisto.</b> Sono titoli da <b>approfondire</b>, scelti con condizioni semplici
-      scritte qui sotto e <b>non verificate da un backtest</b>: nessuna probabilità e nessun rendimento atteso. Prima di qualsiasi decisione apri la scheda
+  el.innerHTML = `<p class="warn-box"><b>Classifica preliminare, non un segnale di acquisto.</b> Sono titoli da <b>osservare e approfondire</b>, scelti con condizioni semplici
+      scritte qui sotto e <b>non validate</b>: nessuna probabilità e nessun rendimento atteso. Prima di qualsiasi decisione apri la scheda
       del titolo e leggi la sezione Decisione. Non è una consulenza finanziaria.</p>
     <div class="card"><div class="card-h"><h2>${esc(OPP_MODES[mode])}</h2>
       <div class="seg">${Object.entries(OPP_MODES).map(([k, l]) => `<button data-opm="${k}" class="${k === mode ? "on" : ""}">${esc(l.split(" · ")[0])}</button>`).join("")}</div>
       <span class="card-meta">orizzonte ${esc(B.horizon)} · prezzi delle sedute chiuse fino al ${D.asOf ? esc(dayIT(D.asOf)) : "—"} · ${B.qualified} titoli con almeno ${B.min} condizioni su ${n}, mostrati i primi ${items.length}${B.complete ? "" : " · <b>classifica incompleta</b>"}</span></div>
+      ${oppStateLine(trading)}
       ${oppMarketLine(D.market)}
       ${B.coverageNote ? `<p class="warn-box"><b>Copertura dei dati insufficiente.</b> ${esc(B.coverageNote)} L'elenco dei titoli senza il dato è in «Come è fatta la classifica».</p>` : ""}
       ${table}
@@ -2844,14 +3476,24 @@ function renderOpps() {
           ${D.newsReady ? "" : "Notizie non ancora scaricate. "}Calcolo delle ${esc(oppTime(D.generated))}.</p>
         <h4 class="bt-h">Limiti</h4><ul class="why bt-lim">${OPP_LIMITS.map(([a, b]) => `<li><b>${esc(a)}.</b> ${esc(b)}</li>`).join("")}</ul>
       </details></div>
-    <div class="card"><details class="fold" data-k="diary"><summary><h3>Monitoraggio risultati</h3><span class="card-meta">${esc(diarySum)}</span></summary>${oppDiaryHTML()}</details></div>`;
+    ${trading ? "" : invCardHTML()}
+    ${trading ? "" : valCardHTML()}
+    <div class="card"><details class="fold" data-k="diary"><summary><h3>Monitoraggio risultati</h3><span class="card-meta">${esc(diarySum)}</span></summary>${oppDiaryHTML()}</details></div>
+    <div class="card"><details class="fold" data-k="lab"><summary><h3>Qualità dei segnali</h3><span class="card-meta">${opps.lab ? "regola attuale, studio storico, strategie sperimentali e diario prospettico" : "non disponibile"}</span></summary>${oppLabHTML()}</details></div>`;
   keepOpen.forEach(k => { const d = el.querySelector(`details.fold[data-k="${k}"]`); if (d) d.open = true; });
+  if (!trading) { loadInv(); loadVal(); }
 }
 document.addEventListener("click", e => {
   const box = e.target.closest("#oppsBody");
   if (!box) return;
   const m = e.target.closest("[data-opm]");
   if (m) { opps.mode = m.dataset.opm; LS.set("opp.mode", opps.mode); renderOpps(); return; }
+  const fl = e.target.closest("[data-ifil]");
+  if (fl) { opps.invFilter = fl.dataset.ifil; renderOpps(); return; }
+  const vf = e.target.closest("[data-vfil]");
+  if (vf) { opps.valFilter = vf.dataset.vfil; renderOpps(); return; }
+  const so = e.target.closest("[data-isort]");
+  if (so) { const k = so.dataset.isort; opps.invSort = { k, dir: opps.invSort.k === k ? -opps.invSort.dir : 1 }; renderOpps(); return; }
   const x = e.target.closest("[data-ox]");
   if (x) { const k = opps.mode + x.dataset.ox; opps.open.has(k) ? opps.open.delete(k) : opps.open.add(k); renderOpps(); return; }
   const tr = e.target.closest("tr[data-t]");

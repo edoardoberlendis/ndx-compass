@@ -63,6 +63,10 @@ ridosso del massimo"); gli avvisi di calendario dentro le card (ora una piccola 
     (come T4), stime tagliate oltre il 3% in 30 giorni (come T3), trimestrale entro 5 giorni, notizie dal tono negativo
     (punteggio ≤ −20), prezzo sotto la media 50. Accanto: rendimento contro la mediana del settore a 6 mesi e le note della
     valutazione.
+    Sotto la classifica, la card **Analisi fondamentale** (Fase 5A, sperimentale): sei giudizi separati per ogni società,
+    filtri e ordinamento; vedi la sezione «Analisi fondamentale per l'investimento». Sotto ancora la card **Valutazione e
+    scenari** (Fase 5B, sperimentale): valore per azione in tre scenari, posizione del prezzo e crescita implicita nel
+    prezzo; vedi la sezione «Valutazione e scenari».
   - **Ordine**: più condizioni soddisfatte, poi meno avvisi, poi (Trading) la differenza con QQQ a 1 mese più alta o
     (Investimento) la valutazione più bassa rispetto a settore e storia. Un dato mancante conta **sempre** come condizione non
     soddisfatta, mai come neutra, e il titolo diventa «Dati insufficienti».
@@ -574,6 +578,338 @@ prima dei costi), sotto la soglia fissata prima del test: resta non verificato.
 **Regola della dashboard:** nella scheda ETF momentum e trend sono informazioni **non verificate**: niente «favorevole
 adesso» né «investi». Limiti: le categorie sono misurate con ETF americani in dollari, nessun costo, test multipli.
 
+## Laboratorio di validazione delle condizioni Trading (Fase O3)
+
+`opportunity_validation.py` è uno **studio esplorativo con survivorship bias** delle cinque condizioni Trading (T1–T5) della
+scheda Opportunità. Non cambia lo scanner, la classifica, le soglie (`MODEL_VERSION` resta O2.1) né il diario delle
+opportunità. Si avvia solo a mano dal Terminale, mai dentro la dashboard:
+
+```sh
+.venv/bin/python opportunity_validation.py config         # configurazione, soglie, regole di evidenza e limiti
+.venv/bin/python opportunity_validation.py run --scarica  # scarica 10 anni (dal 1/10/2015) e fa lo studio (~15 secondi)
+.venv/bin/python opportunity_validation.py run            # rifà lo studio sugli ultimi prezzi salvati (stessi dati)
+.venv/bin/python opportunity_validation.py run --dashboard  # solo i 2 anni della cache della dashboard, nessun download
+.venv/bin/python opportunity_validation.py show [file]    # stampa l'ultimo report salvato (o quello indicato)
+.venv/bin/python opportunity_validation.py investimento   # cosa permettono i dati per l'Investimento (nessun backtest)
+```
+
+**Dove**: `data/validazione/` (fuori da Git): `prezzi_*.pkl` (i prezzi usati, per poter rifare lo stesso studio),
+`report_*.json` (un file per studio, mai riscritto), `esperimenti.jsonl` (registro degli esperimenti: si aggiunge una riga
+per studio, con codice della configurazione e periodo finale aperto sì/no), `riepilogo.json` (l'unico file che legge la
+dashboard). Nessun file del diario viene aperto in scrittura: il comando `investimento` legge il diario solo se esiste, in
+sola lettura.
+
+**Cosa si può provare sul passato e cosa no**
+- T1–T5 usano solo prezzi e volumi giornalieri: si ricalcolano per ogni giorno passato con i soli dati di quel giorno. Ogni
+  studio confronta 200 casi a caso con `opportunity_scanner` (stessi risultati, altrimenti si ferma).
+- I1–I5 (bilanci, stime, consenso, valutazione) e gli avvisi (notizie, trimestrali) esistono solo con i dati di oggi:
+  **nessuna Pagella retroattiva e nessun backtest dell'Investimento**. Si misurano solo in avanti con il diario (63 e 126
+  sedute); lo storico di 2 anni della dashboard basta per misurarle finché il diario continua.
+- L'universo è il **Nasdaq-100 di oggi** (non esiste uno storico della composizione): mancano i titoli usciti, spesso
+  perché scesi, e ci sono quelli entrati dopo. Rendimenti assoluti, contro QQQ e contro l'universo sono spinti verso l'alto.
+
+**Metodo** (fissato prima di vedere i risultati, 4 novembre 2026; versione del laboratorio `VERSION` = V1)
+- Prezzi Yahoo rettificati per frazionamenti e dividendi per titoli e QQQ (rendimenti vicini a quelli totali, per tutti);
+  solo sedute chiuse; titoli con giorni di borsa diversi da QQQ esclusi; prezzi mancanti mai riempiti. I movimenti oltre
+  ±40% in un giorno sono elencati da controllare (possibili eventi societari non rettificati), non corretti.
+- **Statistiche dei segnali**: rendimento dalla chiusura del giorno del segnale alla chiusura 5, 10 e 21 sedute dopo (sul
+  calendario di QQQ), confrontato negli stessi giorni con QQQ, con tutti i titoli, con i titoli non scelti e con 200 scelte
+  a caso dello stesso numero di titoli tra quelli osservabili quel giorno. Differenze calcolate **giorno per giorno** e poi
+  mediate (i segnali dello stesso giorno non sono indipendenti), con errori di Newey-West (ritardo = orizzonte) e il
+  numero di periodi che non si sovrappongono.
+- **Periodi**: sviluppo (60% dei giorni), verifica (20%), finale (20%) **sigillato**, in ordine di tempo, togliendo 21
+  sedute a ogni confine (i rendimenti futuri non attraversano il confine). Il periodo finale si apre solo con
+  `--apri-finale`, che resta scritto nel registro: non va usato per scegliere o ritoccare le regole.
+- **Giudizio** (mai «validato»): «Evidenza insufficiente» con meno di 100 segnali o 20 periodi indipendenti nello sviluppo;
+  «credibile nello studio esplorativo» solo con |t| ≥ 2, fuori dal 95% delle scelte a caso e stesso segno nella verifica
+  (con almeno 10 periodi indipendenti); altrimenti «osservata, non credibile» o «non confermata».
+- **Walk-forward**: ogni anno si sceglie l'alternativa migliore sugli anni prima e la si misura nell'anno.
+- **Simulazione sperimentale** (separata): segnale alla chiusura → acquisto all'**apertura della seduta dopo**, vendita
+  all'apertura 21 sedute dopo, regola 4 su 5, massimo 10 titoli in quote uguali, mai lo stesso titolo due volte, capitale
+  ipotetico 10.000, costi ipotetici 0 / 0,10 / 0,25% per lato (commissione e scarto insieme, **non** le tariffe di Fineco),
+  valore del portafoglio a ogni chiusura (le operazioni sovrapposte non si sommano). Confronto con QQQ e con 20 simulazioni
+  con le stesse regole su titoli scelti a caso.
+
+**Risultati del 4 novembre 2026** (10 anni, 101 titoli, 242.667 osservazioni; sviluppo e verifica dall'11 gennaio 2016 al
+10 luglio 2024; periodo finale dal 9 agosto 2024 sigillato, non aperto). Orizzonte 21 sedute, differenza media di ogni giorno:
+
+| Gruppo | Segnali | Contro i non scelti | Contro QQQ | Giudizio a 5 · 10 · 21 sedute |
+|---|---|---|---|---|
+| T1 più forte di QQQ a 1 mese | 92.990 | −0,56 | +0,24 | non credibile · **peggiore, credibile** · **peggiore, credibile** |
+| T2 più forte di QQQ a 3 mesi | 95.254 | −0,12 | +0,48 | non credibile (tutti) |
+| T3 sopra le medie 20 e 50 | 95.228 | −0,40 | +0,37 | **peggiore, credibile** · non credibile · non credibile |
+| T4 media 20 in salita | 111.940 | −0,43 | +0,43 | non credibile (tutti) |
+| T5 volumi 20/60 almeno 1 | 82.513 | +0,04 | +0,57 | non credibile (tutti) |
+| Almeno 3 su 5 | 96.960 | −0,45 | +0,27 | **peggiore, credibile** · **peggiore, credibile** · non credibile |
+| **Almeno 4 su 5 (regola attuale)** | 62.317 | −0,12 | +0,43 | non credibile (tutti) |
+| Tutte e 5 | 22.580 | −0,09 | +0,41 | non credibile (tutti) |
+
+In parole semplici: nessuna condizione e nessuna combinazione ha fatto meglio dei titoli non scelti dello stesso giorno.
+Battere QQQ di qualche decimo è comune a quasi tutti i gruppi, anche a quelli deboli (i titoli deboli contro QQQ: +0,80),
+quindi viene dal survivorship bias, non dalla selezione. L'unico effetto «credibile» va al contrario: chi è più forte di
+QQQ nell'ultimo mese è andato un po' peggio degli altri nel mese dopo. La simulazione (+823% con costi 0,10%, contro QQQ
++360%) sta dentro le scelte a caso con le stesse regole (mediana +545%, 10°–90° percentile da +427% a +790%): il guadagno
+viene dall'universo dei sopravvissuti e dalla volatilità, non dalle condizioni. Le condizioni T1–T4 sono legate tra loro
+(correlazione 0,3–0,6), T5 è indipendente dalle altre. Il walk-forward non trova un'alternativa stabile (la scelta
+migliore sul passato resta positiva 3 anni su 7). **Nessuna soglia dello scanner è stata cambiata**: eventuali modifiche
+solo su decisione esplicita dell'utente e poi con la conferma del diario.
+
+Nella scheda Opportunità il pannello chiuso **«Qualità dei segnali»** mostra il riepilogo dell'ultimo studio
+(`/api/opportunities/validation`, legge solo `riepilogo.json`), separato dal «Monitoraggio risultati» del diario.
+
+## Qualità dei dati e stato di affidabilità (Fase 4A)
+
+- `market_data_quality.py` (`.venv/bin/python market_data_quality.py [prezzi.pkl] [--report r.json] [--salva]`): controlli
+  riproducibili (serie, date NYSE, duplicati, prezzi nulli, OHLC incoerenti, volumi, prezzi fermi, anni illiquidi, variazioni
+  oltre ±40%, inversioni, possibili frazionamenti, prezzi prima della quotazione regolare, dati dopo la data del calcolo).
+  **Segnala, non corregge.** Stati: errore verificato, dato sospetto non verificato, movimento reale confermato, dato mancante;
+  solo una revisione con fonti (`data_quality_reviews.json`, versione R1, criteri scritti prima della rielaborazione) dà
+  «errore» o «reale».
+- Verifiche del 4 novembre 2026: **FER** prima del 9/5/2024 non è il titolo del Nasdaq (volume zero in 1.748 sedute; i salti
+  del 2018 e del 2020 sono smentiti dalla quotazione di Madrid) → errore verificato; **MRNA** +177% il 19/8/2026 → movimento
+  reale (risultati di fase 3 sul melanoma); **HONA** 15–26/6/2026 → negoziazione «when-issued», errore verificato; **HON**
+  29/6/2026 → rettifica dello scorporo sospetta, non verificata.
+- `opportunity_validation.py rielabora [report]`: riproduce lo studio originale dagli stessi prezzi (identico) e lo rifà senza
+  i tratti «errore verificato» con exclude=true, in `data/validazione/rielaborazioni/` (i report della Fase 3, il registro e il
+  periodo finale restano intatti). Esito: differenza massima 0,19 punti; 4/5 resta −0,12 contro i non scelti; cambiano solo due
+  giudizi a 5 sedute (T3 e 3 su 5 da «peggiore, credibile» a «non credibile»).
+- Stato di affidabilità (`opportunity_validation.reliability`, criteri nel codice): classifiche = «Screening esplorativo»;
+  Trading 4/5 e 5/5 «non validate»; Investimento «non validata» finché il diario non registra, poi «in verifica» (solo in
+  avanti). «Validata» solo con studio storico credibile, conferma del periodo finale (aperto una volta) e del diario.
+
+## Ricerca controllata di nuove strategie Trading (Fase 4B)
+
+`opportunity_strategies.py` è un'area sperimentale separata dallo scanner: non cambia regole, soglie o classifiche. Studia
+tre famiglie con **una sola configurazione ciascuna**, scritta e registrata prima dei risultati in
+`docs/ricerca_strategie_4b.md`.
+
+```sh
+.venv/bin/python opportunity_strategies.py ipotesi     # ipotesi, regole, criteri e condizioni di falsificazione
+.venv/bin/python opportunity_strategies.py config      # configurazione, versione, impronta e se è registrata
+.venv/bin/python opportunity_strategies.py registra    # registra la configurazione (una volta per versione, prima dello studio)
+.venv/bin/python opportunity_strategies.py run         # esegue lo studio (rifiutato se la configurazione è cambiata)
+.venv/bin/python opportunity_strategies.py show [A|B|C]  # report salvati
+.venv/bin/python opportunity_strategies.py registro    # registro degli esperimenti
+```
+
+- **Dati.** Usa i prezzi congelati della Fase 3, controllati con un'impronta, senza i tratti «errore verificato» della
+  revisione R1. I prezzi dal 9 agosto 2024 (periodo finale riservato) non vengono caricati. I settori sono quelli ICB di oggi,
+  congelati in `data/strategie/settori_icb_2026-11-03.json`: lo storico delle classificazioni non esiste.
+- **Risultati.** Vanno in `data/strategie/`: registrazione, un report per strategia, registro e riepilogo per il pannello.
+- **Esito del 4 novembre 2026** (S1, impronta `9c7c2763fd71`), sempre «Studio esplorativo con survivorship bias»:
+  - **A, momentum relativo al settore**: «Nessun vantaggio rilevato». Non aggiunge informazione rispetto al momentum
+    semplice: +0,01 punti, t 0,1.
+  - **B, ritracciamento nel trend**: «Nessun vantaggio rilevato». Fa −0,12 punti contro i non scelti, e il trend non
+    aggiunge nulla.
+  - **C, contesto di mercato da QQQ**: «Evidenza insufficiente». Ci sono 4 episodi ribassisti nello sviluppo, ne servono
+    5. Il filtro peggiora il rapporto rendimento/rischio di A, B e della regola 4/5.
+- **Simulazione.** Esclude i titoli con meno di un anno di storia. Così la regola 4/5 passa da +824% a +430%: il risultato
+  della Fase 3 dipende molto dai titoli quotati da poco.
+- **Pannello.** In «Qualità dei segnali» compare come sezione «2 · Strategie sperimentali», chiusa per default. Legge solo
+  `data/strategie/riepilogo.json` e non calcola nulla.
+
+## Analisi fondamentale per l'investimento (Fase 5A, sperimentale)
+
+In **Opportunità → Investimento**, sotto la classifica della Pagella (che **non cambia**), c'è la card «Analisi fondamentale».
+Per ogni società descrive sei aspetti **separati**, senza farne un voto e senza indicazioni di acquisto o vendita:
+
+| Dimensione | Stati | Da cosa |
+|---|---|---|
+| Qualità | Elevata, Buona, Modesta, Debole | margine operativo, flusso di cassa libero (per tecnologia e software al netto dei compensi in azioni), rendimento del capitale investito, margine in calo |
+| Crescita | Forte, Positiva, Modesta, In calo | ricavi dell'ultimo trimestre sullo stesso dell'anno prima, ultimo esercizio, media di 3 esercizi; accelerazione o rallentamento; utili solo su basi positive e non minuscole |
+| Solidità | Solida, Adeguata, Da verificare, Fragile | debito netto/EBITDA, copertura degli interessi, anni di liquidità se la cassa è negativa |
+| Valutazione | Contenuta, Nella media del gruppo, Impegnativa | posizione tra almeno 5 società comparabili (stessa industria Yahoo o stesso settore ICB e stesso modello) su P/E, P/E atteso, EV/utile operativo, EV/EBITDA, prezzo/ricavi, rendimento del flusso di cassa libero |
+| Aspettative | In miglioramento, Stabili, In peggioramento, Revisione non verificabile | variazione in 90 giorni della stima di utile del prossimo anno (lo storico che dà la fonte); il consenso di oggi è mostrato a parte e non cambia lo stato |
+| Trend | Favorevole, Misto, Debole | chiusura e media 50 rispetto alla media 200 (regola B2): è il comportamento del prezzo, non una qualità dell'azienda |
+
+Ogni stato può essere «Non valutabile» o «Non confrontabile», e porta i motivi con i valori misurati e la regola.
+Il **profilo** (per esempio «Qualità e crescita», «Qualità elevata, valutazione impegnativa», «Fragilità finanziaria da
+verificare», «Valutazione apparentemente contenuta, ma con rischi fondamentali», «Dati insufficienti») viene da regole
+controllate in un ordine fisso, con i rischi prima: una buona qualità non nasconde mai una solidità fragile. L'ordine
+iniziale della tabella (completezza, poi giudizi favorevoli meno critici, pesi uguali) è dichiarato **sperimentale**.
+
+- **Modelli per settore.** Tecnologia e software (cassa al netto dei compensi in azioni), industriali/consumo/altri
+  (criteri generici), finanziario (solidità non valutabile con debito ed EBITDA, qualità da margine netto e ROE, P/E e
+  prezzo/patrimonio), utility (solidità solo dalla copertura degli interessi). Un indicatore che non si applica è
+  «non applicabile», mai stimato.
+- **Dati.** `fundamentals.py` scarica da Yahoo bilanci annuali e trimestrali e calendario delle trimestrali, in background
+  (all'avvio e ogni 30 minuti solo per i titoli che ne hanno bisogno: ogni 7 giorni, 2 giorni dopo una trimestrale, una
+  volta al giorno per 14 giorni se i risultati annunciati non sono ancora nei bilanci). Cache in `cache/fundamentals.json`.
+  Aprire la pagina non scarica nulla.
+- **Data di fine e data di pubblicazione.** Ogni indicatore mostra il periodo (12 mesi = 4 trimestri consecutivi, esercizio,
+  bilancio a una data) e la data in cui i risultati sono stati annunciati, se è nel calendario; altrimenti «non
+  verificabile». Periodi che finiscono, sono annunciati o compaiono nella fonte dopo il momento del calcolo non si usano.
+- **Valute.** I bilanci in EUR o CNY (ASML, CCEP, FER, PDD) sono convertiti con il cambio del giorno per i multipli; il P/E
+  atteso di questi ADR non si calcola. L'«enterprise value» di Yahoo non si usa (è sbagliato per alcuni titoli esteri):
+  si ricalcola da capitalizzazione e debito netto.
+- **Limiti noti.** L'EBIT di Yahoo contiene voci straordinarie: si usa l'utile operativo. Chi pubblica solo semestrali
+  (CCEP, FER) è analizzato sull'ultimo bilancio annuale. Dopo una trimestrale Yahoo può metterci giorni a caricare i
+  bilanci: la scheda lo dice («risultati annunciati il … non ancora nei bilanci della fonte»).
+- **Scheda del titolo.** Pannello «Analisi investimento»: profilo, sei giudizi, e sezioni chiuse con punti di forza e
+  critici, motivi di ogni giudizio, indicatori con periodo e pubblicazione, confronto con i comparabili, dati mancanti e
+  limiti, cose da monitorare.
+- **Diario.** `investment_diary.py` salva i giudizi di una seduta **solo se il diario delle opportunità l'ha già
+  registrata**, in tabelle nuove (`inv_runs`, `inv_observations`) dello stesso file `data/opportunita.sqlite3`, che non si
+  possono modificare né cancellare. Nessun backtest dei fondamentali sul passato: i bilanci di oggi non erano noti allora.
+- **Indirizzi.** `/api/investment` (una riga per società, modello, copertura, gruppi, date dei dati, stato del diario) e
+  `/api/investment/<ticker>` (analisi completa).
+
+```sh
+.venv/bin/python investment_engine.py aggiorna [--forza]   # scarica i bilanci che servono (a mano)
+.venv/bin/python investment_engine.py copertura            # copertura di ogni indicatore e gruppi di confronto
+.venv/bin/python investment_engine.py profili              # quanti titoli per profilo e per stato
+.venv/bin/python investment_engine.py mostra NVDA          # analisi completa di un titolo
+```
+
+## Valutazione e scenari (Fase 5B, sperimentale)
+
+`investment_valuation.py` (modello `VERSION` «V1») si affianca all'analisi fondamentale della Fase 5A, senza cambiarla:
+legge i suoi profili e le sue sei dimensioni, che restano quelle approvate. Risponde a «il prezzo di oggi è ragionevole, e
+a quali condizioni?» con **intervalli condizionati alle ipotesi**, mai con un prezzo obiettivo, un'indicazione di acquisto
+o vendita o una probabilità.
+
+- **Metodo.** Flusso di cassa scontato per **tutti i finanziatori** (FCFF): utile operativo × (1 − tasse) − reinvestimento
+  necessario per crescere (ricavi aggiuntivi ÷ rapporto ricavi/capitale), scontato al **costo medio del capitale** (WACC:
+  Treasury USA a 10 anni + beta × premio per il rischio del 4,5%; costo del debito dopo le tasse; pesi di mercato). Dal
+  valore dell'impresa al valore delle azioni: + liquidità − debito (leasing compresi) − minoranze − azioni privilegiate,
+  diviso le azioni diluite. Mai flussi agli azionisti (FCFE) con il tasso dell'impresa. Tutto in dollari nominali.
+- **Orizzonte.** 5 anni di previsione esplicita, poi valore terminale con crescita del 2,5% e reinvestimento = crescita ÷
+  rendimento del capitale (crescita e rendimento restano coerenti). I 5 anni **non** sono un prezzo obiettivo a 5 anni.
+- **Tre scenari.** Prudente, base e favorevole cambiano insieme crescita iniziale, margine a regime ed efficienza del
+  capitale (non un ×0,8 o ×1,2 sul risultato); il tasso di sconto è lo stesso (misura il rischio, non lo scenario) e il
+  suo effetto è nella tabella di sensibilità. Nessuna probabilità, nessun «valore atteso».
+- **Ipotesi base.** Crescita del primo anno dal consenso degli analisti sui ricavi del prossimo esercizio (solo se gli
+  esercizi del consenso coincidono con quelli dei bilanci), altrimenti l'ultima crescita misurata, limitata tra −15% e
+  +50%; margine che va dal valore degli ultimi 12 mesi al margine «normale» (mediana di 12 mesi e 3 esercizi); rapporto
+  ricavi/capitale = mediana di tre misure (marginale degli ultimi 3 esercizi, di bilancio, società simili).
+- **Compensi in azioni.** L'utile operativo GAAP li sottrae già: il modello **non li toglie una seconda volta** e usa le
+  azioni diluite di oggi. Il flusso «economico» (cassa libera − compensi in azioni) è mostrato come **misura rettificata
+  di questa dashboard**, non come grandezza contabile standard; la diluizione storica è mostrata a parte.
+- **Valute e ADR.** Bilanci in EUR o CNY convertiti al cambio del giorno, con fonte e data, lo stesso per tutti gli anni (mai
+  usato per ricostruire il passato); il rischio paese non è nel tasso di sconto (per questo un valore sopra il prezzo non
+  basta). Azioni del bilancio confrontate con quelle implicite nella capitalizzazione: si usa il numero più alto, un
+  rapporto intero viene letto come rapporto ADR, un'incoerenza rende i dati insufficienti.
+- **Non valutate** (risultato, non errore): banche, pagamenti e utility («Modello non appropriato»); utile operativo
+  negativo, margini negativi o distanti oltre 20 punti in 3 anni, cassa operativa negativa («Non valutabile con
+  affidabilità sufficiente»); bilanci obsoleti, debito, cambio, azioni o Treasury mancanti («Dati insufficienti»).
+- **Affidabilità.** «Calcolabile con dati adeguati», «Parziale» (dati stimati, in ritardo o in un'altra valuta), «Molto
+  sensibile alle ipotesi» (valore terminale oltre l'85%, ±1 punto di WACC oltre il 30%, favorevole oltre 3 volte il
+  prudente). Descrivono dati e metodo, **non sono probabilità**.
+- **Prezzo.** Posizione rispetto agli scenari (sotto il prudente, tra prudente e base, tra base e favorevole, sopra il
+  favorevole), margine di sicurezza ipotetico rispetto a ogni scenario, **calcolo inverso** (la crescita del primo anno e
+  il margine a regime che giustificherebbero il prezzo; «non univoco» quando la crescita non crea valore) e **livelli di
+  prezzo per una nuova analisi** (il valore base e prudente, solo per valutazioni adeguate o parziali), sempre come
+  condizioni e mai come ordini. Un valore sopra il prezzo non basta per il gruppo «Qualità, prezzo da approfondire»: servono
+  anche qualità e solidità buone, valutazione non molto sensibile e nessuna criticità (dati in ritardo, valuta estera,
+  investimenti fuori norma, crescita oltre il limite).
+- **Pagina.** In Opportunità → Investimento la card «Valutazione e scenari» (filtri per gruppo, barra con scenari e
+  prezzo, crescita implicita, affidabilità) e nella scheda del titolo la sezione omonima: tre scenari con le ipotesi,
+  quando sono plausibili, calcolo inverso, sensibilità, livelli, rischi, condizioni da monitorare, tasso di sconto e
+  passaggio al valore delle azioni, dati usati e mancanti. Valori arrotondati (2 cifre significative): niente precisione falsa.
+- **Diario.** `valuation_diary.py` salva le valutazioni di una seduta **solo se il diario delle opportunità l'ha già
+  registrata**, dopo la chiusura e con i **prezzi di chiusura** di quella seduta, in tabelle nuove (`val_runs`,
+  `val_observations`) dello stesso file, che non si possono modificare né cancellare: prezzo, date dei dati, versione,
+  parametri, scenari, intervallo, stato, motivi, condizioni da monitorare. Servirà a verificare più avanti se i livelli di
+  valutazione sono stati informativi; nessuna ricostruzione del passato.
+- **Dati.** Per la Fase 5B `fundamentals.py` scarica anche azioni diluite, ammortamenti, capitale circolante, minoranze e
+  privilegiate (`FIELDS` 2, senza cambiare lo `SCHEMA` della 5A) e il rendimento del Treasury a 10 anni (`^TNX`), sempre in
+  background. Nella scheda del titolo flusso di cassa libero, ricavi e stime dei ricavi mostrano la valuta dei bilanci
+  (prima avevano sempre «$», anche per i conti in CNY o EUR).
+- **Indirizzi.** `/api/valuation` (una riga per società, parametri, stato del diario) e `/api/valuation/<ticker>`.
+- **Primo risultato (4 novembre 2026).** 69 società valutate su 101 (26 adeguate, 19 parziali, 24 molto sensibili), 32
+  senza stima. Con questi parametri 51 delle 69 hanno un prezzo sopra anche lo scenario favorevole e la crescita implicita
+  mediana è del 42% il primo anno contro il 10% delle ipotesi base: il mercato usa tassi più bassi o si aspetta crescite più
+  lunghe di quelle del modello. È una lettura delle aspettative, non un segnale.
+
+```sh
+.venv/bin/python investment_valuation.py riepilogo      # stati, gruppi e posizione del prezzo
+.venv/bin/python investment_valuation.py mostra MSFT    # valutazione completa di un titolo
+.venv/bin/python investment_valuation.py parametri      # ogni parametro con la spiegazione
+.venv/bin/python investment_valuation.py confronta      # modello V1 (congelato) e V2 sugli stessi dati
+```
+
+### Verifica del motore di valutazione (Fase 5C) e modello V2
+
+Audit del 4 novembre 2026. Le formule (FCFF, WACC, valore terminale, passaggio alle azioni) sono state ricalcolate con un
+DCF scritto da zero: stessi valori in tutti i 207 scenari, WACC identico, e per ADBE, MSFT, NVDA, AMZN e PDD i ricavi e
+l'utile operativo dei bilanci coincidono con i comunicati delle società. Il WACC è davvero un costo medio del capitale
+(capitale proprio + debito dopo le tasse, pesi di mercato), non il solo costo del capitale proprio.
+
+Errori trovati e corretti nel **modello V2** (`investment_valuation.py`); il **V1** resta identico in
+`investment_valuation_v1.py` per riprodurre e confrontare i risultati:
+
+- **data di sconto**: gli anni previsti partono dalla fine dei dati di base e sono scontati fino a oggi (V1 li scontava
+  un anno intero da oggi anche quando i dati erano di 10 mesi prima);
+- **periodi incompleti**: Yahoo a volte pubblica un trimestre o un esercizio con solo utile per azione e numero di azioni;
+  V1 tornava all'ultimo bilancio annuale (o non valutava, SBUX), V2 usa gli ultimi periodi completi e prende debito e
+  liquidità alla stessa data dei flussi (mai un dato di oltre 100 giorni prima);
+- **investimenti finanziari a lungo termine** (riga Yahoo «Investments And Advances") aggiunti al valore delle azioni:
+  i loro proventi non sono nell'utile operativo;
+- **sensibilità** al tasso di sconto con il rendimento a regime ricalcolato, come prevede il modello.
+
+Solo trasparenza (valori invariati): limiti attivi (beta, aliquota, crescita) con il valore senza il limite; leasing e
+investimenti quando pesano più del 10%; flusso di cassa storico all'impresa calcolato in due modi; struttura alternativa
+a 10 anni (mai usata nei valori); più combinazioni di crescita, margine e tasso che giustificano lo stesso prezzo. Nuove
+etichette: «Calcolo verificato, ipotesi esplicite» (dati adeguati / con limitazioni), «Molto sensibile alle ipotesi»,
+«Dati obsoleti o insufficienti», «Metodologia non appropriata», «Valutazione sospesa per anomalie», con l'avvertenza che
+la capacità predittiva non è dimostrata. Parametri e ipotesi economiche **non** sono cambiati. `fundamentals.py` scarica
+anche leasing e investimenti a lungo termine (`FIELDS` 3).
+
+Perché la maggior parte dei prezzi è sopra lo scenario favorevole: non per un errore di calcolo. Con crescita e margini
+dello scenario base il prezzo corrisponde in mediana a un tasso di sconto del 6,7% (modello 9,3%); oppure a una crescita
+che dura più dei 5 anni del modello (con 10 anni il valore base sale in mediana del 13%, per NVDA del 113%). Il modello
+non dice quale delle due letture sia giusta. Limiti noti non corretti: leasing operativi non separabili, beta di Yahoo
+poco affidabile per alcune società (PDD negativo), rischio paese assente dal tasso, partecipazioni non riportate dalla
+fonte (per AMZN), stesso difetto dei periodi incompleti negli indicatori della Fase 5A (non modificata).
+
+## Catalogo ETF UCITS e confronto (Fase 6A)
+
+Nella scheda **ETF** c'è ora un secondo modo, **«Catalogo UCITS e confronto»**, accanto a «Mercato ETF» (la tabella di
+sempre, che non cambia). Serve a **identificare** bene ogni ETF e a **confrontare** ETF simili con dati verificabili:
+nessun segnale Compra/Vendi, nessun punteggio, nessun «vincitore». In Opportunità il modo **ETF** non ha classifiche:
+porta solo al catalogo e ad alcuni confronti di esempio.
+
+Aggiornamento **a mano** (mai programmato):
+
+```sh
+.venv/bin/python etf_catalog_build.py              # aggiornamento completo (~7 minuti: pagine di Borsa Italiana con pausa di 2 s)
+.venv/bin/python etf_catalog_build.py --offline    # ricostruisce solo da quanto già salvato, senza rete
+.venv/bin/python etf_catalog_build.py --book       # rilegge anche il book (da usare a mercato aperto: lo spread a mercato chiuso non vale)
+.venv/bin/python etf_catalog.py riepilogo          # cosa contiene e quanto è completo
+```
+
+Regole:
+- **L'ISIN identifica la classe**: una riga per ISIN, anche con più ticker, borse o valute di negoziazione (SWDA a
+  Milano ed EUNL a Xetra sono la stessa riga). Le classi dello stesso fondo sono collegate (`fundKey`), mai fuse.
+- **Valuta di negoziazione ≠ esposizione**: un ETF sull'S&P 500 comprato in euro resta esposto al dollaro, a meno che la
+  classe sia coperta (hedged). L'esposizione valutaria è una stima dai paesi e lo dice.
+- Ogni dato ha **fonte e data** (`{"v", "src", "asOf"}`); un dato mancante resta «n.d.», mai zero. Quando più fonti
+  danno lo stesso dato lo stato è *verificato*, con una sola *fonte unica*, se non coincidono *discordante* (con tutti i
+  valori visibili e l'elenco in `etf_catalog/controlli.json`).
+- Fonti, in ordine: l'**emittente** (elenco prodotti iShares; composizioni già scaricate da `etf_holdings.py`), la
+  **borsa** (schede ETF di Borsa Italiana: tipo, ticker, MIC, TER, emittente legale, benchmark, proventi, date di KID e
+  prospetto, book ritardato di 15 minuti), la **copia di justETF** già salvata l'8 ottobre 2026 in `etf_universe.json`
+  (mai riscaricata), **Yahoo** per valuta e volumi medi di ogni quotazione. Una richiesta alla volta, stop al primo rifiuto.
+- **Tracking difference e tracking error**: non verificabili con le fonti gratuite lette (restano «n.d.»).
+  **Disponibilità presso il broker (Fineco)**: non verificata. **Spread**: solo da un book reale e a mercato aperto.
+- ETC, ETN, leva, inversi e non UCITS stanno **a parte** (oggi: gli ETC su oro e argento); restano nella scheda Mercato.
+- Obbligazionari con un modello loro (tipo, duration, rendimento a scadenza al peggio, credito, valuta): il rendimento
+  a scadenza non è una previsione.
+- Cinque classi sono state **aggiunte nella Fase 6A, da approvare** (IWLE, NQSE, IUSA, IEAA, SEGA: trovate nell'elenco
+  ufficiale iShares) per mostrare classe coperta / distribuzione / fondo diverso sullo stesso indice. Non sono nella
+  scheda Mercato e `etf_universe.json` non è cambiato.
+
+**Livelli di comparabilità** (`etf_comparison.py`): **1** stesso indice e stessa copertura; **2** esposizione molto
+simile (indice diverso sullo stesso mercato, o stesso indice con e senza copertura del cambio); **3** stessa categoria,
+indice diverso; **4** non comparabili direttamente (es. azioni e obbligazioni). Il confronto mostra le dimensioni
+separate (identità, indice ed esposizione, valuta, costi, struttura, dimensione e liquidità, rischi, date dei dati) e,
+per i livelli 1–2, «cosa cambia tra loro» senza dire quale sia meglio. I titoli in comune si mostrano solo sui primi 10
+con data, e solo come elenco: con i primi 10 non si può calcolare una sovrapposizione complessiva.
+
+Catalogo al 4 novembre 2026: 66 ETF UCITS + 2 esclusi, 118 quotazioni (Borsa Italiana e Xetra), completezza media 99%.
+Dati mancanti noti: duration e rendimento per gli obbligazionari non iShares (X13E, BTP10), quotazioni delle classi
+IWLE e NQSE (non su ETFplus), replica per SEGA e IUSA; per i file Xtrackers senza data si usa la data del download.
+
 ## Da verificare quando il diario avrà almeno 3 mesi di dati
 
 - **"Entra ora"**: togliendo la regola D3 (Fase 21) i titoli con "Entra ora" sono passati da 18 a 33 su 101. Controllare
@@ -596,6 +932,30 @@ festività); trimestrali (giorno di reazione prima dell'apertura, dopo la chiusu
 testo del riepilogo del mattino; scheda ETF (scelta dello storico Borsa Italiana → Xetra → ETF americano in euro,
 conversione in euro, effetto cambio, percentili del rischio di essere arrivati tardi, terzi del momentum e mesi
 consecutivi, sovrapposizione, regole «si sovrappone / diversifica / neutro»).
+Analisi fondamentale (`tests/test_investment_engine.py`, Fase 5A): indicatori e unità, valute e ADR, utili negativi,
+flusso di cassa mancante, aziende finanziarie, comparabili dello stesso modello e gruppi troppo piccoli, dati vecchi o
+in ritardo, data di fine contro data di pubblicazione, niente periodi futuri, consenso contro revisioni, profili, testi
+coerenti con i valori, indirizzi `/api/investment`, classifiche e diario esistenti invariati, pagina.
+Valutazione e scenari (`tests/test_valuation.py`, Fase 5B): flusso di cassa all'impresa, coerenza con la formula della
+perpetuità, flussi e tasso dell'impresa, valore dell'impresa e delle azioni, azioni diluite e rapporto ADR, cambi,
+compensi in azioni non contati due volte, scenari che cambiano le ipotesi, sensibilità, ipotesi non ammissibili, cassa e
+utili negativi, margini instabili, dati mancanti, obsoleti o in ritardo, aziende finanziarie e utility, margine di
+sicurezza e livelli, calcolo inverso, niente periodi futuri, riproducibilità, consenso coerente con i bilanci, Pagella e
+Fase 5A solo lette, diario (mai avviato da qui, solo prezzi di chiusura, immutabile, altri diari invariati), indirizzi,
+valuta dei bilanci nella scheda e pagina.
+Verifica della valutazione (`tests/test_valuation_audit.py`, Fase 5C): DCF confrontato con un'implementazione da manuale
+indipendente, casi calcolati a mano (un anno, WACC), crescita con rendimento uguale al costo del capitale, sconto dalla
+data dei dati, flusso di cassa storico in due modi e compensi in azioni, tasse, costo del debito, limiti del beta e della
+crescita, investimenti e leasing, ADR e diluizione, valute, periodi incompleti e dati vecchi, sensibilità, calcolo inverso
+con più combinazioni, orizzonte alternativo, V1 congelato e uguale a V2 quando le correzioni non si applicano, etichette,
+diario con due versioni immutabili, compatibilità degli indirizzi e pagina.
+Catalogo ETF (`tests/test_etf_catalog.py`, Fase 6A): costruzione vera eseguita senza rete su ISIN, pagine di borsa ed
+elenchi inventati; ISIN e cifra di controllo, più ticker per un ISIN, valuta di negoziazione contro esposizione,
+accumulo/distribuzione, coperto/non coperto («unhedged» non è coperto), dati mancanti mai zero, date e dati datati, TER
+da più fonti e discordanze, tracking difference ed error separati, spread solo a mercato aperto e nessuna penalità per i
+pochi scambi, azionari contro obbligazionari, livelli di comparabilità, nessun vincitore, titoli in comune parziali,
+classi dello stesso fondo, doppioni, prodotti esclusi, indirizzi, scheda ETF esistente invariata, prestazioni con 600
+ETF e nessuna chiamata di rete.
 
 ## File del progetto
 
@@ -620,6 +980,19 @@ consecutivi, sovrapposizione, regole «si sovrappone / diversifica / neutro»).
 | `diary.py` | Diario dei segnali: salva ogni giorno i verdetti e misura com'è andata ogni categoria dopo 1, 3 e 6 mesi |
 | `opportunity_scanner.py` | Scheda Opportunità: le due classifiche esplorative (Trading e Investimento) con condizioni, valori misurati, avvisi, dati mancanti, diagnosi, copertura e parametri |
 | `opportunity_diary.py` | Diario delle opportunità (SQLite in `data/`): classifiche di ogni seduta per tutti i titoli e risultati a 5–126 sedute |
+| `market_data_quality.py` | Controlli di qualità dei dati storici (Fase 4A); revisioni manuali in `data_quality_reviews.json` |
+| `fundamentals.py` | Bilanci annuali e trimestrali e calendario delle trimestrali (Fase 5A): download in background e cache `cache/fundamentals.json` |
+| `investment_engine.py` | Analisi fondamentale (Fase 5A): indicatori con periodo e fonte, sei dimensioni, comparabili, profili; `/api/investment` |
+| `investment_diary.py` | Giudizi dell'analisi fondamentale nel diario delle opportunità (tabelle nuove, solo sedute già registrate) |
+| `investment_valuation.py` | Valutazione e scenari (Fase 5B): DCF sui flussi all'impresa, tre scenari, sensibilità, calcolo inverso; `/api/valuation` |
+| `investment_valuation_v1.py` | Copia congelata del modello di valutazione V1 (Fase 5B), per riprodurre e confrontare (`confronta`) |
+| `valuation_diary.py` | Valutazioni nel diario delle opportunità (tabelle nuove, solo sedute già registrate, prezzi di chiusura) |
+| `opportunity_strategies.py` | Ricerca controllata di nuove strategie Trading (Fase 4B): protocollo in `docs/ricerca_strategie_4b.md`, risultati in `data/strategie/` |
+| `etf_catalog.py` | Catalogo ETF UCITS (Fase 6A): modello, controllo ISIN, esclusi, ricerca, completezza, date; `/api/etf/catalog` |
+| `etf_catalog_build.py` | Aggiornamento manuale del catalogo (emittente, Borsa Italiana, copia justETF, Yahoo) e classificazione |
+| `etf_comparison.py` | Confronto di 2–4 ETF: livelli di comparabilità, dimensioni separate, rischi, titoli in comune; `/api/etf/compare` |
+| `etf_catalog/` | Il catalogo: `strumenti.json`, `quotazioni.json`, `esposizione.json`, `fonti.json`, `controlli.json` (dati pubblici) |
+| `opportunity_validation.py` | Laboratorio di validazione (Fase O3): studio storico esplorativo delle condizioni Trading, simulazione sperimentale e controllo dei dati per l'Investimento; report in `data/validazione/` |
 | `decision.py` | Sezione Decisione della scheda titolo: cinque blocchi, verdetto e piani operativi con regole esplicite |
 | `technical.py` | Numeri della sezione Analisi tecnica nella scheda del titolo (ATR, livelli, pattern, settore e tema) |
 | `portfolio.py` | Portafoglio: lettura dell'export Fineco, ticker Yahoo, valori in euro |

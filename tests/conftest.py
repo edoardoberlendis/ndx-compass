@@ -37,4 +37,15 @@ def private_folder(tmp_path, monkeypatch):
     monkeypatch.setattr(etf_holdings, "PUBLIC", str(tmp_path / "etf_holdings.json"))
     import opportunity_diary   # phase O2: the opportunity diary (public data, data/) is never the real one in a test
     monkeypatch.setattr(opportunity_diary, "DB", str(tmp_path / "data" / "opportunita.sqlite3"))
+    import market_data_quality        # phase 4A: lab reports, rechecks and quality reports never the real ones in a test
+    import opportunity_validation
+    monkeypatch.setattr(opportunity_validation, "OUT_DIR", str(tmp_path / "validazione"))
+    monkeypatch.setattr(opportunity_validation, "LOG", str(tmp_path / "validazione" / "esperimenti.jsonl"))
+    monkeypatch.setattr(opportunity_validation, "RECHECK_DIR", str(tmp_path / "validazione" / "rielaborazioni"))
+    monkeypatch.setattr(opportunity_validation, "DIARY", str(tmp_path / "data" / "opportunita.sqlite3"))
+    monkeypatch.setattr(market_data_quality, "OUT_DIR", str(tmp_path / "validazione" / "qualita"))
+    import opportunity_strategies     # phase 4B: registration, reports and log of the strategies never the real ones
+    monkeypatch.setattr(opportunity_strategies, "OUT_DIR", str(tmp_path / "strategie"))
+    import fundamentals               # phase 5A: the statements cache is never the real one in a test
+    monkeypatch.setattr(fundamentals, "CACHE", str(tmp_path / "cache" / "fundamentals.json"))
     return tmp_path
