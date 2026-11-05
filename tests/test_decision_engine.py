@@ -174,15 +174,15 @@ def e2_row(scans, key, mode="lungo", **over):
     return o
 
 
-def etf_decide(o, catalog, mode="lungo"):
+def etf_decide(o, catalog, mode="lungo", version=de.VERSION):
     snap = snapshot(etf={mode: {"rows": [o], "version": "E2", "session": SESSION, "pricesFetched": "2026-11-03T22:40:00+01:00"}},
                     catalog=catalog)
-    return row(de.decide(snap), "etf", o["key"], mode)
+    return row(de.decide(snap, version), "etf", o["key"], mode)
 
 
 def test_equity_etf_deep_and_product_kept_apart(etf_scans):
     c, _, s = etf_scans
-    r = etf_decide(e2_row(s, "sanita_usa", state="Esposizione da approfondire"), c)
+    r = etf_decide(e2_row(s, "sanita_usa", state="Esposizione da approfondire"), c, version="D1")     # D1 only (D2: E-M3)
     assert r["state"] == "Da approfondire" and r["rule"] == "E-A1" and r["product"]["documented"]
     assert r["validation"].startswith("Esplorativo") and "Fase 24" in r["validation"]
 
@@ -353,7 +353,7 @@ def test_diary_records_once_and_never_changes(etf_scans, tmp_path):
     assert ok, msg
     con = sqlite3.connect(od.DB)
     run = con.execute("SELECT model_version, source, etf_note, rows FROM dec_runs").fetchone()
-    assert run[0] == "D1" and run[1] == "dashboard" and run[2] is None and run[3] == len(res["rows"])
+    assert run[0] == de.VERSION and run[1] == "dashboard" and run[2] is None and run[3] == len(res["rows"])
     obs = con.execute("SELECT state, rule, favourable, dates, validation FROM dec_observations WHERE instrument='AAA' AND horizon='lungo'").fetchone()
     assert obs[0] == "Da approfondire" and obs[1] == "A-A1" and json.loads(obs[2]) and json.loads(obs[3])["price"] == SESSION
     sources = json.loads(con.execute("SELECT sources FROM dec_runs").fetchone()[0])
@@ -365,7 +365,7 @@ def test_diary_records_once_and_never_changes(etf_scans, tmp_path):
         with pytest.raises(sqlite3.DatabaseError):
             con.execute(sql)
     st = dd.stats()
-    assert st["started"] and st["observations"] == len(res["rows"]) and st["versions"] == ["D1"]
+    assert st["started"] and st["observations"] == len(res["rows"]) and st["versions"] == [de.VERSION]
 
 
 def test_diary_refuses_what_would_not_be_prospective(etf_scans, tmp_path):

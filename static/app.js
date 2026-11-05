@@ -168,7 +168,7 @@ function spark(values, w = 80, h = 22, base = null, color = null) {
 
 // ------------------------------------------------------------ data
 // must equal DASHBOARD_VERSION in server.py: otherwise the server runs old code and the page says so
-const PAGE_VERSION = "2026-11-05b";
+const PAGE_VERSION = "2026-11-05c";
 async function load() {
   const r = await fetch("/api/snapshot", { cache: "no-store" });
   const sv = r.headers.get("X-Dashboard-Version");
@@ -3620,7 +3620,7 @@ function valDetailHTML(X) {
 // Reads the results of the existing engines (T1–T5, Pagella, F1, V2, ETF E2) and shows a transparent state for every
 // stock and ETF exposure, per horizon. Never a score, a probability, a buy/sell call or an entry price.
 const DK = { h: LS.get("dk.h", "lungo"), k: LS.get("dk.k", "all"), data: null, at: 0, err: null, loading: false, open: null, det: {}, detErr: null };
-const DK_ST = { "Da approfondire": "ok", "Attendi condizioni migliori": "wait", "Monitora": "mon", "Condizioni contrastanti": "mix",
+const DK_ST = { "Da approfondire": "ok", "Attendi condizioni migliori": "wait", "Monitora": "mon", "Monitora — trend esplorativo": "mon", "Condizioni contrastanti": "mix",
   "Rischio elevato": "risk", "Dati insufficienti": "na", "Nessuna opportunità convincente": "none" };
 const dkSt = s => `<span class="eo-st eo-${DK_ST[s] || "none"}">${esc(s)}</span>`;
 const DK_Q = { completa: "completi", parziale: "parziali", insufficiente: "insufficienti" };
@@ -3696,7 +3696,7 @@ const DK_DATES = { price: "prezzo", statements: "bilanci scaricati", analysts: "
 function deskHTML() {
   const D = DK.data;
   const seg = `<div class="seg">${Object.entries(OPP_MODES).map(([k, l]) => `<button data-opm="${k}" class="${k === "desk" ? "on" : ""}">${esc(l.split(" · ")[0])}</button>`).join("")}</div>`;
-  const head = `<div class="card"><div class="card-h"><h2>Decision Desk</h2>${seg}</div>
+  const head = `<div class="card"><div class="card-h"><h2>Decision Desk</h2>${DK.data?.version ? `<span class="card-meta">versione ${esc(DK.data.version)}</span>` : ""}${seg}</div>
     <div class="seg small">${[["lungo", "Medio-lungo periodo"], ["breve", "Breve periodo"]].map(([k, l]) => `<button data-dkh="${k}" class="${k === DK.h ? "on" : ""}">${l}</button>`).join("")}</div>
     <div class="seg small">${[["all", "Azioni ed ETF"], ["azione", "Azioni"], ["etf", "ETF"]].map(([k, l]) => `<button data-dkk="${k}" class="${k === DK.k ? "on" : ""}">${l}</button>`).join("")}</div>
     <p class="small muted">${DK.h === "breve" ? "3–30 sedute: solo descrizione e monitoraggio. Le regole Trading e il momentum degli ETF non hanno mostrato vantaggi nei test: nel breve periodo nessuno stato supera «Monitora»."
@@ -3709,16 +3709,20 @@ function deskHTML() {
   const rows = dkRows(D), by = s => rows.filter(r => r.state === s);
   const kpi = (l, v, s) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s || ""}</div></div>`;
   const deep = by("Da approfondire");
+  const mon = [...by("Attendi condizioni migliori"), ...by("Monitora"), ...by("Monitora — trend esplorativo")];
   const src = D.sources || {}, e = src.etf_lungo || {};
+  const cv = D.coverage || {}, cvc = cv.catalog || {};
+  const cvLine = (["lungo", "breve"].map(m => cv[m] ? `${m === "lungo" ? "medio-lungo" : "breve"}: ${cv[m].scanner} esposizioni dello scanner = ${cv[m].classified} classificate (di cui ${cv[m].insufficient} con dati insufficienti) + ${cv[m].references.length} riferimenti di mercato + ${cv[m].notAnalysable.length} non analizzabili in questo orizzonte${cv[m].balanced ? "" : " ⚠ conti non in pari"}` : "").filter(Boolean).join("; "))
+    + (isNum(cvc.products) ? `. Catalogo: ${cvc.products} ETF nelle esposizioni${cvc.excluded?.length ? `; fuori dal catalogo ordinario ${cvc.excluded.map(x => `${esc(x.name)} (${esc(x.why || "escluso")})`).join(", ")}` : ""}` : "");
   return `<p class="warn-box"><b>Screening esplorativo, non consulenza finanziaria.</b> Il Decision Desk riassume i motori già esistenti e dice dove concentrare
       l'attenzione: nessuna indicazione di acquisto o vendita, nessuna probabilità, nessun prezzo di ingresso. Nessun giudizio è validato sul passato.</p>${head}
-    <div class="kpis eo-kpis">${kpi("Da approfondire", deep.length, "tutte le condizioni, nessuna contraria")}${kpi("Da monitorare", by("Attendi condizioni migliori").length + by("Monitora").length, "attendi condizioni migliori o monitora")}
+    <div class="kpis eo-kpis">${kpi("Da approfondire", deep.length, "tutte le condizioni, nessuna contraria")}${kpi("Da monitorare", mon.length, "attendi condizioni migliori o monitora")}
       ${kpi("Contrastanti", by("Condizioni contrastanti").length, "evidenze a favore e contro")}${kpi("Rischio elevato", by("Rischio elevato").length, "rischio non compensato")}
       ${kpi("Analisi", esc(oppTime(D.asOf)), `azioni: seduta ${esc(dayIT(D.session || ""))}${e.session ? ` · ETF: ${esc(dayIT(e.session))}` : ""}`)}</div>
     ${dkDetailHTML()}
     <div class="card"><h3>Opportunità da approfondire</h3>${deep.length ? dkTable(deep) : `<p class="small"><b>Nessuna opportunità convincente</b> ${DK.h === "breve" ? "nel breve periodo: per costruzione nessuno stato supera «Monitora»." : "oggi con i filtri scelti: nessuna riga soddisfa tutte le condizioni di «Da approfondire»."}</p>`}
       <p class="muted small">${esc(D.orderRule)}</p></div>
-    ${dkSection("Situazioni da monitorare", [...by("Attendi condizioni migliori"), ...by("Monitora")], "«Attendi condizioni migliori»: fondamentali favorevoli ma prezzo o valutazione impegnativi; «Monitora»: evidenze favorevoli ma non sufficienti", true, "dk-mon")}
+    ${dkSection("Situazioni da monitorare", mon, "«Attendi condizioni migliori»: fondamentali favorevoli ma prezzo o valutazione impegnativi; «Monitora»: evidenze favorevoli ma non sufficienti; «Monitora — trend esplorativo»: ETF con le condizioni di trend soddisfatte, non validate come criterio predittivo (non è un giudizio negativo)", true, "dk-mon")}
     ${dkSection("Condizioni contrastanti", by("Condizioni contrastanti"), "evidenze favorevoli e contrarie insieme: nessun fattore positivo cancella un rischio", false, "dk-mix")}
     ${dkSection("Rischi elevati", by("Rischio elevato"), "un rischio grave non compensato da fattori positivi", false, "dk-risk")}
     ${dkSection("Nessuna opportunità convincente", by("Nessuna opportunità convincente"), "comprese le obbligazioni con evidenza insufficiente (modello E2): qualità del credito e costi bassi non bastano", false, "dk-none")}
@@ -3727,8 +3731,9 @@ function deskHTML() {
       <ul class="why small">${Object.entries(D.rules).map(([k, v]) => `<li><b>${esc(k)}</b> ${esc(v)}</li>`).join("")}</ul>
       <p class="small"><b>Validazione</b></p><ul class="why small">${Object.values(D.validation).map(v => `<li>${esc(v)}</li>`).join("")}</ul>
       <p class="small"><b>Fonti</b>: Trading e Pagella ${esc(src.trading?.model || "n.d.")} (seduta ${esc(src.trading?.session || "n.d.")}) · analisi fondamentale ${esc(src.fundamentals?.model || "n.d.")} · DCF ${esc(src.valuation?.model || "n.d.")} · scanner ETF ${esc(e.model || "n.d.")} (seduta ${esc(e.session || "n.d.")}, prezzi ${esc((e.prices || "n.d.").slice(0, 16).replace("T", " "))}) · Decision Desk ${esc(D.version)}.</p>
-      ${D.notAnalysed.length ? `<p class="small"><b>Non analizzati</b>: ${D.notAnalysed.map(x => `${esc(x.what)} (${esc(x.why)})`).join("; ")}.</p>` : ""}
-      <p class="small"><b>Diario delle decisioni</b>: ${D.diary?.started ? `${D.diary.days} sedute registrate (dal ${esc(dayIT(D.diary.first))} al ${esc(dayIT(D.diary.last))}), ${D.diary.observations} decisioni` : "nessuna seduta ancora registrata"}; si registra una volta per seduta dopo la chiusura NYSE, insieme agli altri diari (server acceso o job serale), mai all'apertura della pagina.</p>
+      ${D.notAnalysed.length ? `<p class="small"><b>Non analizzati</b>: ${D.notAnalysed.map(x => `${esc(x.what)}${x.horizon === "lungo" ? " (medio-lungo)" : x.horizon === "breve" && !/breve periodo/.test(x.what) ? " (breve)" : ""} (${esc(x.why)})`).join("; ")}.</p>` : ""}
+      ${cvLine ? `<p class="small"><b>Copertura ETF</b>: ${cvLine}.</p>` : ""}
+      <p class="small"><b>Diario delle decisioni</b>: ${D.diary?.started ? `${D.diary.days} sedute registrate (dal ${esc(dayIT(D.diary.first))} al ${esc(dayIT(D.diary.last))}), ${D.diary.observations} decisioni, versioni ${esc((D.diary.versions || []).join(", "))}` : "nessuna seduta ancora registrata"}; versione attuale ${esc(D.version)}; si registra una volta per seduta dopo la chiusura NYSE, insieme agli altri diari (server acceso o job serale), mai all'apertura della pagina.</p>
       <p class="muted small">${esc(D.disclaimer)}</p></details></div>`;
 }
 function renderOpps() {

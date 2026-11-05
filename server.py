@@ -1164,7 +1164,7 @@ def movers_why(n=8):
 app = Flask(__name__, static_folder=None)
 # version of the code that serves the page: change it together with PAGE_VERSION in static/app.js whenever the data
 # sent to the page changes, so that a server left running with old code is noticed (the page asks to restart it)
-DASHBOARD_VERSION = "2026-11-05b"
+DASHBOARD_VERSION = "2026-11-05c"
 
 
 @app.route("/")
@@ -2534,6 +2534,9 @@ def save_decision_diary(day, now, source):
             return "decisioni: diario delle opportunità non registrato per questa seduta"
         if dd.exists(day, de.VERSION):
             return "decisioni già registrate"
+        done = dd.runs_of_session(day)
+        if done:                       # another desk version already holds this session: never a second record
+            return f"decisioni già registrate con il Decision Desk {done[0][0]}"
         if _dec.get("diaryDay") == day and time.time() - _dec.get("diaryAt", 0) < INV_REFRESH_S:
             return "decisioni: nuovo tentativo tra poco"
         _dec.update(diaryDay=day, diaryAt=time.time())

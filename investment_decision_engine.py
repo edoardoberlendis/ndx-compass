@@ -16,12 +16,19 @@ Inputs (all already in memory in the server, see server.decision_snapshot):
             "valuation": investment_valuation result, "etf": {"lungo": etf_opportunity.scan(...), "breve": ...},
             "catalog": etf catalog (for the freshness of the fund data)}
 Any part may be missing: the rows that depend on it become "Dati insufficienti" with the reason.
+
+Versions (decide(snap, version)): D1 is the desk of phase 7A and stays reproducible. D2 (current) changes ONE thing:
+an ETF exposure can no longer reach "Da approfondire" only because it satisfies the favourable trend conditions of
+the ETF model E2 (exploratory, no predictive power shown). The cases that D1 put in "Da approfondire" (rule E-A1)
+become "Monitora — trend esplorativo" (rule E-M3), with the same evidence, risks, dates and explanation. Every other
+rule, threshold and state is identical in D1 and D2; no new indicator.
 """
 from __future__ import annotations
 
 from datetime import date, datetime
 
-VERSION = "D1"
+VERSION = "D2"
+VERSIONS = ("D1", "D2")
 DISCLAIMER = ("Decision Desk: screening esplorativo, non consulenza finanziaria. Riassume i motori esistenti senza "
               "prevedere rendimenti: nessuna probabilità, nessuna indicazione di acquisto o vendita, nessun prezzo di ingresso. "
               "Nessuno dei giudizi è validato sul passato.")
@@ -29,12 +36,15 @@ DISCLAIMER = ("Decision Desk: screening esplorativo, non consulenza finanziaria.
 S_DEEP, S_WAIT, S_MON, S_MIX, S_RISK, S_NODATA, S_NONE = (
     "Da approfondire", "Attendi condizioni migliori", "Monitora", "Condizioni contrastanti", "Rischio elevato",
     "Dati insufficienti", "Nessuna opportunità convincente")
-STATES = [S_DEEP, S_WAIT, S_MON, S_MIX, S_RISK, S_NODATA, S_NONE]
+S_MON_X = "Monitora — trend esplorativo"          # D2: ETF whose only favourable case is the E2 trend
+STATES_D1 = [S_DEEP, S_WAIT, S_MON, S_MIX, S_RISK, S_NODATA, S_NONE]
+STATES_D2 = [S_DEEP, S_WAIT, S_MON, S_MON_X, S_MIX, S_RISK, S_NODATA, S_NONE]
+STATES = STATES_D2
 HORIZONS = {"lungo": "Medio-lungo periodo (3–24 mesi o più)", "breve": "Breve periodo (3–30 sedute)"}
 KINDS = {"azione": "Azione", "etf": "ETF (esposizione)"}
 
 # Every state comes from one of these rules, checked in this order for each kind of row. Shown in the page.
-RULES = {
+RULES_D1 = {
     # stocks, medium-long term (F1 + V2, Pagella only as context)
     "A-D1": "Dati insufficienti: manca l'analisi fondamentale, la completezza è «Insufficiente», almeno 2 dimensioni "
             "fondamentali non sono valutabili, manca il prezzo oppure un dato è successivo al momento dell'analisi",
@@ -82,6 +92,30 @@ RULES = {
     "F-C1": "Condizioni contrastanti: stato E2 breve «Condizioni contrastanti»",
     "F-N1": "Nessuna opportunità convincente: stato E2 breve «Nessuna opportunità convincente»",
 }
+E_M3 = ("Monitora — trend esplorativo: stato E2 «Esposizione da approfondire» con almeno un ETF documentato, date "
+        "allineate e dati del fondo non datati (i casi che in D1 erano «Da approfondire», regola E-A1). Le condizioni di "
+        "trend e forza relativa del modello E2 non sono validate come criterio predittivo: da sole non bastano per «Da "
+        "approfondire». Non è un giudizio negativo sull'esposizione né sull'utilità del trend. Uno stato più favorevole "
+        "per un ETF richiederà evidenze ulteriori, criteri documentati e una decisione esplicita (nuova versione del Desk), "
+        "non un numero maggiore di condizioni di trend soddisfatte")
+RULES_D2 = {}
+for _k, _v in RULES_D1.items():
+    if _k == "E-A1":
+        RULES_D2["E-M3"] = E_M3
+    else:
+        RULES_D2[_k] = _v
+RULES = RULES_D2
+ALL_RULES = dict(RULES_D1, **RULES_D2)
+
+
+def states_for(version):
+    return {"D1": STATES_D1, "D2": STATES_D2}[version]
+
+
+def rules_for(version):
+    return {"D1": RULES_D1, "D2": RULES_D2}[version]
+
+
 ORDER_RULE = ("Ordine dichiarato, non una previsione: prima lo stato (nell'ordine della legenda), poi i dati più completi, "
               "poi meno rischi bloccanti, poi meno evidenze contrarie, poi più evidenze favorevoli, infine il nome. Mai i "
               "rendimenti recenti più alti o lo sconto teorico del DCF più ampio.")
@@ -374,7 +408,7 @@ def cat_freshness(e):
         return []
 
 
-def etf_long(o, catalog, session, as_of):
+def etf_long(o, catalog, session, as_of, version=VERSION):
     bond = o.get("kind") == "bond"
     code = o.get("reference") or (o.get("members") or [None])[0]
     row = base_row("etf", o["key"], o["label"], code, "lungo", session, as_of)
@@ -432,8 +466,15 @@ def etf_long(o, catalog, session, as_of):
             con += pv["contrary"]
         elif misaligned or ref_stale:
             state, rule = S_MON, "E-M2"
-        else:
+        elif version == "D1":
             state, rule = S_DEEP, "E-A1"
+        else:                                   # D2: the E2 trend alone is not enough for "Da approfondire"
+            state, rule = S_MON_X, "E-M3"
+            notes.insert(0, "trend esplorativo (Decision Desk D2): le condizioni favorevoli di trend del modello E2 sono "
+                            "soddisfatte, ma non sono validate come criterio predittivo; restano visibili come evidenze")
+            change.insert(0, {"dir": "migliora", "src": "Desk D2",
+                              "text": "uno stato più favorevole richiede evidenze ulteriori e criteri documentati, approvati con "
+                                      "una nuova versione del Decision Desk: non basta soddisfare più condizioni di trend"})
     elif st == "Trend favorevole da monitorare":
         state, rule = S_MON, "E-M1"
     elif st == "Condizioni contrastanti":
@@ -501,7 +542,7 @@ def base_row(kind, key, name, code, horizon, session, as_of):
 def finish(row, state, rule, fav, con, risks, change, missing, dates, level, notes, context=None, validation_key=None,
            extra=None):
     blocking = [r for r in risks if r["blocking"]]
-    main = (fav[0]["text"] if fav and state in (S_DEEP, S_WAIT, S_MON, S_MIX) else
+    main = (fav[0]["text"] if fav and state in (S_DEEP, S_WAIT, S_MON, S_MON_X, S_MIX) else
             blocking[0]["text"] if blocking else
             (con[0]["text"] if con else (missing[0] if missing else (fav[0]["text"] if fav else "nessuna evidenza favorevole"))))
     if state == S_WAIT and con:
@@ -510,7 +551,7 @@ def finish(row, state, rule, fav, con, risks, change, missing, dates, level, not
     main_risk = (blocking[0]["text"] if blocking else risks[0]["text"] if risks else con[0]["text"] if con else
                  "nessun rischio oltre le soglie dei motori")
     vk = validation_key or f"{row['kind']}:{row['horizon']}"
-    row.update(state=state, rule=rule, ruleText=RULES[rule], main=main, mainRisk=main_risk, favourable=fav, contrary=con,
+    row.update(state=state, rule=rule, ruleText=ALL_RULES[rule], main=main, mainRisk=main_risk, favourable=fav, contrary=con,
                risks=risks, blocking=len(blocking), change=dedupe(change)[:10], missing=dedupe(missing), dates={k: v for k, v in dates.items() if v},
                dataQuality=level, notes=dedupe(notes), validation=VALIDATION[vk], context=context or {})
     row.update(extra or {})
@@ -532,14 +573,28 @@ QUALITY_ORDER = {"completa": 0, "parziale": 1, "insufficiente": 2}
 
 def order_key(r):
     """Declared order (ORDER_RULE): never recent returns, never the DCF discount."""
-    return (STATES.index(r["state"]), QUALITY_ORDER[r["dataQuality"]], r["blocking"], len(r["contrary"]),
+    return (STATES_D2.index(r["state"]), QUALITY_ORDER[r["dataQuality"]], r["blocking"], len(r["contrary"]),
             -len(r["favourable"]), r["name"].lower())
 
 
 # ---------------------------------------------------------------- whole desk
 
-def decide(snap):
-    """All decision rows from one snapshot of the engines' results. Pure: same snapshot, same result."""
+def catalog_coverage(catalog):
+    """ETF of the catalogue and those it leaves out before any scan (never part of an exposure)."""
+    from etf_catalog import EXCLUDED as _EXCLUDED_WHY      # the catalogue's own reasons, read only
+    if not catalog:
+        return {"products": None, "excluded": []}
+    return {"products": len(catalog.get("items") or {}),
+            "excluded": [{"isin": i, "name": ((e.get("identity") or {}).get("name") or {}).get("v") or i,
+                          "why": e.get("exclusionReason") or _EXCLUDED_WHY.get(e.get("exclusion"), e.get("exclusion"))}
+                         for i, e in sorted((catalog.get("excluded") or {}).items())]}
+
+
+def decide(snap, version=VERSION):
+    """All decision rows from one snapshot of the engines' results. Pure: same snapshot and version, same result."""
+    if version not in VERSIONS:
+        raise ValueError(f"versione del Decision Desk sconosciuta: {version}")
+    states = states_for(version)
     as_of = snap.get("asOf")
     session = snap.get("session")
     opp, inv, val, etf = snap.get("opportunities") or {}, snap.get("investment") or {}, snap.get("valuation") or {}, snap.get("etf") or {}
@@ -565,32 +620,44 @@ def decide(snap):
     minimum = (opp.get("trading") or {}).get("min") or 4
     for e in trading_all:
         rows.append(stock_short(e, opp.get("market"), minimum, opp.get("asOf") or session, as_of))
+    coverage = {"catalog": catalog_coverage(catalog)}
     for mode, fn in (("lungo", etf_long), ("breve", etf_short)):
         r = etf.get(mode)
+        cov = coverage[mode] = {"scanner": 0, "classified": 0, "insufficient": 0, "references": [], "notAnalysable": []}
         if not r:
-            not_analysed.append({"what": f"ETF, {HORIZONS[mode].lower()}", "why": "scanner ETF non disponibile (prezzi non in cache)"})
+            not_analysed.append({"what": f"ETF, {HORIZONS[mode].lower()}", "why": "scanner ETF non disponibile (prezzi non in cache)",
+                                 "horizon": mode})
+            cov["missing"] = "scanner ETF non disponibile"
             continue
         sources[f"etf_{mode}"] = {"model": r.get("version"), "session": r.get("session"), "prices": r.get("pricesFetched"),
                                   "catalog": r.get("catalogBuilt")}
+        cov["scanner"] = len(r.get("rows") or [])
         for o in r.get("rows") or []:
             if o.get("state") == "Riferimento di mercato":
-                not_analysed.append({"what": o["label"], "why": "riferimento di mercato (mondo o liquidità): non un'opportunità"})
+                not_analysed.append({"what": o["label"], "why": "riferimento di mercato (mondo o liquidità): non un'opportunità",
+                                     "horizon": mode})
+                cov["references"].append(o["key"])
             elif mode == "breve" and o.get("kind") == "bond":
                 not_analysed.append({"what": f"{o['label']} (breve periodo)", "why": "obbligazioni: solo informazioni strutturali "
-                                     "sul prodotto, nessun segnale di breve periodo"})
+                                     "sul prodotto, nessun segnale di breve periodo", "horizon": mode})
+                cov["notAnalysable"].append(o["key"])
             else:
-                rows.append(fn(o, catalog, r.get("session"), as_of))
+                x = fn(o, catalog, r.get("session"), as_of, version) if fn is etf_long else fn(o, catalog, r.get("session"), as_of)
+                rows.append(x)
+                cov["classified"] += 1
+                cov["insufficient"] += x["state"] == S_NODATA
+        cov["balanced"] = cov["classified"] + len(cov["references"]) + len(cov["notAnalysable"]) == cov["scanner"]
     if not opp:
         not_analysed.append({"what": "Azioni, breve periodo", "why": "classifiche Trading non ancora disponibili (dati in caricamento)"})
     if not inv:
         not_analysed.append({"what": "Azioni, medio-lungo periodo", "why": "analisi fondamentale non disponibile (bilanci non ancora in cache)"})
     rows.sort(key=order_key)
-    counts = {h: {k: {s: sum(1 for r in rows if r["horizon"] == h and r["kind"] == k and r["state"] == s) for s in STATES}
+    counts = {h: {k: {s: sum(1 for r in rows if r["horizon"] == h and r["kind"] == k and r["state"] == s) for s in states}
                   for k in KINDS} for h in HORIZONS}
     deep = [r for r in rows if r["state"] == S_DEEP]
-    return {"version": VERSION, "asOf": as_of, "session": session, "disclaimer": DISCLAIMER, "states": STATES,
-            "horizons": HORIZONS, "kinds": KINDS, "rules": RULES, "orderRule": ORDER_RULE, "validation": VALIDATION,
-            "sources": sources, "counts": counts, "rows": rows, "notAnalysed": not_analysed,
+    return {"version": version, "asOf": as_of, "session": session, "disclaimer": DISCLAIMER, "states": states,
+            "horizons": HORIZONS, "kinds": KINDS, "rules": rules_for(version), "orderRule": ORDER_RULE, "validation": VALIDATION,
+            "sources": sources, "counts": counts, "rows": rows, "notAnalysed": not_analysed, "coverage": coverage,
             "noneText": None if deep else ("Oggi nessuna azione o esposizione ETF soddisfa tutte le condizioni di «Da "
                                            "approfondire»: nessuna opportunità è abbastanza convincente.")}
 

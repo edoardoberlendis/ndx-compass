@@ -983,7 +983,9 @@ E1) sono finite nel diario reale. Non sono state cancellate né modificate. Da q
   altre → esclusa. Restano consultabili ma non entrano in statistiche, risultati maturati, dataset e «rilevazione
   precedente». La seduta ETF del 4 novembre resta occupata dalla prova (nessuna seconda registrazione): il diario ETF
   ufficiale parte dalla prima seduta successiva.
-- **Stato dei diari** (sola lettura): `.venv/bin/python diaries_status.py` (o `--json`, e `/api/diaries/status`); in pagina
+- **Stato dei diari** (sola lettura): `.venv/bin/python diaries_status.py` (o `--json`, e `/api/diaries/status`): cinque
+  diari (opportunità, analisi fondamentale, valutazioni, ETF, decisioni) con ultima seduta ufficiale, osservazioni
+  ufficiali ed escluse, versioni presenti e anomalie; in pagina
   una tabella nel pannello chiuso «Monitoraggio risultati».
 - **Anteprima**: `.venv/bin/python preview.py` (porta 8101): portafoglio vuoto, copia dei diari in sola lettura (o
   `--vuoto`), nessun download, guardia attiva.
@@ -1027,12 +1029,12 @@ abbastanza solida e non decide più se un'esposizione obbligazionaria è interes
 ## Decision Desk (Fase 7A)
 
 Prima modalità della scheda Opportunità (le modalità Trading, Investimento ed ETF restano). `investment_decision_engine.py`
-(versione **D1**, funzioni pure) **legge** i risultati dei motori esistenti — condizioni T1–T5 e Pagella
+(versione **D2**, funzioni pure; la D1 resta riproducibile con `decide(snap, "D1")`) **legge** i risultati dei motori esistenti — condizioni T1–T5 e Pagella
 (`opportunity_scanner`), analisi fondamentale F1, DCF V2, scanner ETF E2 — e non ne ricalcola né sostituisce nessuno. Per
 ogni azione e ogni esposizione ETF, per ciascun orizzonte, dà uno **stato** scelto da regole esplicite (mostrate in
 pagina con il loro codice), mai da una somma di punteggi:
 
-- **Stati**: Da approfondire · Attendi condizioni migliori · Monitora · Condizioni contrastanti · Rischio elevato · Dati
+- **Stati**: Da approfondire · Attendi condizioni migliori · Monitora · Monitora — trend esplorativo (solo D2) · Condizioni contrastanti · Rischio elevato · Dati
   insufficienti · Nessuna opportunità convincente. Nessun punteggio complessivo, nessuna probabilità, nessun rendimento
   atteso, nessuna indicazione di acquisto o vendita, nessun prezzo di ingresso. Se nulla convince lo dice.
 - **Azioni, medio-lungo periodo** (regole A-…): «Da approfondire» solo con qualità, crescita e solidità favorevoli, stime
@@ -1044,9 +1046,14 @@ pagina con il loro codice), mai da una somma di punteggi:
 - **Azioni, breve periodo** (B-…): solo descrizione; massimo «Monitora» (le regole T1–T5 non hanno mostrato vantaggi nelle
   Fasi O3–4B). Volatilità alta su un candidato = «Rischio elevato»; avvisi (tirato, trimestrale vicina, sotto la media 200)
   = «Condizioni contrastanti».
-- **ETF, medio-lungo** (E-…): parte dallo stato E2. «Esposizione da approfondire» diventa «Da approfondire» solo se almeno
-  un ETF è documentato (TER noto e non discordante, patrimonio e scambi sopra le soglie del catalogo) e le date di ETF e
-  benchmark sono allineate; altrimenti «Condizioni contrastanti» o «Monitora». Il giudizio sull'esposizione resta separato
+- **ETF, medio-lungo** (E-…): parte dallo stato E2. In **D2** un ETF non arriva mai a «Da approfondire» solo perché
+  soddisfa le condizioni di trend E2 (esplorative, non validate come criterio predittivo): «Esposizione da approfondire»
+  con almeno un ETF documentato (TER noto e non discordante, patrimonio e scambi sopra le soglie del catalogo), date
+  allineate e dati del fondo non datati diventa **«Monitora — trend esplorativo»** (regola E-M3, con le stesse evidenze,
+  rischi, date e spiegazione; non è un giudizio negativo). In D1 quei casi erano «Da approfondire» (E-A1). Senza ETF
+  documentato «Condizioni contrastanti» (E-C2), con date non allineate «Monitora» (E-M2): uguali in D1 e D2. Uno stato più
+  favorevole per un ETF richiederà evidenze ulteriori, criteri documentati e una decisione esplicita, non più condizioni di
+  trend soddisfatte. Il giudizio sull'esposizione resta separato
   dalla qualità dei prodotti (mostrata a parte, con TER da fonte di borsa, spread non aggiornati e dati del fondo datati
   secondo le regole del catalogo). **Obbligazioni E2 «Da approfondire — evidenza insufficiente» → «Nessuna opportunità
   convincente»** (regola E-N2): O2 e O3 sono caratteristiche del prodotto, non della convenienza; mai promosse; il rapporto
@@ -1066,7 +1073,17 @@ pagina con il loro codice), mai da una somma di punteggi:
   scheduler nuovo), una volta per seduta NYSE e versione, solo dopo che il diario delle opportunità ha registrato quella
   seduta e dopo la chiusura; righe ETF solo se lo scanner ETF usa la stessa seduta con prezzi definitivi (altrimenti la
   nota lo dice). Protezioni della Fase 6C (`app_env`), `BEGIN IMMEDIATE`, trigger anti-modifica, letture in sola lettura.
-- Nessun dato del portafoglio (compatibilità con il portafoglio: Fase 7B). Test in `tests/test_decision_engine.py`.
+- **Versioni**: D1 (Fase 7A) e D2 (5 nov 2026). Dati del 4 novembre: D2 cambia solo le 5 esposizioni ETF che D1 dava «Da
+  approfondire» (dividendi, qualità, finanza mondo, sanità mondo, USA equal weight) → «Monitora — trend esplorativo»; azioni
+  (ADBE resta «Da approfondire»), breve periodo, obbligazioni E2, rischi, contraddizioni e dati insufficienti invariati.
+  Il diario salva la versione per ogni seduta e osservazione; una seduta già registrata con una versione non si registra
+  con un'altra (la nuova parte dalla seduta successiva); i giudizi passati non si ricostruiscono.
+- **Copertura ETF** (`coverage` nell'API, «Copertura ETF» in pagina): per orizzonte esposizioni dello scanner =
+  classificate + riferimenti di mercato + non analizzabili (obbligazioni nel breve). Il 4 novembre: medio-lungo 55 = 53 + 2
+  (mondo, monetario); breve 55 = 46 + 2 + 7 obbligazionari. Il catalogo ha 66 ETF nelle esposizioni; fuori dal catalogo
+  ordinario 2 ETC (oro, argento: non fondi UCITS).
+- Nessun dato del portafoglio (compatibilità con il portafoglio: Fase 7B). Test in `tests/test_decision_engine.py` e
+  `tests/test_decision_d2.py`.
 
 ## Da verificare quando il diario avrà almeno 3 mesi di dati
 
@@ -1127,7 +1144,7 @@ database reale): ambiente test riconosciuto, scrittura e rete bloccate, processo
 origine «prova» rifiutato (il caso del 4 novembre), anteprima isolata in un processo separato, indirizzi API e server
 HTTP vero su porta temporanea senza scritture, letture che non scrivono, prove riconosciute ed escluse, immutabilità,
 registrazioni contemporanee, transazioni fallite senza giornate parziali, idempotenza, ultima seduta chiusa, fusi orari e
-chiusure delle borse, ETF e benchmark non allineati, date obbligazionarie, stato dei quattro diari, navigazione sul
+chiusure delle borse, ETF e benchmark non allineati, date obbligazionarie, stato dei diari, navigazione sul
 telefono e punti d'ingresso autorizzati.
 
 ## File del progetto
@@ -1168,10 +1185,10 @@ telefono e punti d'ingresso autorizzati.
 | `etf_prices.py` | Chiusure in euro degli ETF del catalogo (Fase 6B) in `cache/etf_prices.pkl`, scaricate in background dopo la chiusura |
 | `etf_opportunity.py` | Scanner esplorativo delle esposizioni ETF (Fase 6B): due modi, condizioni, rischi, prodotti; `/api/etf/opportunities` |
 | `etf_opportunity_diary.py` | Diario dello scanner ETF (tabelle nuove in `data/opportunita.sqlite3`, immutabili) |
-| `investment_decision_engine.py` | Decision Desk (Fase 7A): stati trasparenti da T1–T5, Pagella, F1, V2 ed E2, senza ricalcolarli |
+| `investment_decision_engine.py` | Decision Desk (Fase 7A, versione D2): stati trasparenti da T1–T5, Pagella, F1, V2 ed E2, senza ricalcolarli |
 | `decision_diary.py` | Diario prospettico delle decisioni (Fase 7A), tabelle `dec_runs`/`dec_observations` |
 | `app_env.py` | Ambienti produzione/test/anteprima, autorizzazione degli scrittori dei diari, guardia e isolamento (Fase 6C) |
-| `diaries_status.py` | Stato dei quattro diari in sola lettura (Fase 6C); `/api/diaries/status` |
+| `diaries_status.py` | Stato dei cinque diari in sola lettura (Fase 6C, decisioni dalla D2); `/api/diaries/status` |
 | `preview.py` | Anteprima isolata della dashboard sulla porta 8101 (Fase 6C) |
 | `etf_catalog/` | Il catalogo: `strumenti.json`, `quotazioni.json`, `esposizione.json`, `fonti.json`, `controlli.json` (dati pubblici) |
 | `opportunity_validation.py` | Laboratorio di validazione (Fase O3): studio storico esplorativo delle condizioni Trading, simulazione sperimentale e controllo dei dati per l'Investimento; report in `data/validazione/` |

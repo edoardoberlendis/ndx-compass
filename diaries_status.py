@@ -1,4 +1,4 @@
-"""Stato dei quattro diari prospettici (Fase 6C), SOLO LETTURA.
+"""Stato dei cinque diari prospettici (Fase 6C, diario delle decisioni dalla Fase 7A), SOLO LETTURA.
 
     .venv/bin/python diaries_status.py          # testo per il Terminale
     .venv/bin/python diaries_status.py --json   # lo stesso in JSON (è anche /api/diaries/status)
@@ -47,6 +47,12 @@ DIARIES = [
              "deve arrivare alla stessa data (altrimenti l'esposizione porta la nota)",
      "dates": "seduta di Borsa Italiana; ora del download dei prezzi con fuso orario; data del prezzo per ogni classe; date "
               "di duration e rendimento degli obbligazionari separate da quella del prezzo"},
+    {"key": "decision", "name": "Diario delle decisioni", "module": "decision_diary.py", "runs": "dec_runs",
+     "obs": "dec_observations", "extra": [], "calendar": "NYSE (righe ETF solo con la stessa seduta dello scanner ETF)",
+     "depends": "diario delle opportunità della stessa seduta (registrato prima); righe ETF solo se lo scanner ETF usa la "
+                "stessa seduta con prezzi di chiusura definitivi",
+     "when": "nella catena serale, dopo il diario delle valutazioni; una sola versione del Decision Desk per seduta",
+     "dates": "seduta NYSE; per ogni decisione le date dei dati usati (prezzo, bilanci, stime, benchmark, duration)"},
 ]
 DUPLICATES = ("chiave primaria (seduta, versione del modello) + controllo e inserimento nella stessa transazione "
               "BEGIN IMMEDIATE: la seconda registrazione della stessa seduta (anche se server e job serale partono insieme) "
@@ -62,7 +68,8 @@ def _ro(path):
 def _versions():
     out = {}
     for key, mod, attr in (("opportunity", "opportunity_scanner", "MODEL_VERSION"), ("investment", "investment_engine", "VERSION"),
-                           ("valuation", "investment_valuation", "VERSION"), ("etf", "etf_opportunity", "VERSION")):
+                           ("valuation", "investment_valuation", "VERSION"), ("etf", "etf_opportunity", "VERSION"),
+                           ("decision", "investment_decision_engine", "VERSION")):
         try:
             out[key] = getattr(__import__(mod), attr)
         except Exception as e:           # a broken module must not hide the state of the others
@@ -145,7 +152,7 @@ def etf_sessions_after(first, prices):
 
 
 def status(now=None, path=None):
-    """Read-only state of the four diaries (dict). Never writes."""
+    """Read-only state of the five diaries (dict). Never writes."""
     now = now or datetime.now(ET)
     path = path or od.DB
     vers = _versions()
@@ -179,11 +186,11 @@ def status(now=None, path=None):
     if opp and opp["official"]["sessions"]:
         sessions = nyse_sessions(opp["official"]["sessions"][0], last_closed)
         by["opportunity"]["missing"] = [s for s in sessions if s not in set(opp["official"]["sessions"])]
-        for k in ("investment", "valuation"):
+        for k in ("investment", "valuation", "decision"):
             have = set((data.get(k) or {}).get("official", {}).get("sessions", []))
             first = min(have) if have else None
             by[k]["missing"] = [s for s in opp["official"]["sessions"] if first and s >= first and s not in have]
-    for k in ("opportunity", "investment", "valuation"):
+    for k in ("opportunity", "investment", "valuation", "decision"):
         r = by[k]
         if r["last"] and r["last"]["session"] == last_closed:
             r["next"] = "prossima seduta: " + (next_nyse_close(now) or "n.d.")
@@ -233,7 +240,8 @@ def text(s):
     for r in s["diaries"]:
         lines.append(f"■ {r['name']} ({r['module']}) — {r['state']}, modello {r['version']}")
         lines.append(f"  ufficiali: {r['official']['runs']} sedute, {r['official']['observations']} osservazioni; "
-                     f"escluse: {r['excluded']['runs']} sedute, {r['excluded']['observations']} osservazioni")
+                     f"escluse: {r['excluded']['runs']} sedute, {r['excluded']['observations']} osservazioni; "
+                     f"versioni presenti: {', '.join(r.get('versionsRecorded') or []) or 'nessuna'}")
         if r["last"]:
             lines.append(f"  ultima ufficiale: {r['last']['session']} ({r['last']['source']}, {r['last']['computedAt']}, "
                          f"{r['last']['observations']} osservazioni)")

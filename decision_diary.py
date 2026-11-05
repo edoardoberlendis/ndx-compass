@@ -11,8 +11,11 @@ Rules (the safety of phase 6C is reused, nothing new is invented):
   (opportunity_diary.check_time): the decisions of the past are never rebuilt with today's data;
 - the ETF rows are saved only when the ETF scanner uses the same session with final closes (etf_opportunity_diary.
   check_final); otherwise the run says why they are missing (never ETF data of another day mixed in silently);
-- one run per (session, desk version): check and insert in one BEGIN IMMEDIATE transaction (idempotent, atomic: an
-  error saves nothing); rows are never modified or deleted (SQLite triggers);
+- one run per session: check and insert in one BEGIN IMMEDIATE transaction (idempotent, atomic: an error saves
+  nothing); rows are never modified or deleted (SQLite triggers);
+- versions (D1, D2, ...): every run and observation keeps the desk version; a session already recorded with one
+  version is never recorded again with another (the new version starts from the next session, as the ETF diary does
+  with E1/E2): past judgements are never rewritten or rebuilt with today's rules;
 - every observation keeps state, rule, evidence for and against, main reason, risks, conditions of change, the dates
   of the data, the completeness, the validation text and the versions of every engine used.
 """
@@ -85,6 +88,18 @@ def exists(session, version, path=None):
                                          (session, version)).fetchone() is not None
 
 
+def runs_of_session(session, path=None):
+    """[(version, source)] already recorded for `session` (read only)."""
+    path = path or od.DB
+    if not os.path.exists(path):
+        return []
+    with _ro(path) as con:
+        if not _has(con):
+            return []
+        return [tuple(r) for r in con.execute("SELECT model_version, source FROM dec_runs WHERE session=? ORDER BY model_version",
+                                              (session,))]
+
+
 def etf_ready(result, session):
     """(True, None) when the ETF rows of the snapshot belong to `session` with final closes, else (False, reason)."""
     import etf_opportunity_diary as ed
@@ -127,6 +142,11 @@ def record(result, session, computed_at, source, opp_version, path=None):
         con.execute("BEGIN IMMEDIATE")             # check and insert in one write transaction (phase 6C)
         if con.execute("SELECT 1 FROM dec_runs WHERE session=? AND model_version=?", (session, result["version"])).fetchone():
             return False, "seduta già registrata con questa versione del Decision Desk"
+        other = con.execute("SELECT model_version, source FROM dec_runs WHERE session=? AND model_version<>?",
+                            (session, result["version"])).fetchone()
+        if other:
+            return False, (f"seduta già registrata con il Decision Desk {other[0]} (origine «{other[1]}»): la versione "
+                           f"{result['version']} si registra dalla seduta successiva")
         con.execute("INSERT INTO dec_runs VALUES (?,?,?,?,?,?,?,?,?)",
                     (session, result["version"], computed_at, source, _j(result.get("sources")), _j(result.get("rules")),
                      _j(result.get("counts")), etf_note, len(rows)))

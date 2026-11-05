@@ -435,9 +435,9 @@ def test_15b_bond_dates_kept_apart_and_o1_declared_experimental():
     assert g["bond"]["duration"] == 1.9 and g["bond"]["yield"] == 3.3                                       # shown apart
 
 
-# ------------------------------------------------------------------ 16. state of the four diaries
+# ------------------------------------------------------------------ 16. state of the diaries (five since D2)
 
-def test_16_state_of_the_four_diaries_is_read_only(tmp_path):
+def test_16_state_of_the_diaries_is_read_only(tmp_path):
     start_diary(od.DB)
     assert etf_session(od.DB, "2026-11-03", source="prova")[0][0]
     con = sqlite3.connect(od.DB)
@@ -450,7 +450,7 @@ def test_16_state_of_the_four_diaries_is_read_only(tmp_path):
         st = ds.status(now=datetime(2026, 11, 5, 20, 0, tzinfo=ET))
     assert [w for w in seen if "opportunita" in w[1]] == [] and sha(od.DB) == before
     by = {d["key"]: d for d in st["diaries"]}
-    assert set(by) == {"opportunity", "investment", "valuation", "etf"}
+    assert set(by) == {"opportunity", "investment", "valuation", "etf", "decision"}     # decision diary since phase 7A (D2)
     assert by["opportunity"]["official"] == {"runs": 2, "observations": 2}
     assert by["opportunity"]["missing"] == ["2026-11-03", "2026-11-05"]          # NYSE sessions without an official record
     assert by["etf"]["official"]["runs"] == 0 and by["etf"]["excluded"]["observations"] > 0
