@@ -804,6 +804,7 @@ def run_daily_job():
     import analysts
     import history
     import signals
+    authorize_writer("job serale")
     t0 = time.time()
     store.constituents = load_constituents()
     tickers = [c["ticker"] for c in store.constituents]
@@ -1163,7 +1164,7 @@ def movers_why(n=8):
 app = Flask(__name__, static_folder=None)
 # version of the code that serves the page: change it together with PAGE_VERSION in static/app.js whenever the data
 # sent to the page changes, so that a server left running with old code is noticed (the page asks to restart it)
-DASHBOARD_VERSION = "2026-11-04l"
+DASHBOARD_VERSION = "2026-11-05b"
 
 
 @app.route("/")
@@ -1651,6 +1652,14 @@ def api_etf_opportunities():
     return _json(dict(eo.page(r), status="ok", prices=etf_prices.status(), diary=ed.stats()))
 
 
+@app.route("/api/diaries/status")
+def api_diaries_status():
+    """Phase 6C: read-only state of the four diaries (diaries_status.py): official and excluded records, last session,
+    missing sessions, next update. Opens the database only in read-only mode."""
+    import diaries_status
+    return _json(diaries_status.status())
+
+
 @app.route("/api/etf/opportunities/diary")
 def api_etf_opportunities_diary():
     import etf_opportunity_diary as ed
@@ -1698,8 +1707,17 @@ def save_etf_scan_diary(source="dashboard"):
         if bench is None or not len(bench):
             return "scanner ETF: manca la serie di riferimento"
         session = str(bench.index[-1].date())
-        if ed.exists(session, eo.VERSION):
+        run = ed.run_of(session, eo.VERSION)
+        if run:
+            if run["class"] != "produzione":
+                return (f"scanner ETF: seduta {session} già occupata da una registrazione «{run['source']}» (esclusa dalle "
+                        "statistiche): non si registra due volte, il diario ufficiale riparte dalla seduta successiva")
             return "scanner ETF: seduta già registrata"
+        other = ed.runs_of_session(session)
+        if other:                                   # E1 → E2 (5 Nov 2026): a new version starts from the next session
+            o = other[0]
+            return (f"scanner ETF: seduta {session} già registrata con il modello {o['version']} (origine «{o['source']}»): "
+                    f"il modello {eo.VERSION} si registra dalla seduta successiva")
         why = ed.check_final(session, prices.get("fetched"))
         if why:
             return "scanner ETF: " + why
@@ -2243,6 +2261,7 @@ def save_opportunity_diary(source="dashboard"):
                 log.info("opportunity diary: %s for %s (%s)", msg, day, source)
         msg += "; " + save_investment_diary(day, now, source)
         msg += "; " + save_valuation_diary(day, now, source)
+        msg += "; " + save_decision_diary(day, now, source)
         if _od["measured"] != day:
             closed = technical.closed_sessions(daily, now)
             new = od.update_outcomes({t: od.as_map(df["Close"]) for t, df in closed.items() if t != SIGNAL_BENCH},
@@ -2261,6 +2280,7 @@ def update_opportunity_diary_offline():
     import analysts
     import technical
     global diary_days
+    authorize_writer("comando manuale")
     counter, diary_days = diary_days, (lambda: 0)          # build() would only count the files of portafoglio/diario
     cons = read_cache("constituents.json", 30 * 86400)
     if not cons:
@@ -2405,6 +2425,130 @@ def api_valuation_one(ticker):
     return app.response_class(json.dumps(out, default=clean, allow_nan=False), mimetype="application/json")
 
 
+# ---------------------------------------------------------------- Decision Desk (phase 7A)
+
+_dec = {"key": None, "data": None}
+
+
+def decision_snapshot(now=None, fresh=False, closing=False):
+    """The results of the existing engines, as they are, for investment_decision_engine.decide: Trading T1–T5 and
+    Pagella (opportunities, keep_all), fundamentals F1, valuation V2, ETF scanner E2 in both modes, the ETF catalog.
+    Data already in memory or on disk only: never a download, never the personal portfolio. None while loading."""
+    import etf_catalog
+    with store.lock:
+        snap = store.snapshot
+    if snap is None:
+        return None
+    now = now or datetime.now(ET)
+    inv = investment_analysis(now=now, fresh=fresh)
+    val = valuation_analysis(now=now, fresh=fresh, closing=closing) if inv else None
+    opp = opportunities(keep_all=True, now=now)
+    if not opp:
+        return None
+    etf = {}
+    for m in ("lungo", "breve"):
+        try:
+            etf[m] = etf_scan(m)
+        except Exception:
+            log.exception("ETF scan for the decision desk failed")
+            etf[m] = None
+    try:
+        catalog = etf_catalog.load()
+    except Exception:
+        catalog = None
+    return {"asOf": now.isoformat(timespec="seconds"), "session": opp.get("asOf"), "opportunities": opp,
+            "investment": inv, "valuation": val, "etf": etf, "catalog": catalog}
+
+
+def decisions():
+    """Decision Desk of the page, cached like the rankings (10 minutes, or as soon as one engine's result changes)."""
+    import investment_decision_engine as de
+    with store.lock:
+        snap = store.snapshot
+    if snap is None:
+        return None
+    inv = investment_analysis()
+    val = valuation_analysis() if inv else None
+    key = (id(store.daily), id(inv), id(val), id(_eopp.get("data", {}).get("lungo")), id(_eopp.get("data", {}).get("breve")),
+           int(time.time() // OPPS_TTL_S))
+    if _dec["key"] == key and _dec["data"] is not None:
+        return _dec["data"]
+    s = decision_snapshot()
+    if s is None:
+        return None
+    data = de.decide(s)
+    _dec.update(key=(id(store.daily), id(inv), id(val), id(_eopp.get("data", {}).get("lungo")),
+                     id(_eopp.get("data", {}).get("breve")), int(time.time() // OPPS_TTL_S)), data=data)
+    return data
+
+
+@app.route("/api/decisions")
+def api_decisions():
+    """Decision Desk (phase 7A): every stock and ETF exposure, both horizons, with a transparent state. Read only: it
+    never writes a diary and never downloads."""
+    import decision_diary
+    import investment_decision_engine as de
+    if store.error:
+        return jsonify({"error": store.error}), 500
+    try:
+        data = decisions()
+    except Exception:
+        log.exception("decision desk failed")
+        return jsonify({"error": "Decision Desk non calcolabile"}), 500
+    if data is None:
+        return jsonify({"error": "loading"}), 503
+    try:
+        diary = decision_diary.stats()
+    except Exception:
+        log.exception("decision diary stats failed")
+        diary = None
+    return _json(dict(de.page(data), diary=diary))
+
+
+@app.route("/api/decisions/<path:rid>")
+def api_decision_one(rid):
+    """One decision in full: evidence, risks, conditions of change, missing data, dates, validation, links."""
+    import investment_decision_engine as de
+    try:
+        data = decisions()
+    except Exception:
+        log.exception("decision desk failed")
+        return jsonify({"error": "Decision Desk non calcolabile"}), 500
+    if data is None:
+        return jsonify({"error": "loading"}), 503
+    r = de.detail(data, rid)
+    if r is None:
+        return jsonify({"error": "decisione non trovata"}), 404
+    return _json(dict(r, version=data["version"], disclaimer=data["disclaimer"]))
+
+
+def save_decision_diary(day, now, source):
+    """Decision snapshot of a session the opportunity diary has already recorded (decision_diary.py), with the closing
+    prices of that session. Never the first record of a diary, never twice; a failure never stops the loop."""
+    try:
+        import decision_diary as dd
+        import investment_decision_engine as de
+        import opportunity_diary as od
+        import opportunity_scanner
+        if not od.exists(day, opportunity_scanner.MODEL_VERSION):
+            return "decisioni: diario delle opportunità non registrato per questa seduta"
+        if dd.exists(day, de.VERSION):
+            return "decisioni già registrate"
+        if _dec.get("diaryDay") == day and time.time() - _dec.get("diaryAt", 0) < INV_REFRESH_S:
+            return "decisioni: nuovo tentativo tra poco"
+        _dec.update(diaryDay=day, diaryAt=time.time())
+        s = decision_snapshot(now=now, fresh=True, closing=True)
+        if s is None:
+            return "decisioni: dati non ancora disponibili"
+        saved, msg = dd.record(de.decide(s), day, now.isoformat(timespec="seconds"), source, opportunity_scanner.MODEL_VERSION)
+        if saved:
+            log.info("decision diary: %s for %s (%s)", msg, day, source)
+        return "decisioni: " + msg
+    except Exception:
+        log.exception("decision diary not saved")
+        return "decisioni: errore, vedi cache/server.log"
+
+
 @app.route("/api/opportunities/validation")
 def api_opportunities_validation():
     """Summary of the latest study of the validation lab (phase O3): only read from data/validazione/riepilogo.json,
@@ -2444,7 +2588,16 @@ def api_patterns():
     return send_from_directory(REPORT_DIR, "patterns.json", max_age=0)
 
 
+def authorize_writer(who):
+    """Phase 6C: only the real entry points may write the production diaries (app_env). In test or preview it does
+    nothing: there the diaries are temporary copies and the guard blocks every production path."""
+    import app_env
+    if app_env.is_production():
+        app_env.authorize(who)
+
+
 if __name__ == "__main__":
+    authorize_writer("server")
     threading.Thread(target=worker, daemon=True).start()
     port = int(os.environ.get("PORT", 8100))
     log.info("Nasdaq-100 dashboard on http://localhost:%d  (first load takes ~30s)", port)

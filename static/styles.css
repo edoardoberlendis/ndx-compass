@@ -1030,6 +1030,7 @@ table.my td.nw { max-width: 280px; }
 .eo-st.eo-mix { color: var(--warn); border-color: currentColor; background: none; }
 .eo-st.eo-risk { background: var(--neg-soft); color: var(--neg); border-color: transparent; }
 .eo-st.eo-na, .eo-st.eo-none, .eo-st.eo-ref { color: var(--muted); }
+.eo-st.eo-ins { color: var(--muted); border-color: currentColor; border-style: dashed; background: none; white-space: normal; }   /* model E2 */
 #oppsBody .pos { color: var(--pos); }
 #oppsBody .neg { color: var(--neg); }
 #oppsBody .warn { color: var(--warn); }
@@ -1055,3 +1056,29 @@ button.cat-chip { cursor: pointer; font: inherit; font-size: var(--fs-xs); }
   .eo-tbl .p3 { display: none; }
   .eo-kv td:last-child { display: table-cell; }
 }
+
+/* ------------------------------------------------ phase 6C: tab row on narrow phones
+   The five tabs do not fit under ~414px: the tab row scrolls sideways inside itself (the page never scrolls sideways),
+   all tabs stay in the same order, the market status goes on its own line. A soft edge shows there is more. */
+@media (max-width: 760px) {
+  .tabs { padding: 0; gap: 0; }
+  .tablist { flex: 1 1 100%; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none;
+             -webkit-overflow-scrolling: touch; padding: 0 8px; position: relative; }
+  .tablist::-webkit-scrollbar { display: none; }
+  .tab { flex: 0 0 auto; white-space: nowrap; padding: 11px 10px; }
+  .tabs .updated { padding: 2px 16px 8px; }
+  .tabs .subtabs { padding-left: 16px; padding-right: 16px; }
+}
+@media (max-width: 420px) {
+  .tab { padding: 10px 8px; }
+  .tablist { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+             mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent); }
+}
+.ds-tbl td.small { white-space: normal; min-width: 180px; }
+
+/* ------------------------------------------------ phase 7A: Decision Desk */
+.eo-st.eo-wait { color: var(--warn); border-color: currentColor; border-style: dashed; background: none; }
+.dk-tbl tr[data-dkopen] { cursor: pointer; }
+.dk-tbl tr.sel td { background: var(--surface-2); }
+.dk-tbl td.small { min-width: 160px; }
+@media (max-width: 760px) { .dk-tbl td.small { min-width: 140px; } }

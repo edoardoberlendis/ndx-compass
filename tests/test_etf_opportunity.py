@@ -310,7 +310,7 @@ def test_11_drawdown():
 
 def test_12_equity_and_bond_use_separate_models(data):
     c, p = data
-    r = eo.scan(c, p, "lungo", now=NOW)
+    r = eo.scan(c, p, "lungo", now=NOW, version="E1")                       # model E1 (O1 still a condition there)
     g = eo.detail(r, "gov_euro_1_3")
     assert g["kind"] == "bond" and {x["id"] for x in g["conditions"]["fav"] + g["conditions"]["con"]} == {"O1", "O2", "O3", "P1", "P2"}
     assert "rel" not in (g.get("measures") or {}) and g["trends"] == []      # no momentum on bonds
@@ -324,7 +324,7 @@ def test_13_duration_and_rate_sensitivity(data):
     c, p = data
     bm = eo.bond_measures(c["items"][G1])
     assert bm["sensitivity"] == -1.9 and bm["cushion"] == pytest.approx(3.3 / 1.9) and bm["aOrBetter"] == 70.0
-    r = eo.scan(c, p, "lungo", now=NOW)
+    r = eo.scan(c, p, "lungo", now=NOW, version="E1")                       # E1; E2 in test_etf_model_e2.py
     assert eo.detail(r, "gov_euro_1_3")["state"] == "Esposizione da approfondire"
     long_ = eo.detail(r, "gov_euro_lunghi")
     assert long_["state"] == "Rischio elevato" and any(x["id"] == "P1" for x in long_["contrary"])
@@ -340,7 +340,7 @@ def test_14_ytm_is_not_coupon_nor_distribution_yield(data):
     assert (bm["yield"], bm["coupon"], bm["distYield"]) == (3.3, 2.4, 2.1)   # three separate values
     assert bm["yieldAfterTer"] == pytest.approx(3.3 - 0.07)
     il = eo.bond_measures(c["items"][IL])
-    o1 = eo.bond_conditions(il)[0][0]
+    o1 = eo.bond_conditions(il, "E1")[0][0]
     assert il["inflationLinked"] and o1["ok"] is None and "reale" in o1["why"]   # real yield not compared with nominal ones
     src = open(build.__file__).read()
     assert "non è una previsione né un rendimento netto garantito" in src
@@ -473,10 +473,10 @@ def _session_scan(c, p, session="2026-11-03"):
 def test_22_diary_records_a_closed_session(data, tmp_path):
     c, p = data
     res = _session_scan(c, p)
-    assert ed.record(res, "2026-11-03", "2026-11-03T23:00:00+01:00", "test") == (False, "diario delle opportunità non ancora avviato: nessuna registrazione degli ETF")
+    assert ed.record(res, "2026-11-03", "2026-11-03T23:00:00+01:00", "dashboard") == (False, "diario delle opportunità non ancora avviato: nessuna registrazione degli ETF")
     _start_diary(tmp_path)
     before = {r[0] for r in sqlite3.connect(od.DB).execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    ok, msg = ed.record(res, "2026-11-03", "2026-11-03T23:00:00+01:00", "test")
+    ok, msg = ed.record(res, "2026-11-03", "2026-11-03T23:00:00+01:00", "dashboard")
     assert ok, msg
     con = sqlite3.connect(od.DB)
     con.row_factory = sqlite3.Row
@@ -500,9 +500,9 @@ def test_22b_diary_refuses_intraday_or_mismatched_prices(data, tmp_path):
     c, p = data
     _start_diary(tmp_path)
     intraday = prices(fetched="2026-11-03T15:00:00+01:00")
-    ok, why = ed.record(_session_scan(c, intraday), "2026-11-03", "2026-11-03T15:01:00+01:00", "test")
+    ok, why = ed.record(_session_scan(c, intraday), "2026-11-03", "2026-11-03T15:01:00+01:00", "dashboard")
     assert not ok and "non era ancora chiusa" in why
-    ok, why = ed.record(_session_scan(c, p, "2026-10-30"), "2026-11-03", "2026-11-03T23:00:00+01:00", "test")
+    ok, why = ed.record(_session_scan(c, p, "2026-10-30"), "2026-11-03", "2026-11-03T23:00:00+01:00", "dashboard")
     assert not ok and "non della seduta" in why                              # no retroactive rows
     assert not ed.exists("2026-11-03", eo.VERSION)
 
@@ -511,8 +511,8 @@ def test_23_diary_is_idempotent_and_immutable(data, tmp_path):
     c, p = data
     _start_diary(tmp_path)
     res = _session_scan(c, p)
-    assert ed.record(res, "2026-11-03", "2026-11-03T23:00:00+01:00", "test")[0]
-    again = ed.record(res, "2026-11-03", "2026-11-03T23:30:00+01:00", "test")
+    assert ed.record(res, "2026-11-03", "2026-11-03T23:00:00+01:00", "dashboard")[0]
+    again = ed.record(res, "2026-11-03", "2026-11-03T23:30:00+01:00", "dashboard")
     assert again == (False, "seduta già registrata con questa versione dello scanner ETF")
     con = sqlite3.connect(od.DB)
     with pytest.raises(sqlite3.DatabaseError):
@@ -537,9 +537,9 @@ def test_23b_diary_only_from_the_server_loop_not_from_the_page(data, tmp_path, m
     cl = server.app.test_client()
     assert cl.get("/api/etf/opportunities?mode=lungo").status_code == 200
     assert not ed.exists("2026-11-03", eo.VERSION)                           # opening the page records nothing
-    msg = server.save_etf_scan_diary(source="test")
+    msg = server.save_etf_scan_diary()
     assert "salvate" in msg and ed.exists("2026-11-03", eo.VERSION)
-    assert "già registrata" in server.save_etf_scan_diary(source="test")
+    assert "già registrata" in server.save_etf_scan_diary()
     src = open(server.__file__).read()
     assert "save_etf_scan_diary()" in src and 'save_etf_scan_diary(source="job serale")' in src
 

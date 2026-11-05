@@ -43,6 +43,36 @@ _mem = {"mtime": None, "data": None}
 
 MIN_MAIN = 504                  # Borsa Italiana is used when it has at least 2 years of closes, else the longer listing
 
+# Phase 6C: each listing with its exchange, calendar, time zone and closing time. A daily bar of a day is final only
+# after the close of ITS exchange + FINAL_MARGIN_MIN: "after 18:00 in Rome" is right for Milan and Xetra (17:30 CET),
+# not for an exchange that closes later (a US listing closes at 22:00 Rome time).
+FINAL_MARGIN_MIN = 30
+VENUES = {".MI": ("ETFP", "Borsa Italiana (ETFplus)", "Europe/Rome", (17, 30)),
+          ".DE": ("XETR", "Xetra (Francoforte)", "Europe/Berlin", (17, 30)),
+          ".F": ("XFRA", "Borsa di Francoforte", "Europe/Berlin", (20, 0)),
+          ".L": ("XLON", "London Stock Exchange", "Europe/London", (16, 30)),
+          ".AS": ("XAMS", "Euronext Amsterdam", "Europe/Amsterdam", (17, 30)),
+          ".PA": ("XPAR", "Euronext Parigi", "Europe/Paris", (17, 30)),
+          ".SW": ("XSWX", "SIX Swiss Exchange", "Europe/Zurich", (17, 30)),
+          "": ("XNYS/XNAS", "borsa americana", "America/New_York", (16, 0))}
+DELAY = ("chiusure giornaliere di Yahoo Finance: il prezzo di un giorno è definitivo solo dopo la chiusura della sua borsa; "
+         "i prezzi durante la seduta sono ritardati di circa 15 minuti")
+
+
+def venue_info(symbol):
+    """(mic, exchange, time zone, (hour, minute) of the close) from the Yahoo suffix of the listing."""
+    suf = "." + symbol.rsplit(".", 1)[1] if symbol and "." in symbol else ""
+    return VENUES.get(suf, VENUES[""] if not suf else (None, f"borsa sconosciuta ({suf})", None, None))
+
+
+def final_at(symbol, day):
+    """The moment (aware) after which the daily bar of `day` on the exchange of `symbol` is final, or None."""
+    mic, _, tz, close = venue_info(symbol)
+    if not tz or not close:
+        return None
+    d = pd.Timestamp(day).date()
+    return datetime(d.year, d.month, d.day, close[0], close[1], tzinfo=ZoneInfo(tz)) + timedelta(minutes=FINAL_MARGIN_MIN)
+
 
 def candidates(listings):
     """[(yahoo symbol, trading currency, venue)] of the listings with a Yahoo quote: ETFP first, then Xetra."""
@@ -92,6 +122,7 @@ def to_eur(s, ccy, fx):
 
 def assemble(frames, p, now):
     """Pure: from the downloaded frames ({symbol: DataFrame with Close and maybe Dividends}) to the cache content."""
+    now = now if now.tzinfo else now.replace(tzinfo=ROME)
     fx = {sym: _naive(frames[sym]["Close"]) for sym in FX.values() if sym in frames and "Close" in frames[sym]}
     closes, meta = {}, {}
     for isin, x in p.items():
@@ -105,7 +136,7 @@ def assemble(frames, p, now):
         sym, ccy, venue = chosen[0] if chosen else (x.get("symbol"), x.get("currency"), x.get("venue"))
         df = chosen[1] if chosen else None
         x = dict(x, symbol=sym, currency=ccy, venue=venue)
-        info = {"symbol": sym, "currency": ccy, "venue": venue, "launch": x["launch"], "series": None,
+        info = {"symbol": sym, "currency": ccy, "venue": venue, "launch": x["launch"], "series": None, "mic": venue_info(sym)[0] if sym else None,
                 "choice": None if not chosen or chosen is got[0] else f"{got[0][0][0]} ha meno di {MIN_MAIN} sedute: uso {sym}, più lunga"}
         if df is None:
             info["missing"] = "nessuna quotazione Yahoo" if sym else "nessuna quotazione disponibile nel catalogo"
@@ -114,6 +145,12 @@ def assemble(frames, p, now):
         s = _naive(df["Close"].astype(float))
         if x["launch"]:
             s = s[s.index >= pd.Timestamp(x["launch"])]
+        mic, exch, tz, close = venue_info(sym)
+        dropped = None
+        fin = final_at(sym, s.index[-1]) if len(s) else None
+        if fin is not None and now < fin:              # the last bar is of a session still open (or just closed): not final
+            dropped = str(s.index[-1].date())
+            s = s.iloc[:-1]
         eur = to_eur(s, x["currency"], fx)
         if eur is None or not len(eur):
             info["missing"] = f"cambio EUR/{x['currency']} non disponibile: serie non convertita"
@@ -125,7 +162,12 @@ def assemble(frames, p, now):
             divs = int((d > 0).sum())
         info.update(series="ok", first=str(eur.index[0].date()), last=str(eur.index[-1].date()), n=int(len(eur)),
                     converted=x["currency"] not in (None, "EUR"), dividends=divs,
-                    totalReturn=(x["distribution"] != "distribuzione") or divs > 0)
+                    totalReturn=(x["distribution"] != "distribuzione") or divs > 0,
+                    mic=mic, exchange=exch, tz=tz, closeLocal=f"{close[0]:02d}:{close[1]:02d}" if close else None,
+                    finalAfter=final_at(sym, eur.index[-1]).isoformat(timespec="minutes") if final_at(sym, eur.index[-1]) else None,
+                    fetched=now.isoformat(timespec="seconds"), delay=DELAY, droppedPartial=dropped,
+                    fxNote=("cambio EUR/" + x["currency"] + " dell'ultimo giorno letto al momento del download: il cambio non ha "
+                            "una chiusura alle 17:30, quindi l'ultimo valore in euro è provvisorio") if x["currency"] not in (None, "EUR") else None)
         closes[isin] = eur
         meta[isin] = info
     return {"fetched": now.isoformat(timespec="seconds"), "source": SOURCE, "period": PERIOD, "closes": closes, "meta": meta}

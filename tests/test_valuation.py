@@ -324,7 +324,7 @@ def diary_result(day="2026-10-30", quotes=None):
 
 def test_valuation_diary_never_starts_the_diary():
     inv, res = diary_result()
-    saved, why = vd.record(res, "2026-10-30", EVENING.isoformat(), "test", o.MODEL_VERSION)
+    saved, why = vd.record(res, "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)
     assert not saved and "non ha registrato la seduta" in why and not os.path.exists(od.DB)
     assert vd.stats() == {"started": False, "days": 0} and not vd.exists("2026-10-30", iv.VERSION)
 
@@ -332,9 +332,9 @@ def test_valuation_diary_never_starts_the_diary():
 def test_valuation_diary_records_once_and_leaves_the_other_diaries_unchanged():
     from test_opportunities import QQQ, RISING_VOL, TODAY, frame, path, stock
     scan = o.scan([stock("AAA")], {"AAA": frame(path(300, 0.004), RISING_VOL)}, QQQ, {}, today=TODAY, keep_all=True)
-    assert od.record(scan, "2026-10-30", EVENING.isoformat(), "test")[0]
+    assert od.record(scan, "2026-10-30", EVENING.isoformat(), "dashboard")[0]
     inv, res = diary_result()
-    assert invd.record(inv, "2026-10-30", EVENING.isoformat(), "test", o.MODEL_VERSION)[0]
+    assert invd.record(inv, "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)[0]
     tables = ("runs", "observations", "inv_runs", "inv_observations")
     with sqlite3.connect(od.DB) as con:
         before = {t: con.execute(f"SELECT * FROM {t}").fetchall() for t in tables}
@@ -342,14 +342,14 @@ def test_valuation_diary_records_once_and_leaves_the_other_diaries_unchanged():
     with sqlite3.connect(od.DB) as con:
         assert not con.execute("SELECT 1 FROM sqlite_master WHERE name='val_runs'").fetchone()   # a read creates nothing
     _, live = diary_result(quotes={t: {"price": 111.0, "time": "2026-10-30T15:00:00-04:00"} for t in VPEERS})
-    assert vd.record(live, "2026-10-30", EVENING.isoformat(), "test", o.MODEL_VERSION)[0] is False   # only closes
+    assert vd.record(live, "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)[0] is False   # only closes
     _, wrong = diary_result(day="2026-10-29")
-    assert vd.record(wrong, "2026-10-30", EVENING.isoformat(), "test", o.MODEL_VERSION)[0] is False
+    assert vd.record(wrong, "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)[0] is False
     early = datetime(2026, 10, 30, 15, 0, tzinfo=ET)
-    assert vd.record(res, "2026-10-30", early.isoformat(), "test", o.MODEL_VERSION)[0] is False
-    saved, why = vd.record(res, "2026-10-30", EVENING.isoformat(), "test", o.MODEL_VERSION)
+    assert vd.record(res, "2026-10-30", early.isoformat(), "dashboard", o.MODEL_VERSION)[0] is False
+    saved, why = vd.record(res, "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)
     assert saved and why == "6 valutazioni salvate"
-    assert vd.record(res, "2026-10-30", EVENING.isoformat(), "test", o.MODEL_VERSION)[0] is False
+    assert vd.record(res, "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)[0] is False
     with sqlite3.connect(od.DB) as con:
         assert {t: con.execute(f"SELECT * FROM {t}").fetchall() for t in tables} == before
         row = con.execute("SELECT price, price_date, status, value_base, scenarios, inputs, monitor FROM val_observations "

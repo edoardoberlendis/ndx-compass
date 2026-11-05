@@ -168,7 +168,7 @@ function spark(values, w = 80, h = 22, base = null, color = null) {
 
 // ------------------------------------------------------------ data
 // must equal DASHBOARD_VERSION in server.py: otherwise the server runs old code and the page says so
-const PAGE_VERSION = "2026-11-04l";
+const PAGE_VERSION = "2026-11-05b";
 async function load() {
   const r = await fetch("/api/snapshot", { cache: "no-store" });
   const sv = r.headers.get("X-Dashboard-Version");
@@ -2738,7 +2738,8 @@ document.addEventListener("change", e => {
 // after; the judgement on the exposure and the quality of the product stay separate; never Compra/Vendi, never a score.
 const EO = { mode: LS.get("eo.mode", "lungo"), data: {}, err: {}, loading: {}, open: null, det: {}, detErr: null };
 const EO_MODES = { lungo: "Medio-lungo periodo", breve: "Breve periodo" };
-const EO_ST = { "Esposizione da approfondire": "ok", "Trend favorevole da monitorare": "mon", "Condizioni contrastanti": "mix",
+const EO_INS = "Da approfondire — evidenza insufficiente per un giudizio favorevole";      // model E2, bonds only
+const EO_ST = { "Esposizione da approfondire": "ok", "Trend favorevole da monitorare": "mon", [EO_INS]: "ins", "Condizioni contrastanti": "mix",
   "Rischio elevato": "risk", "Dati insufficienti": "na", "Nessuna opportunità convincente": "none", "Riferimento di mercato": "ref" };
 const eoSt = s => `<span class="eo-st eo-${EO_ST[s] || "none"}">${esc(s)}</span>`;
 const eoPts = v => isNum(v) ? `<span class="${v > 0 ? "pos" : v < 0 ? "neg" : ""}">${(v > 0 ? "+" : "") + fNum(v, 1)}</span>` : "n.d.";
@@ -2803,6 +2804,17 @@ function eoListHTML(D) {
       }).join("")}</tbody></table></div></details>`;
   }).join("");
 }
+// Bond rate sensitivity. Model E2: duration (modified when published, else effective, declared), indicative ±1 point
+// scenarios and the yield ÷ duration ratio as a plain figure without threshold. Model E1 rows keep the old single line.
+function eoBondRate(b) {
+  if (!("rateScenarios" in b))
+    return `<tr><th>Duration effettiva</th><td>${isNum(b.duration) ? fNum(b.duration, 2) + " anni: con tassi +1 punto il valore scende di circa il " + fNum(b.duration, 1) + "%" : "n.d."}</td></tr>`;
+  const sc = b.rateScenarios;
+  return `<tr><th>Duration${b.durationKind ? " " + esc(b.durationKind) : ""}</th><td>${isNum(b.durationUsed) ? fNum(b.durationUsed, 2) + " anni" : "n.d."}</td></tr>
+    <tr><th>Sensibilità indicativa ai tassi</th><td>${sc ? sc.map(x => `rendimenti di mercato ${x.shift > 0 ? "+" : "−"}${fNum(Math.abs(x.shift), 0)} punto: prezzo circa ${x.priceChange > 0 ? "+" : "−"}${fNum(Math.abs(x.priceChange), 1)}%`).join("<br>") : "non calcolabile"}
+      <br><span class="cat-src">${esc((b.scenarioNotes || []).join("; "))}</span></td></tr>
+    <tr><th>Rendimento ÷ duration</th><td>${isNum(b.ratio) ? fNum(b.ratio, 2) + ` <span class="cat-src">${esc(b.ratioNote || "")}</span>` : "n.d."}</td></tr>`;
+}
 function eoDetailHTML() {
   const o = EO.det[EO.mode + ":" + EO.open];
   if (!EO.open) return "";
@@ -2811,12 +2823,12 @@ function eoDetailHTML() {
   const top = (arr, n = 5) => (arr || []).slice(0, n).map(x => `${esc(ETF_IT[x.name] || x.name)} ${fNum(x.weight, 1)}%`).join(" · ");
   const contains = o.kind === "bond"
     ? `<table class="cat-kv eo-kv"><tr><th>Tipo</th><td>${esc(o.bond.kind || "n.d.")}</td></tr><tr><th>Credito</th><td>${esc(o.bond.credit || "n.d.")}${isNum(o.bond.aOrBetter) ? ` · rating A o superiore ${fNum(o.bond.aOrBetter, 0)}% (al ${esc(dayIT(o.bond.ratingsAsOf || ""))})` : ""}</td></tr>
-       <tr><th>Duration effettiva</th><td>${isNum(o.bond.duration) ? fNum(o.bond.duration, 2) + " anni: con tassi +1 punto il valore scende di circa il " + fNum(o.bond.duration, 1) + "%" : "n.d."}</td></tr>
+       ${eoBondRate(o.bond)}
        <tr><th>Scadenza media</th><td>${isNum(o.bond.maturity) ? fNum(o.bond.maturity, 1) + " anni" : "n.d."}</td></tr>
        <tr><th>Rendimento a scadenza</th><td>${isNum(o.bond.yield) ? fNum(o.bond.yield, 2) + "% annuo lordo, senza spese (al " + esc(dayIT(o.bond.yieldAsOf || "")) + "): non è un rendimento netto garantito" : "n.d."}</td></tr>
        <tr><th>Cedola media</th><td>${isNum(o.bond.coupon) ? fNum(o.bond.coupon, 2) + "% (gli interessi dei titoli, non il rendimento)" : "n.d."}</td></tr>
        <tr><th>Distribuzioni ultimi 12 mesi</th><td>${isNum(o.bond.distYield) ? fNum(o.bond.distYield, 2) + "% (guarda indietro: non è il rendimento a scadenza)" : "n.d."}</td></tr>
-       <tr><th>Valuta</th><td>${esc(o.bond.currency || "n.d.")}</td></tr>
+       <tr><th>Valuta</th><td>${esc(o.bond.currency || "n.d.")}${o.bond.hedgedText ? ` · ${esc(o.bond.hedgedText)}` : ""}</td></tr>
        ${o.bondChange ? `<tr><th>Dalla rilevazione del ${esc(dayIT(o.bondChange.since))}</th><td>rendimento ${eoPts(o.bondChange.yield)} punti</td></tr>` : `<tr><th>Rilevazione precedente</th><td>nessuna: il confronto parte dalla prima registrazione nel diario</td></tr>`}</table>`
     : `<table class="cat-kv eo-kv"><tr><th>Concentrazione</th><td>${isNum(c.top10) ? `primi 10 titoli ${fNum(c.top10, 0)}% del fondo` : "n.d."}${c.src ? ` <span class="cat-src">(${esc(c.src)}${c.asOf ? ", " + esc(dayIT(c.asOf)) : ""})</span>` : ""}${c.kind === "ETF americano" ? ` <span class="warn small">composizione dell'ETF americano sullo stesso indice: non verificata per l'ETF europeo</span>` : ""}</td></tr>
        <tr><th>Paesi</th><td>${top(c.countries) || "n.d."}</td></tr><tr><th>Settori</th><td>${top(c.sectors) || "n.d."}</td></tr>
@@ -2896,7 +2908,10 @@ function oppEtfHTML() {
         «Trend favorevole da monitorare» almeno 2 favorevoli e nessuna contraria; «Condizioni contrastanti» almeno una favorevole e una contraria. Una condizione non valutabile non conta mai come soddisfatta.</li>
         <li><b>Rendimenti</b>: totali in euro (chiusure rettificate per i dividendi), stesse date del benchmark, solo dati fino alla seduta indicata; la «rilevazione precedente» è ricalcolata con i soli dati di allora.</li>
         <li><b>Benchmark coerenti</b>: mondo (VWCE), USA (S&P 500), Europa (MSCI Europe), emergenti (MSCI EM IMI), settori e temi globali (MSCI World), settori USA (S&P 500). Mai QQQ per tutti.</li>
-        <li><b>Obbligazioni</b>: duration, rendimento a scadenza, rating e costi dalla pagina dell'emittente con la loro data; niente medie mobili come metodo principale.</li>
+        <li><b>Obbligazioni</b>: duration, rendimento a scadenza, rating e costi dalla pagina dell'emittente con la loro data; niente medie mobili come metodo principale.
+          Modello E2 (dal 5 novembre 2026): il rapporto rendimento ÷ duration è solo descrittivo (nel modello E1 era la condizione O1, soglia 1 senza giustificazione solida).
+          Qualità del credito e costi descrivono il prodotto, non un'opportunità: senza condizioni contrarie lo stato è «${esc(EO_INS)}», mai «Esposizione da approfondire».
+          La sensibilità ai tassi (±1 punto) è un'approssimazione con la duration, non una previsione, e non si somma al rendimento a scadenza.</li>
         <li><b>Valutazioni</b>: solo P/E e P/B pubblicati dall'emittente; mai stimati dai singoli titoli, mai DCF sugli ETF.</li>
         <li>Prezzi: ${esc(D.pricesSource || "")}. Catalogo del ${esc((D.catalogBuilt || "").replace("T", " "))}. Modello ${esc(D.version)}: cambiare soglie o condizioni richiede una nuova versione.</li>
         <li><b>Diario</b>: ${D.diary?.started ? `${D.diary.days} sedute registrate (dal ${esc(dayIT(D.diary.first))} al ${esc(dayIT(D.diary.last))}), ${D.diary.observations} osservazioni` : "nessuna seduta ancora registrata"}; si registra dopo la chiusura di Borsa Italiana, anche con la pagina chiusa (server acceso o job serale).</li></ul></details>
@@ -2904,6 +2919,17 @@ function oppEtfHTML() {
 }
 document.addEventListener("click", e => {
   if (!e.target.closest("#oppsBody")) return;
+  const h = e.target.closest("[data-dkh]:not([data-dketf])");
+  if (h) { DK.h = h.dataset.dkh; LS.set("dk.h", DK.h); DK.open = null; renderOpps(); return; }
+  const k = e.target.closest("[data-dkk]");
+  if (k) { DK.k = k.dataset.dkk; LS.set("dk.k", DK.k); DK.open = null; renderOpps(); return; }
+  if (e.target.closest("[data-dkclose]")) { DK.open = null; renderOpps(); return; }
+  const st = e.target.closest("[data-dkstock]");
+  if (st) { openDetail(st.dataset.dkstock); return; }
+  const et = e.target.closest("[data-dketf]");
+  if (et) { opps.mode = "etf"; LS.set("opp.view", "etf"); EO.mode = et.dataset.dkh === "breve" ? "breve" : "lungo"; LS.set("eo.mode", EO.mode); loadEoDetail(et.dataset.dketf); return; }
+  const dk = e.target.closest("tr[data-dkopen]");
+  if (dk) { loadDeskDetail(dk.dataset.dkopen); return; }
   const md = e.target.closest("[data-eomode]");
   if (md) { EO.mode = md.dataset.eomode; LS.set("eo.mode", EO.mode); EO.open = null; renderOpps(); return; }
   if (e.target.closest("[data-eoclose]")) { EO.open = null; renderOpps(); return; }
@@ -3124,10 +3150,10 @@ document.addEventListener("click", e => { const b = e.target.closest("[data-dz]"
 // Two exploratory rankings computed by the server on closed sessions: stocks to study, never a buy signal.
 // Phase O2: relative strength, absolute direction and market context shown apart; coverage of the data; the
 // "Monitoraggio risultati" panel of the opportunity diary (opportunity_diary.py), closed by default.
-const opps = { data: null, at: 0, err: null, mode: LS.get("opp.mode", "trading"), open: new Set(), diary: null, diaryErr: null,
+const opps = { data: null, at: 0, err: null, mode: LS.get("opp.view", "desk"), open: new Set(), diary: null, diaryErr: null,
   inv: null, invAt: 0, invErr: null, invLoading: false, invFilter: "all", invSort: { k: "order", dir: 1 },
   val: null, valAt: 0, valErr: null, valLoading: false, valFilter: "all" };
-const OPP_MODES = { trading: "Trading · breve periodo", invest: "Investimento · medio-lungo periodo", etf: "ETF · esposizioni e prodotti" };
+const OPP_MODES = { desk: "Decision Desk · azioni ed ETF", trading: "Trading · breve periodo", invest: "Investimento · medio-lungo periodo", etf: "ETF · esposizioni e prodotti" };
 const OPP_LIMITS = [
   ["Condizioni non verificate", "Nessuna condizione è stata provata con un backtest. Nel test della Fase 11 i pattern di forza (Leader di momentum, momentum 12-1, massimi a 52 settimane) non hanno superato le condizioni: la classifica Trading usa misure simili, quindi indica solo titoli da guardare, non titoli che salgono."],
   ["Classifica relativa", "«Più forte del Nasdaq-100» vuol dire meglio di QQQ: in un mercato in calo può significare «scende meno». Per questo la tabella mostra a parte il rendimento del titolo e quello rispetto a QQQ, e segnala chi è più forte di QQQ ma in calo."],
@@ -3145,6 +3171,7 @@ async function loadOpps() {
       else { opps.data = await r.json(); opps.err = null; }
     } catch (e) { opps.err = e.message; opps.at = 0; }
     try { opps.diary = await getJSON("/api/opportunities/diary"); opps.diaryErr = null; } catch (e) { opps.diaryErr = e.message; }
+    try { opps.dstatus = await getJSON("/api/diaries/status"); } catch (e) { opps.dstatus = null; }
     try { opps.lab = await getJSON("/api/opportunities/validation"); } catch (e) { opps.lab = null; }
     try { opps.strat = await getJSON("/api/opportunities/strategies"); } catch (e) { opps.strat = null; }
   }
@@ -3157,7 +3184,25 @@ function oppMarketLine(M) {
   return `<p class="small opp-mkt"><b>Mercato (QQQ, sedute chiuse):</b> 1 mese ${oppPct(M.qqq1m)} · 3 mesi ${oppPct(M.qqq3m)} · trend ${esc((M.qqqTrend || "non calcolabile").toLowerCase())}
     (${fPct(M.qqqVs50, 1)} dalla media 50, ${fPct(M.qqqVs200, 1)} dalla media 200)${isNum(M.above200) ? ` · titoli sopra la media 200: ${fNum(M.above200, 0)}% di ${M.above200n}` : ""}</p>`;
 }
+// Phase 6C: state of the four diaries (diaries_status.py, read only): official records, excluded test records, missing
+// sessions and next update, in one small table inside the closed "Monitoraggio risultati" panel.
+function diaryStatusHTML() {
+  const D = opps.dstatus;
+  if (!D || !D.diaries) return "";
+  const rows = D.diaries.map(r => `<tr><td class="l">${esc(r.name)}</td><td>${r.last ? esc(dayIT(r.last.session)) : "—"}</td>
+    <td>${fNum(r.official.observations, 0)}</td><td>${r.excluded.observations ? `<span class="warn">${fNum(r.excluded.observations, 0)}</span>` : "0"}</td>
+    <td>${r.missing.length ? `<span class="warn">${r.missing.length}</span>` : "0"}</td><td class="l small">${esc(r.next || "")}</td></tr>`).join("");
+  const notes = D.diaries.flatMap(r => [...(r.notes || []), ...r.errors.map(e => "⚠ " + e)]);
+  return `<h4 class="bt-h">Stato dei diari</h4>
+    <div class="table-wrap"><table class="scr mini ds-tbl"><thead><tr><th class="l">Diario</th><th>Ultima seduta ufficiale</th><th>Osservazioni ufficiali</th>
+      <th>Prove escluse</th><th>Sedute mancanti</th><th class="l">Prossimo aggiornamento</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="muted small">Contano solo le registrazioni di origine ${D.officialSources.map(x => "«" + esc(x) + "»").join(", ")}; prove, test e anteprime restano nel file
+      ma sono escluse dalle statistiche. Job serale: ${esc(D.eveningJob)}.${notes.length ? " " + notes.map(esc).join(" ") : ""}</p>`;
+}
 function oppDiaryHTML() {
+  return diaryStatusHTML() + oppDiaryBody();
+}
+function oppDiaryBody() {
   const S = opps.diary;
   if (!S) return `<p class="muted small">Diario non leggibile al momento${opps.diaryErr ? ` (${esc(opps.diaryErr)})` : ""}.</p>`;
   if (!S.started) return `<p class="small">Il diario non ha ancora registrato nessuna seduta: la prima registrazione avviene dopo la prossima chiusura di Wall Street, con la dashboard accesa o con il job serale. I risultati si misurano solo quando sono passate le sedute necessarie.</p>`;
@@ -3571,9 +3616,130 @@ function valDetailHTML(X) {
       <h4>Usati</h4><ul class="why">${li(X.dataUsed)}</ul><h4>Mancanti, stimati o limitati</h4><ul class="why">${li([...(X.dataMissing || []), ...(X.notes || [])])}</ul>
       <p class="muted small">Bilanci scaricati il ${X.dataDates?.statements ? esc(oppTime(X.dataDates.statements)) : "data non disponibile"} · calcolo delle ${esc(oppTime(X.generated))}. Non è una consulenza finanziaria.</p></details>`;
 }
+// ------------------------------------------------------------ Decision Desk (phase 7A, investment_decision_engine.py)
+// Reads the results of the existing engines (T1–T5, Pagella, F1, V2, ETF E2) and shows a transparent state for every
+// stock and ETF exposure, per horizon. Never a score, a probability, a buy/sell call or an entry price.
+const DK = { h: LS.get("dk.h", "lungo"), k: LS.get("dk.k", "all"), data: null, at: 0, err: null, loading: false, open: null, det: {}, detErr: null };
+const DK_ST = { "Da approfondire": "ok", "Attendi condizioni migliori": "wait", "Monitora": "mon", "Condizioni contrastanti": "mix",
+  "Rischio elevato": "risk", "Dati insufficienti": "na", "Nessuna opportunità convincente": "none" };
+const dkSt = s => `<span class="eo-st eo-${DK_ST[s] || "none"}">${esc(s)}</span>`;
+const DK_Q = { completa: "completi", parziale: "parziali", insufficiente: "insufficienti" };
+async function loadDesk(force) {
+  if (DK.loading || (DK.data && !force && Date.now() - DK.at < 5 * 60_000)) return;
+  DK.loading = true;
+  try {
+    const r = await fetch("/api/decisions", { cache: "no-store" });
+    if (r.status === 503) DK.err = "loading";
+    else { const j = await r.json(); if (r.ok) { DK.data = j; DK.at = Date.now(); DK.err = null; DK.det = {}; } else DK.err = j.error || r.statusText; }
+  } catch { DK.err = "server non raggiungibile"; }
+  DK.loading = false;
+  if (state.view === "opps" && opps.mode === "desk") renderOpps();
+}
+async function loadDeskDetail(id) {
+  DK.open = id; DK.detErr = null;
+  if (!DK.det[id]) {
+    renderOpps();
+    try { const r = await fetch("/api/decisions/" + encodeURIComponent(id)); const j = await r.json(); if (r.ok) DK.det[id] = j; else DK.detErr = j.error; }
+    catch { DK.detErr = "server non raggiungibile"; }
+  }
+  renderOpps();
+  document.getElementById("dkDetail")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function dkRows(D) {
+  return D.rows.filter(r => r.horizon === DK.h && (DK.k === "all" || r.kind === DK.k));
+}
+function dkTable(rows) {
+  return `<div class="table-wrap"><table class="scr dk-tbl"><thead><tr><th class="l">Nome</th><th class="l">Stato</th><th class="l">Motivo principale</th>
+    <th class="l p3">Rischio principale</th><th class="l">Dati</th><th>Ultima data</th></tr></thead><tbody>${rows.map(r => `<tr data-dkopen="${esc(r.id)}" class="${DK.open === r.id ? "sel" : ""}">
+      <td class="l"><b>${esc(r.name)}</b><br><span class="cat-src">${esc(r.kind === "azione" ? r.code : (r.family || "ETF") + (r.code ? " · " + r.code : ""))} · ${r.horizon === "breve" ? "breve" : "medio-lungo"}</span></td>
+      <td class="l">${dkSt(r.state)}</td><td class="l small">${esc(r.main)}</td><td class="l p3 small">${esc(r.mainRisk)}</td>
+      <td class="l small">${esc(DK_Q[r.dataQuality] || r.dataQuality)}</td><td class="small">${r.lastDate ? esc(dayIT(r.lastDate)) : "n.d."}</td></tr>`).join("")}</tbody></table></div>`;
+}
+function dkSection(title, rows, sub, open, k) {
+  if (!rows.length) return "";
+  return `<div class="card"><details class="fold" data-k="${k}" ${open ? "open" : ""}><summary><h3>${title}</h3><span class="card-meta">${rows.length} · ${esc(sub)}</span></summary>${dkTable(rows)}</details></div>`;
+}
+function dkDetailHTML() {
+  if (!DK.open) return "";
+  const o = DK.det[DK.open];
+  if (!o) return `<div class="card" id="dkDetail">${DK.detErr ? esc(DK.detErr) : "Caricamento della scheda…"}</div>`;
+  const li = a => a.length ? a.map(x => `<li>${esc(typeof x === "string" ? x : x.text)}${x.src ? ` <span class="cat-src">${esc(x.src)}</span>` : ""}</li>`).join("") : "<li class=\"muted\">nessuna</li>";
+  const ch = d => o.change.filter(c => c.dir === d);
+  const C = o.context || {};
+  const ctx = o.kind === "etf" && isNum(C.yield) ? `<p class="small"><b>Obbligazioni</b>: rendimento a scadenza ${fNum(C.yield, 2)}% lordo · duration ${isNum(C.duration) ? fNum(C.duration, 1) + " anni" + (C.durationKind ? " (" + esc(C.durationKind) + ")" : "") : "n.d."} · credito ${esc(C.credit || "n.d.")}${isNum(C.aOrBetter) ? `, rating A o superiore ${fNum(C.aOrBetter, 0)}%` : ""} · ${esc(C.hedged || "copertura n.d.")}${C.scenarios ? ` · rendimenti +1 punto → prezzo circa ${fNum(C.scenarios[0].priceChange, 1)}% (approssimazione, non una previsione; non si somma al rendimento)` : ""}${isNum(C.ratio) ? ` · rendimento ÷ duration ${fNum(C.ratio, 2)} (solo descrittivo)` : ""}</p>`
+    : o.kind === "azione" && o.horizon === "lungo" ? `<p class="small">${C.profile ? `<b>Profilo fondamentale</b>: ${esc(C.profile)}. ` : ""}${C.view ? esc(C.view) + " " : ""}${C.valuation ? `<b>DCF V2</b>: ${esc(C.valuation)}.` : ""}</p>` : "";
+  const prod = o.product ? `<h3>Prodotti (separati dal giudizio sull'esposizione)</h3><p class="small">${o.product.products.map(p => `<b>${esc(p.ticker)}</b> TER ${isNum(p.ter) ? fNum(p.ter, 2) + "%" : "n.d."} (${esc(p.terResolution || "n.d.")})${p.hedged ? ", cambio coperto" : ""}${p.documented ? "" : ` <span class="warn">poco documentato</span>`}`).join(" · ")}</p>
+    ${o.product.differences.length ? `<ul class="why small">${o.product.differences.map(d => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}` : "";
+  const links = [o.links?.stock ? `<button class="btn" data-dkstock="${esc(o.links.stock)}">Scheda del titolo</button>` : "",
+    o.links?.investment ? `<button class="btn ghost" data-opm="invest">Analisi fondamentale e valutazione</button>` : "",
+    o.links?.etf ? `<button class="btn" data-dketf="${esc(o.links.etf)}" data-dkh="${esc(o.horizon)}">Scheda dell'esposizione ETF</button>` : "",
+    o.links?.compare?.length ? `<button class="btn ghost" data-oppetf="${esc(o.links.compare.join(","))}">${o.links.compare.length > 1 ? "Confronta gli ETF" : "Apri l'ETF nel catalogo"}</button>` : ""].join(" ");
+  return `<div class="card eo-detail" id="dkDetail"><div class="card-h"><h2>${esc(o.name)}</h2> ${dkSt(o.state)}<button class="btn ghost" data-dkclose>Chiudi</button></div>
+    <p class="small muted">${esc(o.kindLabel)}${o.code ? " · " + esc(o.code) : ""} · ${esc(o.horizonLabel)} · Decision Desk ${esc(o.version)}${o.e2State ? ` · stato del modello ETF ${esc(o.e2Version || "")}: «${esc(o.e2State)}»` : ""}</p>
+    <h3>Sintesi</h3><p class="small"><b>${esc(o.main)}</b></p><p class="small muted">Regola ${esc(o.rule)}: ${esc(o.ruleText)}</p>${ctx}
+    <div class="opp-cols"><div><h4>Evidenze favorevoli</h4><ul class="why small">${li(o.favourable)}</ul></div><div><h4>Evidenze contrarie</h4><ul class="why small">${li(o.contrary)}</ul></div></div>
+    <h3>Rischi</h3><ul class="why small">${o.risks.length ? o.risks.map(r => `<li>${r.blocking ? "⚠ " : ""}${esc(r.text)} <span class="cat-src">${esc(r.src)}</span></li>`).join("") : "<li>Nessun rischio oltre le soglie dei motori.</li>"}</ul>
+    <h3>Cosa cambierebbe il giudizio</h3><div class="opp-cols"><div><h4>Migliora se</h4><ul class="why small">${li(ch("migliora"))}</ul></div><div><h4>Peggiora se</h4><ul class="why small">${li(ch("peggiora"))}</ul></div></div>
+    ${ch("verifica").length ? `<h4>Da verificare</h4><ul class="why small">${li(ch("verifica"))}</ul>` : ""}
+    ${o.kind === "azione" && o.horizon === "lungo" ? `<p class="muted small">I livelli del DCF sono soglie per una nuova analisi, non prezzi ai quali un acquisto è conveniente.</p>` : ""}
+    ${prod}
+    <h3>Dati</h3><p class="small">Qualità dei dati: <b>${esc(o.dataQuality)}</b>. Date: ${Object.entries(o.dates).map(([k, v]) => `${esc(DK_DATES[k] || k)} ${esc(dayIT(String(v).slice(0, 10)))}`).join(" · ") || "n.d."}.</p>
+    ${o.missing.length ? `<h4>Dati mancanti</h4><ul class="why small">${li(o.missing)}</ul>` : ""}
+    ${o.notes.length ? `<h4>Note</h4><ul class="why small">${li(o.notes)}</ul>` : ""}
+    <h3>Stato della validazione</h3><p class="small">${esc(o.validation)}</p>
+    <p class="eo-act">${links}</p>
+    <p class="muted small">${esc(o.disclaimer)}</p></div>`;
+}
+const DK_DATES = { price: "prezzo", statements: "bilanci scaricati", analysts: "stime analisti", latestQuarter: "ultimo trimestre",
+  valuationPrices: "prezzi del DCF", latestYear: "ultimo esercizio", latestQuarterAnnounced: "trimestre annunciato", benchmark: "benchmark",
+  common: "date comuni con il benchmark", duration: "duration", yield: "rendimento a scadenza", ratings: "rating" };
+function deskHTML() {
+  const D = DK.data;
+  const seg = `<div class="seg">${Object.entries(OPP_MODES).map(([k, l]) => `<button data-opm="${k}" class="${k === "desk" ? "on" : ""}">${esc(l.split(" · ")[0])}</button>`).join("")}</div>`;
+  const head = `<div class="card"><div class="card-h"><h2>Decision Desk</h2>${seg}</div>
+    <div class="seg small">${[["lungo", "Medio-lungo periodo"], ["breve", "Breve periodo"]].map(([k, l]) => `<button data-dkh="${k}" class="${k === DK.h ? "on" : ""}">${l}</button>`).join("")}</div>
+    <div class="seg small">${[["all", "Azioni ed ETF"], ["azione", "Azioni"], ["etf", "ETF"]].map(([k, l]) => `<button data-dkk="${k}" class="${k === DK.k ? "on" : ""}">${l}</button>`).join("")}</div>
+    <p class="small muted">${DK.h === "breve" ? "3–30 sedute: solo descrizione e monitoraggio. Le regole Trading e il momentum degli ETF non hanno mostrato vantaggi nei test: nel breve periodo nessuno stato supera «Monitora»."
+      : "3–24 mesi o più: qualità, crescita, solidità, valutazione e scenari DCF per le azioni; esposizione, rischio, costi e prodotti per gli ETF. Il giudizio sull'esposizione è separato dalla qualità del singolo ETF."}</p></div>`;
+  if (!D) {
+    if (!DK.loading) loadDesk();
+    return head + `<div class="card empty">${DK.err === "loading" ? "I dati di mercato si stanno ancora caricando: il Decision Desk compare appena sono pronti."
+      : DK.err ? `Decision Desk non disponibile (${esc(DK.err)}). Nuovo tentativo al prossimo aggiornamento della pagina.` : "Caricamento del Decision Desk…"}</div>`;
+  }
+  const rows = dkRows(D), by = s => rows.filter(r => r.state === s);
+  const kpi = (l, v, s) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s || ""}</div></div>`;
+  const deep = by("Da approfondire");
+  const src = D.sources || {}, e = src.etf_lungo || {};
+  return `<p class="warn-box"><b>Screening esplorativo, non consulenza finanziaria.</b> Il Decision Desk riassume i motori già esistenti e dice dove concentrare
+      l'attenzione: nessuna indicazione di acquisto o vendita, nessuna probabilità, nessun prezzo di ingresso. Nessun giudizio è validato sul passato.</p>${head}
+    <div class="kpis eo-kpis">${kpi("Da approfondire", deep.length, "tutte le condizioni, nessuna contraria")}${kpi("Da monitorare", by("Attendi condizioni migliori").length + by("Monitora").length, "attendi condizioni migliori o monitora")}
+      ${kpi("Contrastanti", by("Condizioni contrastanti").length, "evidenze a favore e contro")}${kpi("Rischio elevato", by("Rischio elevato").length, "rischio non compensato")}
+      ${kpi("Analisi", esc(oppTime(D.asOf)), `azioni: seduta ${esc(dayIT(D.session || ""))}${e.session ? ` · ETF: ${esc(dayIT(e.session))}` : ""}`)}</div>
+    ${dkDetailHTML()}
+    <div class="card"><h3>Opportunità da approfondire</h3>${deep.length ? dkTable(deep) : `<p class="small"><b>Nessuna opportunità convincente</b> ${DK.h === "breve" ? "nel breve periodo: per costruzione nessuno stato supera «Monitora»." : "oggi con i filtri scelti: nessuna riga soddisfa tutte le condizioni di «Da approfondire»."}</p>`}
+      <p class="muted small">${esc(D.orderRule)}</p></div>
+    ${dkSection("Situazioni da monitorare", [...by("Attendi condizioni migliori"), ...by("Monitora")], "«Attendi condizioni migliori»: fondamentali favorevoli ma prezzo o valutazione impegnativi; «Monitora»: evidenze favorevoli ma non sufficienti", true, "dk-mon")}
+    ${dkSection("Condizioni contrastanti", by("Condizioni contrastanti"), "evidenze favorevoli e contrarie insieme: nessun fattore positivo cancella un rischio", false, "dk-mix")}
+    ${dkSection("Rischi elevati", by("Rischio elevato"), "un rischio grave non compensato da fattori positivi", false, "dk-risk")}
+    ${dkSection("Nessuna opportunità convincente", by("Nessuna opportunità convincente"), "comprese le obbligazioni con evidenza insufficiente (modello E2): qualità del credito e costi bassi non bastano", false, "dk-none")}
+    ${dkSection("Dati insufficienti", by("Dati insufficienti"), "analisi non possibile o dati non coerenti: nessun giudizio", false, "dk-na")}
+    <div class="card"><details class="fold" data-k="dk-method"><summary><h3>Regole, fonti e diario</h3><span class="card-meta">come nasce ogni stato</span></summary>
+      <ul class="why small">${Object.entries(D.rules).map(([k, v]) => `<li><b>${esc(k)}</b> ${esc(v)}</li>`).join("")}</ul>
+      <p class="small"><b>Validazione</b></p><ul class="why small">${Object.values(D.validation).map(v => `<li>${esc(v)}</li>`).join("")}</ul>
+      <p class="small"><b>Fonti</b>: Trading e Pagella ${esc(src.trading?.model || "n.d.")} (seduta ${esc(src.trading?.session || "n.d.")}) · analisi fondamentale ${esc(src.fundamentals?.model || "n.d.")} · DCF ${esc(src.valuation?.model || "n.d.")} · scanner ETF ${esc(e.model || "n.d.")} (seduta ${esc(e.session || "n.d.")}, prezzi ${esc((e.prices || "n.d.").slice(0, 16).replace("T", " "))}) · Decision Desk ${esc(D.version)}.</p>
+      ${D.notAnalysed.length ? `<p class="small"><b>Non analizzati</b>: ${D.notAnalysed.map(x => `${esc(x.what)} (${esc(x.why)})`).join("; ")}.</p>` : ""}
+      <p class="small"><b>Diario delle decisioni</b>: ${D.diary?.started ? `${D.diary.days} sedute registrate (dal ${esc(dayIT(D.diary.first))} al ${esc(dayIT(D.diary.last))}), ${D.diary.observations} decisioni` : "nessuna seduta ancora registrata"}; si registra una volta per seduta dopo la chiusura NYSE, insieme agli altri diari (server acceso o job serale), mai all'apertura della pagina.</p>
+      <p class="muted small">${esc(D.disclaimer)}</p></details></div>`;
+}
 function renderOpps() {
   const el = $("#oppsBody"), D = opps.data;
   if (state.view !== "opps" || !el) return;
+  if (opps.mode === "desk") {                                        // phase 7A: Decision Desk
+    const keep = [...el.querySelectorAll("details.fold[data-k]")].map(d => [d.dataset.k, d.open]);
+    el.innerHTML = deskHTML();
+    keep.forEach(([k, o]) => { const d = el.querySelector(`details.fold[data-k="${k}"]`); if (d) d.open = o; });
+    return;
+  }
   if (opps.mode === "etf") {                                         // phase 6B: scanner of the ETF exposures
     const keep = [...el.querySelectorAll("details.fold[data-k]")].filter(d => d.open).map(d => d.dataset.k);
     el.innerHTML = oppEtfHTML();
@@ -3657,7 +3823,7 @@ document.addEventListener("click", e => {
   const box = e.target.closest("#oppsBody");
   if (!box) return;
   const m = e.target.closest("[data-opm]");
-  if (m) { opps.mode = m.dataset.opm; LS.set("opp.mode", opps.mode); renderOpps(); return; }
+  if (m) { opps.mode = m.dataset.opm; LS.set("opp.view", opps.mode); renderOpps(); return; }
   const fl = e.target.closest("[data-ifil]");
   if (fl) { opps.invFilter = fl.dataset.ifil; renderOpps(); return; }
   const vf = e.target.closest("[data-vfil]");
@@ -3726,6 +3892,13 @@ const viewFromHash = h => {
   const g = GROUPS.find(x => x.id === h);
   return g ? lastSub(g) : null;
 };
+// Phase 6C: on a narrow phone the tab row scrolls sideways (never the page): the active tab is brought into view.
+function keepTabVisible() {
+  const tl = $(".tablist"), at = $(".tab.active");
+  if (!tl || !at || tl.scrollWidth <= tl.clientWidth) return;
+  const left = at.offsetLeft - tl.offsetLeft, right = left + at.offsetWidth;
+  if (left < tl.scrollLeft || right > tl.scrollLeft + tl.clientWidth) tl.scrollLeft = Math.max(0, left - (tl.clientWidth - at.offsetWidth) / 2);
+}
 function lastSub(g) { const v = LS.get("sub." + g.id, g.views[0][0]); return shownViews(g).some(x => x[0] === v) ? v : g.views[0][0]; }
 function setView(v) {
   if (!VIEWS.includes(v) || (v === "diary" && !diaryReady())) v = viewFromHash(v) || "opps";
@@ -3733,6 +3906,7 @@ function setView(v) {
   state.view = v; LS.set("view", v); LS.set("sub." + g.id, v);
   if (location.hash.slice(1) !== v) history.replaceState(null, "", "#" + v);
   $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.main === g.id));
+  keepTabVisible();
   const sub = $("#subtabs");
   const subs = shownViews(g);
   sub.hidden = subs.length < 2;

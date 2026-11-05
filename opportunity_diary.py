@@ -84,13 +84,35 @@ LIMITS = [
 
 # ---------------------------------------------------------------- storage
 
-def connect(path=None):
+def connect(path=None, source=None):
+    """WRITE connection, the only one: it passes the gate of app_env (phase 6C). In production only an authorized
+    process (server, evening job, manual command) with an official origin; in test and preview never a production
+    path. Every read uses _ro (read only), so opening a page or an API never writes."""
+    import app_env
     path = path or DB
+    app_env.check_diary_write(path, source)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     con = sqlite3.connect(path, timeout=10)
     con.row_factory = sqlite3.Row
     con.executescript(SCHEMA)
     return con
+
+
+def _ro(path=None):
+    """Read-only connection (SQLite mode=ro): never creates, changes or locks the diary for writing."""
+    con = sqlite3.connect(f"file:{path or DB}?mode=ro", uri=True, timeout=10)
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def _has(con, table):
+    return con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone() is not None
+
+
+def label(source, path=None):
+    """The origin stored with a new record (app_env decides: in preview it is always "anteprima")."""
+    import app_env
+    return app_env.check_diary_write(path or DB, source)
 
 
 def _j(x):
@@ -100,7 +122,9 @@ def _j(x):
 def exists(session, version, path=None):
     if not os.path.exists(path or DB):
         return False
-    with closing(connect(path)) as con:
+    with closing(_ro(path)) as con:
+        if not _has(con, "runs"):
+            return False
         return con.execute("SELECT 1 FROM runs WHERE session=? AND model_version=?", (session, version)).fetchone() is not None
 
 
@@ -143,7 +167,9 @@ def record(result, session, computed_at, source, path=None):
                          _j([c["id"] for c in conds if c["state"] == "ok"]), _j([c["id"] for c in conds if c["state"] == "ko"]),
                          _j([c["id"] for c in conds if c["state"] == "na"]), _j(conds), _j(e.get("warnings")), e.get("main"),
                          _j(e.get("diag")), _j(e.get("metrics"))))
-    with closing(connect(path)) as con, con:
+    source = label(source, path)
+    with closing(connect(path, source)) as con, con:
+        con.execute("BEGIN IMMEDIATE")             # check and insert in one write transaction: two writers never clash
         if con.execute("SELECT 1 FROM runs WHERE session=? AND model_version=?", (session, version)).fetchone():
             return False, "seduta già registrata con questa versione del modello"
         con.execute("INSERT INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -181,7 +207,8 @@ def update_outcomes(closes, bench, now=None, path=None):
     new = 0
     with closing(connect(path)) as con, con:
         done = {(r["session"], r["ticker"], r["horizon"]) for r in con.execute("SELECT session, ticker, horizon FROM outcomes WHERE status='ok'")}
-        pairs = con.execute("SELECT DISTINCT session, ticker FROM observations").fetchall()
+        pairs = con.execute("SELECT DISTINCT o.session, o.ticker FROM observations o JOIN runs r ON r.session=o.session "
+                            "AND r.model_version=o.model_version WHERE " + _official("r.source")).fetchall()
         touched = set()
         for p in pairs:
             day, tk = p["session"], p["ticker"]
@@ -209,7 +236,8 @@ def update_outcomes(closes, bench, now=None, path=None):
         for day, h, end in touched:                        # median of the whole universe recorded that day, same interval
             rets = [r["ret"] for r in con.execute(
                 "SELECT ret FROM outcomes WHERE session=? AND horizon=? AND status='ok' AND ticker IN "
-                "(SELECT DISTINCT ticker FROM observations WHERE session=?)", (day, h, day))]
+                "(SELECT DISTINCT o.ticker FROM observations o JOIN runs r ON r.session=o.session AND "
+                "r.model_version=o.model_version WHERE o.session=? AND " + _official("r.source") + ")", (day, h, day))]
             con.execute("INSERT OR REPLACE INTO universe_medians VALUES (?,?,?,?,?)",
                         (day, h, end, statistics.median(rets) if rets else None, len(rets)))
     return new
@@ -231,29 +259,58 @@ def _summary(rows):
     return out
 
 
+def _official(col="source"):
+    import app_env
+    return app_env.official_sql(col)
+
+
+def excluded(path=None, runs_table="runs", obs_table="observations"):
+    """Records kept in the diary but left out of the official statistics (origin not official: prova, test, anteprima),
+    with their sessions and origins. Read only."""
+    import app_env
+    if not os.path.exists(path or DB):
+        return {"runs": 0, "observations": 0, "items": []}
+    with closing(_ro(path)) as con:
+        if not _has(con, runs_table):
+            return {"runs": 0, "observations": 0, "items": []}
+        rows = con.execute(f"SELECT r.session, r.model_version, r.source, r.computed_at, (SELECT COUNT(*) FROM {obs_table} o "
+                           f"WHERE o.session=r.session AND o.model_version=r.model_version) AS n FROM {runs_table} r "
+                           f"WHERE NOT ({_official('r.source')}) ORDER BY r.session").fetchall()
+    items = [{"session": r["session"], "version": r["model_version"], "source": r["source"], "computedAt": r["computed_at"],
+              "observations": r["n"], "class": app_env.classify(r["source"])} for r in rows]
+    return {"runs": len(items), "observations": sum(i["observations"] for i in items), "items": items}
+
+
 def stats(path=None):
-    """Everything the "Monitoraggio risultati" panel shows. Empty structure when the diary has not started."""
+    """Everything the "Monitoraggio risultati" panel shows, ONLY from official records (phase 6C: records of tests or
+    previews stay in the file but are counted apart in "excluded"). Empty structure when the diary has not started."""
     empty = {"started": False, "days": 0, "minCases": MIN_CASES, "minDays": MIN_DAYS, "horizons": HORIZONS,
-             "limits": [{"title": a, "text": b} for a, b in LIMITS], "groups": GROUPS}
+             "limits": [{"title": a, "text": b} for a, b in LIMITS], "groups": GROUPS, "excluded": excluded(path)}
     if not os.path.exists(path or DB):
         return empty
-    with closing(connect(path)) as con:
-        runs = con.execute("SELECT session, model_version, computed_at, source, universe, evaluated FROM runs ORDER BY session").fetchall()
+    with closing(_ro(path)) as con:
+        if not _has(con, "runs"):
+            return empty
+        off = _official("r.source")
+        runs = con.execute("SELECT session, model_version, computed_at, source, universe, evaluated FROM runs r WHERE " + off +
+                           " ORDER BY session").fetchall()
         if not runs:
             return empty
         out = {**empty, "started": True, "first": runs[0]["session"], "last": runs[-1]["session"],
                "lastComputedAt": runs[-1]["computed_at"], "lastSource": runs[-1]["source"], "days": len({r["session"] for r in runs}),
                "versions": sorted({r["model_version"] for r in runs}), "lists": {}}
         for lst in LISTS:
-            obs_n = con.execute("SELECT COUNT(*) FROM observations WHERE list=?", (lst,)).fetchone()[0]
-            sel_n = con.execute("SELECT COUNT(*) FROM observations WHERE list=? AND rank IS NOT NULL", (lst,)).fetchone()[0]
-            insuff = con.execute("SELECT COUNT(*) FROM observations WHERE list=? AND status='Dati insufficienti'", (lst,)).fetchone()[0]
+            j = " FROM observations o JOIN runs r ON r.session=o.session AND r.model_version=o.model_version WHERE " + off + " AND o.list=?"
+            obs_n = con.execute("SELECT COUNT(*)" + j, (lst,)).fetchone()[0]
+            sel_n = con.execute("SELECT COUNT(*)" + j + " AND o.rank IS NOT NULL", (lst,)).fetchone()[0]
+            insuff = con.execute("SELECT COUNT(*)" + j + " AND o.status='Dati insufficienti'", (lst,)).fetchone()[0]
             hz = {}
             for h in HORIZONS[lst]:
                 rows = con.execute("""SELECT o.session, o.rank, o.in_top, x.status, x.ret, x.qqq, x.excess, m.median
-                                      FROM observations o LEFT JOIN outcomes x ON x.session=o.session AND x.ticker=o.ticker AND x.horizon=?
+                                      FROM observations o JOIN runs r ON r.session=o.session AND r.model_version=o.model_version
+                                      LEFT JOIN outcomes x ON x.session=o.session AND x.ticker=o.ticker AND x.horizon=?
                                       LEFT JOIN universe_medians m ON m.session=o.session AND m.horizon=?
-                                      WHERE o.list=?""", (h, h, lst)).fetchall()
+                                      WHERE o.list=? AND """ + off, (h, h, lst)).fetchall()
                 ok = [r for r in rows if r["status"] == "ok"]
                 hz[h] = {"observations": len(rows), "matured": sum(r["status"] is not None for r in rows),
                          "pending": sum(r["status"] is None for r in rows),
@@ -268,7 +325,9 @@ def stats(path=None):
 
 def observations(session, lst, path=None):
     """The rows saved for one session and list, ranked first (to rebuild why a stock was selected that day)."""
-    with closing(connect(path)) as con:
+    if not os.path.exists(path or DB):
+        return []
+    with closing(_ro(path)) as con:
         rows = con.execute("SELECT * FROM observations WHERE session=? AND list=? ORDER BY rank IS NULL, rank, ticker",
                            (session, lst)).fetchall()
     keys = ("met", "not_met", "missing", "conditions", "warnings", "diag", "metrics")
@@ -281,14 +340,17 @@ def dataset(lst, horizon, path=None):
     """One row per observation of `lst` with its matured result at `horizon` sessions (None while waiting), the market
     context of that day and the model version: the table the future tests start from (selected vs the rest of the
     same day, configurations of the ranking, rising and falling markets, out-of-sample by date or model version)."""
-    with closing(connect(path)) as con:
+    if not os.path.exists(path or DB):
+        return []
+    with closing(_ro(path)) as con:
         rs = con.execute("""SELECT o.session, o.model_version, o.ticker, o.sector, o.rank, o.in_top, o.ok, o.n, o.status,
                                    o.met, o.missing, o.metrics, o.diag, r.market, r.computed_at,
                                    x.status AS result, x.end_session, x.ret, x.qqq, x.excess, m.median AS universe_median
                             FROM observations o JOIN runs r ON r.session=o.session AND r.model_version=o.model_version
                             LEFT JOIN outcomes x ON x.session=o.session AND x.ticker=o.ticker AND x.horizon=?
                             LEFT JOIN universe_medians m ON m.session=o.session AND m.horizon=?
-                            WHERE o.list=? ORDER BY o.session, o.rank IS NULL, o.rank, o.ticker""", (horizon, horizon, lst)).fetchall()
+                            WHERE o.list=? AND """ + _official("r.source") + """
+                            ORDER BY o.session, o.rank IS NULL, o.rank, o.ticker""", (horizon, horizon, lst)).fetchall()
     keys = ("met", "missing", "metrics", "diag", "market")
     return [{k: (json.loads(r[k]) if k in keys and r[k] else r[k]) for k in r.keys()} for r in rs]
 

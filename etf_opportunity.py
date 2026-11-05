@@ -20,6 +20,16 @@ Nothing here is validated: the momentum rules on ETF categories failed their tes
 strategies of phases 3-4B showed no advantage. Conditions and thresholds below are DESCRIPTIVE, fixed on 4 Nov 2026
 before looking at today's results; changing them means a new VERSION (saved by the diary). Never "Compra"/"Vendi",
 never a probability, never one score mixing trend, cost, risk, product quality and data reliability.
+
+Model versions (both stay in the code, `scan(..., version=...)`):
+- E1 (4 Nov 2026): bond condition O1 "yield ÷ duration ≥ 1" among the favourable ones. Kept unchanged so that every
+  E1 record of the diary can be reproduced.
+- E2 (5 Nov 2026, approved by the user): O1 is no longer a condition. The yield ÷ duration ratio stays as a descriptive
+  figure without any threshold; yield, duration, credit, currency hedging and an indicative ±1 point rate scenario are
+  shown apart (approximations, never added to the yield). The remaining bond conditions (O2 credit quality, O3 costs)
+  describe the product, not an opportunity: in E2 a bond exposure that satisfies them and has no contrary condition is
+  "Da approfondire — evidenza insufficiente per un giudizio favorevole", never "Esposizione da approfondire" (no
+  automatic promotion, no new threshold). Equity exposures, thresholds and every other rule are identical to E1.
 """
 from __future__ import annotations
 
@@ -30,7 +40,8 @@ import pandas as pd
 
 import etf_catalog as cat
 
-VERSION = "E1"
+VERSION = "E2"                                  # current model; E1 stays reproducible (see above)
+VERSIONS = ("E1", "E2")
 DISCLAIMER = ("Screening esplorativo, non consulenza finanziaria: descrive com'è andata un'esposizione e quali dati mancano, "
               "non prevede rendimenti. Le condizioni non sono validate: il momentum sulle categorie di ETF non ha superato il "
               "test della Fase 24 e le strategie Trading delle Fasi 3–4B non hanno mostrato vantaggi.")
@@ -60,8 +71,19 @@ P = {
     "max_selected": 6,      # at most this many exposures in "Opportunità da approfondire"
 }
 
-STATES = ["Esposizione da approfondire", "Trend favorevole da monitorare", "Condizioni contrastanti", "Rischio elevato",
-          "Dati insufficienti", "Nessuna opportunità convincente", "Riferimento di mercato"]
+STATES_E1 = ["Esposizione da approfondire", "Trend favorevole da monitorare", "Condizioni contrastanti", "Rischio elevato",
+             "Dati insufficienti", "Nessuna opportunità convincente", "Riferimento di mercato"]
+INSUFFICIENT = "Da approfondire — evidenza insufficiente per un giudizio favorevole"     # E2, bonds only
+STATES = STATES_E1[:2] + [INSUFFICIENT] + STATES_E1[2:]                                 # E2 (current)
+
+
+def states_for(version):
+    return STATES_E1 if version == "E1" else STATES
+
+
+def params_for(version):
+    """The thresholds a version uses: E2 has no O1 threshold (bond_cushion stays in P only for E1)."""
+    return dict(P) if version == "E1" else {k: v for k, v in P.items() if k != "bond_cushion"}
 
 FAMILIES = {"globale": "Azionario globale", "usa": "Stati Uniti", "europa": "Europa", "emergenti": "Mercati emergenti",
             "settori": "Settori", "temi": "Temi specifici", "gov": "Obbligazionario governativo",
@@ -335,7 +357,7 @@ def bond_measures(e):
     rat = g("ratings") or []
     a_or_better = sum(r["weight"] for r in rat if r["name"].split()[0] in ("AAA", "AA", "A")) if rat else None
     ter = cat.val(((e or {}).get("costs") or {}).get("ter"))
-    return {"duration": dur, "yield": ytm, "yieldAsOf": (b.get("yield") or {}).get("asOf"), "maturity": g("maturity"),
+    return {"duration": dur, "durationAsOf": (b.get("duration") or {}).get("asOf"), "yield": ytm, "yieldAsOf": (b.get("yield") or {}).get("asOf"), "maturity": g("maturity"),
             "coupon": g("coupon"), "distYield": g("distYield"), "aOrBetter": a_or_better, "ratingsAsOf": (b.get("ratings") or {}).get("asOf"),
             "kind": g("bondKind"), "credit": g("credit"), "currency": g("currency"), "ter": ter,
             "cushion": ytm / dur if ytm is not None and dur else None,
@@ -345,27 +367,77 @@ def bond_measures(e):
             "inflationLinked": "inflazione" in (g("bondKind") or ""), "singleIssuer": "un solo emittente" in (g("bondKind") or "") + (g("credit") or "")}
 
 
-def bond_conditions(bm):
-    fav = [cond("O1", f"un anno di rendimento compensa un rialzo dei tassi di almeno {fmt(P['bond_cushion'], 0, False)} punto (rendimento ÷ duration)",
+RATE_SHIFT = 1.0      # E2: indicative scenario of ±1 point on market yields (asked by the user, not a forecast)
+
+
+def bond_profile(e, bm):
+    """E2: descriptive bond figures shown apart (none of them is a condition). Rate sensitivity: price change ≈
+    −duration × change of yields, with the modified duration when the issuer publishes it, otherwise the effective
+    duration (declared). A linear approximation, never added to the yield to maturity."""
+    b = (e or {}).get("bond") or {}
+    mod = cat.val(b.get("modifiedDuration"))
+    dur = mod if mod is not None else bm["duration"]
+    kind = "modificata" if mod is not None else "effettiva" if dur is not None else None
+    h = ((e or {}).get("fund") or {}).get("hedged")
+    hedged = cat.val(h) if isinstance(h, dict) else h
+    real = bm["inflationLinked"]
+    scen = None if dur is None else [{"shift": RATE_SHIFT, "priceChange": -dur * RATE_SHIFT},
+                                     {"shift": -RATE_SHIFT, "priceChange": dur * RATE_SHIFT}]
+    notes = []
+    if dur is None:
+        notes.append("duration non pubblicata nelle fonti lette: sensibilità ai tassi non calcolabile")
+    else:
+        notes.append(f"approssimazione lineare con la duration {kind}: vale per variazioni piccole e uguali su tutte le scadenze, "
+                     "ignora la convessità; non è una previsione")
+        if kind == "effettiva":
+            notes.append("duration modificata non pubblicata: usata la duration effettiva dell'emittente")
+    if real:
+        notes.append("titoli indicizzati all'inflazione: la sensibilità riguarda i rendimenti reali, non quelli nominali")
+    notes.append("il rendimento a scadenza non si somma alla variazione di prezzo stimata: insieme non danno un rendimento certo")
+    return {"durationKind": kind, "durationUsed": dur, "modifiedDuration": mod, "rateScenarios": scen, "scenarioNotes": notes,
+            "ratio": bm["cushion"],
+            "ratioNote": None if bm["cushion"] is None else
+            ("rendimento reale ÷ duration: solo descrittivo, nessuna soglia, non confrontabile con quelli nominali" if real else
+             "rendimento ÷ duration: solo descrittivo, nessuna soglia di approvazione (nel modello E1 era la condizione O1)"),
+            "hedged": hedged, "hedgedText": "n.d." if hedged is None else
+            ("classe coperta dal rischio di cambio verso la sua valuta di base" if hedged else "cambio non coperto")}
+
+
+def bond_conditions(bm, version=VERSION):
+    """Favourable and contrary bond conditions. E1 keeps O1; E2 drops it (descriptive ratio only)."""
+    if version != "E1":
+        fav = [cond("O2", f"almeno il {P['bond_quality']:.0f}% dei titoli con rating A o superiore", None if bm["aOrBetter"] is None else bm["aOrBetter"] >= P["bond_quality"],
+                    fmt(bm["aOrBetter"], 0, False, "%"), P["bond_quality"]),
+               cond("O3", f"TER non oltre il {P['bond_cost']:.0f}% del rendimento a scadenza", None if bm["costShare"] is None else bm["costShare"] <= P["bond_cost"],
+                    fmt(bm["costShare"], 0, False, "%"), P["bond_cost"])]
+        return fav, bond_contrary(bm)
+    fav = [cond("O1", f"euristica sperimentale, non un criterio finanziario standard: un anno di rendimento compensa un rialzo dei "
+                      f"tassi di almeno {fmt(P['bond_cushion'], 0, False)} punto (rendimento ÷ duration)",
                 None if bm["cushion"] is None or bm["inflationLinked"] else bm["cushion"] >= P["bond_cushion"], fmt(bm["cushion"], 2, False, " punti"),
                 P["bond_cushion"], "rendimento reale (indicizzati all'inflazione): non confrontabile" if bm["inflationLinked"] else None),
            cond("O2", f"almeno il {P['bond_quality']:.0f}% dei titoli con rating A o superiore", None if bm["aOrBetter"] is None else bm["aOrBetter"] >= P["bond_quality"],
                 fmt(bm["aOrBetter"], 0, False, "%"), P["bond_quality"]),
            cond("O3", f"TER non oltre il {P['bond_cost']:.0f}% del rendimento a scadenza", None if bm["costShare"] is None else bm["costShare"] <= P["bond_cost"],
                 fmt(bm["costShare"], 0, False, "%"), P["bond_cost"])]
-    con = [cond("P1", f"duration di almeno {P['bond_long']:.0f} anni: circa −{P['bond_long']:.0f}% per ogni punto di rialzo dei tassi",
+    return fav, bond_contrary(bm)
+
+
+def bond_contrary(bm):
+    return [cond("P1", f"duration di almeno {P['bond_long']:.0f} anni: circa −{P['bond_long']:.0f}% per ogni punto di rialzo dei tassi",
                 None if bm["duration"] is None else bm["duration"] >= P["bond_long"], fmt(bm["duration"], 1, False, " anni"), P["bond_long"]),
            cond("P2", "un solo emittente (rischio concentrato)", bool(bm["singleIssuer"]), "sì" if bm["singleIssuer"] else "no")]
-    return fav, con
 
 
-def bond_state(bm, fav, con):
+def bond_state(bm, fav, con, version=VERSION):
+    """E1 and E2 share every rule except the top one: in E2 credit quality and costs (O2, O3) alone are not evidence of
+    an opportunity, so the best bond state is INSUFFICIENT, not "Esposizione da approfondire"."""
     if bm["duration"] is None or bm["yield"] is None:
         return "Dati insufficienti"
     if any(c["ok"] for c in con):
         return "Rischio elevato"
     nf = sum(1 for c in fav if c["ok"] is True)
-    return "Esposizione da approfondire" if nf == len(fav) else "Condizioni contrastanti" if nf >= 1 else "Nessuna opportunità convincente"
+    top = "Esposizione da approfondire" if version == "E1" else INSUFFICIENT
+    return top if nf == len(fav) else "Condizioni contrastanti" if nf >= 1 else "Nessuna opportunità convincente"
 
 
 def bond_role(x, bm):
@@ -489,7 +561,7 @@ def trends(x, m, mode, risk, bench_name):
     return out
 
 
-def analyze_exposure(x, catalog, prices, mode, as_of=None, previous=None, now=None):
+def analyze_exposure(x, catalog, prices, mode, as_of=None, previous=None, now=None, version=VERSION):
     items = catalog["items"]
     closes = (prices or {}).get("closes") or {}
     ref = reference(x, catalog, prices)
@@ -506,9 +578,19 @@ def analyze_exposure(x, catalog, prices, mode, as_of=None, previous=None, now=No
         with_data = [e for e in cands if bond_measures(e)["duration"] is not None and bond_measures(e)["yield"] is not None]
         be = with_data[0] if with_data else ref_e
         bm = bond_measures(be)
-        fav, con = bond_conditions(bm)
-        st = bond_state(bm, fav, con)
+        if version != "E1":                         # E2: descriptive figures added, the E1 record stays as it was
+            bm = dict(bm, **bond_profile(be, bm))
+        fav, con = bond_conditions(bm, version)
+        st = bond_state(bm, fav, con, version)
         out.update(kind="bond", bond=bm, bondSource=be["isin"], role=bond_role(x, bm), conditions={"fav": fav, "con": con}, state=st)
+        # phase 6C: the date of the price and the dates of the fund's characteristics stay separate (never mixed)
+        pdate = str(s.index[-1].date()) if s is not None and len(s) else None
+        out["dates"] = {"price": pdate, "duration": bm.get("durationAsOf"), "yield": bm.get("yieldAsOf"), "ratings": bm.get("ratingsAsOf")}
+        older = sorted({k for k in ("duration", "yield", "ratings") if out["dates"][k] and pdate and out["dates"][k] < pdate})
+        if older:
+            data_notes.append("caratteristiche del fondo (" + ", ".join({"duration": "duration", "yield": "rendimento a scadenza",
+                              "ratings": "rating"}[k] for k in older) + f") al {min(out['dates'][k] for k in older)}, prezzo al {pdate}: "
+                              "date diverse, il rendimento non è ricalcolato sul prezzo più recente")
         if not with_data:
             data_notes.append("duration e rendimento a scadenza non pubblicati nelle fonti lette per " + ", ".join(cands_t(cands)))
         if previous and previous.get("bond") and bm["yield"] is not None and previous["bond"].get("yield") is not None:
@@ -541,6 +623,11 @@ def analyze_exposure(x, catalog, prices, mode, as_of=None, previous=None, now=No
         elif len(s) < MIN_SESSIONS[mode]:
             data_notes.append(f"storico di {len(s)} sedute, ne servono {MIN_SESSIONS[mode]}")
         m = equity_measures(s, b, mode) if s is not None and len(s) > 25 else {}
+        if m and bench and m.get("benchDate") and m["benchDate"] != m["date"]:        # phase 6C: never silently
+            data_notes.append(f"benchmark aggiornato al {(b.index[-1].date() if b is not None and len(b) else 'n.d.')}, ETF al {m['date']}: "
+                              f"la forza relativa usa solo le date comuni (fino al {m['benchDate']})")
+        out["dates"] = {"price": m.get("date"), "benchmark": str(b.index[-1].date()) if b is not None and len(b) else None,
+                        "common": m.get("benchDate")}
         if m and bench and m.get("aligned", 0) < MIN_SESSIONS[mode]:
             enough = False
             data_notes.append(f"solo {m.get('aligned', 0)} sedute in comune con il benchmark")
@@ -575,6 +662,7 @@ def analyze_exposure(x, catalog, prices, mode, as_of=None, previous=None, now=No
     out["favourable"] = [c for c in out["conditions"]["fav"] if c["ok"] is True]
     out["contrary"] = [c for c in out["conditions"]["con"] if c["ok"] is True]
     out["missing"] = [c for c in out["conditions"]["fav"] + out["conditions"]["con"] if c["ok"] is None]
+    out["version"] = version
     out["why"] = reasons(out)
     out["invalidate"] = invalidators(out, mode)
     out["catalogCompleteness"] = cat.completeness(ref_e)["state"]
@@ -600,6 +688,9 @@ def reasons(o):
     out += [f"✕ {c['text']} ({c['value']})" for c in o["contrary"]]
     if o["state"] == "Rischio elevato":
         out += ["⚠ " + f["text"] for f in (o.get("risk") or {}).get("flags", []) if f["high"]]
+    if o["state"] == INSUFFICIENT:
+        out.append("qualità del credito e costi descrivono il prodotto, non un'opportunità: il modello E2 non ha un criterio "
+                   "validato per un giudizio favorevole sulle obbligazioni (rendimento ÷ duration ora è solo descrittivo)")
     return out
 
 
@@ -630,14 +721,18 @@ def order_key(o, mode):
     return (-len(o["favourable"]), len(o["contrary"]), -(r if r is not None else -999))
 
 
-def scan(catalog, prices, mode="lungo", as_of=None, previous=None, now=None):
-    """Every exposure analysed in one mode, the overview and the short selection. Pure on its inputs."""
+def scan(catalog, prices, mode="lungo", as_of=None, previous=None, now=None, version=VERSION):
+    """Every exposure analysed in one mode, the overview and the short selection. Pure on its inputs. `version` E1
+    reproduces the 4 Nov 2026 model exactly; E2 is the current one."""
     if mode not in MODES:
         raise ValueError("modo sconosciuto")
+    if version not in VERSIONS:
+        raise ValueError("versione del modello sconosciuta")
+    states = states_for(version)
     previous = previous or {}
     X = exposures(catalog)
-    rows = [analyze_exposure(x, catalog, prices, mode, as_of, previous.get(k), now) for k, x in X.items()]
-    rows.sort(key=lambda o: (FAMILY_ORDER.index(o["family"]), STATES.index(o["state"]), o["label"]))
+    rows = [analyze_exposure(x, catalog, prices, mode, as_of, previous.get(k), now, version) for k, x in X.items()]
+    rows.sort(key=lambda o: (FAMILY_ORDER.index(o["family"]), states.index(o["state"]), o["label"]))
     sel = sorted([o for o in rows if o["state"] == "Esposizione da approfondire"], key=lambda o: order_key(o, mode))[:P["max_selected"]]
     for n, o in enumerate(sel, 1):
         o["rank"] = n
@@ -651,11 +746,17 @@ def scan(catalog, prices, mode="lungo", as_of=None, previous=None, now=None):
     better = sorted([(o, c) for o, c in ch if c >= thr], key=lambda t: -t[1])[:5]
     worse = sorted([(o, c) for o, c in ch if c <= -thr], key=lambda t: t[1])[:5]
     risks = [o for o in rows if (o.get("risk") or {}).get("level") == "elevato"]
-    counts = {s: sum(1 for o in rows if o["state"] == s) for s in STATES}
+    counts = {s: sum(1 for o in rows if o["state"] == s) for s in states}
     last = max(((o.get("measures") or {}).get("date") or "") for o in rows) or None
+    for o in rows:                                  # phase 6C: a series that stops before the latest session is declared
+        d = (o.get("dates") or {}).get("price")
+        if d and last and d < last:
+            note = f"prezzi fermi al {d}: la seduta più recente delle altre serie è il {last}"
+            if note not in o["completeness"]["notes"]:
+                o["completeness"]["notes"].append(note)
     meta = (prices or {}).get("meta") or {}
     world = next((o for o in rows if o["key"] == REFERENCE_EXPOSURE), None)
-    return {"version": VERSION, "mode": mode, "modeLabel": MODES[mode], "asOf": as_of, "session": last,
+    return {"version": version, "mode": mode, "modeLabel": MODES[mode], "asOf": as_of, "session": last,
             "pricesFetched": (prices or {}).get("fetched"), "pricesSource": (prices or {}).get("source"),
             "catalogBuilt": catalog.get("builtAt"), "disclaimer": DISCLAIMER,
             "overview": {"exposures": len(rows), "products": sum(len(x["members"]) for x in X.values()), "counts": counts,
@@ -668,7 +769,7 @@ def scan(catalog, prices, mode="lungo", as_of=None, previous=None, now=None):
             "noneText": None if sel else "Nessuna esposizione soddisfa oggi tutte le condizioni favorevoli senza condizioni contrarie.",
             "orderRule": "ordine esplorativo: prima più condizioni favorevoli, poi meno contrarie, poi forza relativa " +
                          ("a 1 mese" if mode == "breve" else "a 6 mesi") + ". Non è una previsione né un punteggio.",
-            "families": [{"key": k, "label": v} for k, v in FAMILIES.items()], "params": P, "states": STATES,
+            "families": [{"key": k, "label": v} for k, v in FAMILIES.items()], "params": params_for(version), "states": states,
             "rows": rows}
 
 
@@ -709,8 +810,9 @@ def main(argv=None):
     if not prices:
         print("prezzi non in cache: `.venv/bin/python etf_prices.py aggiorna`")
         return
-    r = scan(cat.load(), prices, mode, now=datetime.now())
-    print(f"{r['modeLabel']} — seduta {r['session']}, prezzi del {r['pricesFetched']}, modello {VERSION}")
+    version = next((a for a in argv if a in VERSIONS), VERSION)
+    r = scan(cat.load(), prices, mode, now=datetime.now(), version=version)
+    print(f"{r['modeLabel']} — seduta {r['session']}, prezzi del {r['pricesFetched']}, modello {r['version']}")
     for s, n in r["overview"]["counts"].items():
         if n:
             print(f"  {s}: {n}")

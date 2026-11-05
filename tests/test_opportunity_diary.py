@@ -87,10 +87,10 @@ def test_analyst_cache_written_by_older_code_is_not_fresh(tmp_path, monkeypatch)
 # ---------------------------------------------------------------- B1: recording a day, duplicates, lists, missing data
 
 def test_record_a_day(result):
-    saved, msg = od.record(result, END, EVENING, "test")
+    saved, msg = od.record(result, END, EVENING, "dashboard")
     assert saved, msg
     run = rows("SELECT * FROM runs")[0]
-    assert (run["session"], run["model_version"], run["source"]) == (END, o.MODEL_VERSION, "test")
+    assert (run["session"], run["model_version"], run["source"]) == (END, o.MODEL_VERSION, "dashboard")
     assert run["computed_at"].endswith("-04:00") and "rettificata" in run["price_type"]
     assert any(p["key"] == "ATR_HIGH" and p["experimental"] for p in json.loads(run["params"]))
     assert json.loads(run["market"])["date"] == END
@@ -105,18 +105,18 @@ def test_record_a_day(result):
 
 
 def test_no_duplicates_for_the_same_session_and_version(result):
-    assert od.record(result, END, EVENING, "test")[0]
+    assert od.record(result, END, EVENING, "dashboard")[0]
     saved, msg = od.record(result, END, "2026-10-30T22:45:00-04:00", "job serale")
     assert not saved and "già registrata" in msg
     assert len(rows("SELECT * FROM runs")) == 1 and len(rows("SELECT * FROM observations")) == 8
     assert od.exists(END, o.MODEL_VERSION)
     other = {**result, "model": {**result["model"], "version": "TEST-2"}}       # a new model version is a new run
-    assert od.record(other, END, EVENING, "test")[0]
+    assert od.record(other, END, EVENING, "dashboard")[0]
     assert len(rows("SELECT * FROM runs")) == 2
 
 
 def test_trading_and_invest_are_kept_apart(result):
-    od.record(result, END, EVENING, "test")
+    od.record(result, END, EVENING, "dashboard")
     for lst, prefix in (("trading", "T"), ("invest", "I")):
         for x in rows("SELECT conditions FROM observations WHERE list=?", lst):
             assert all(c["id"].startswith(prefix) for c in json.loads(x["conditions"]))
@@ -126,7 +126,7 @@ def test_trading_and_invest_are_kept_apart(result):
 
 
 def test_missing_data_is_recorded_as_missing(result):
-    od.record(result, END, EVENING, "test")
+    od.record(result, END, EVENING, "dashboard")
     x = rows("SELECT * FROM observations WHERE list='invest' AND ticker='AAA'")[0]
     assert x["status"] == "Dati insufficienti" and set(json.loads(x["missing"])) == {"I1", "I2", "I3", "I4", "I5"}
     assert json.loads(x["metrics"])["epsRev90"] is None                          # never a made-up neutral value
@@ -141,9 +141,9 @@ def test_a_session_is_recorded_only_after_its_close(result):
     assert "non era ancora chiusa" in od.check_time(END, "2026-10-30T16:05:00-04:00")      # within the 15-minute margin
     assert od.check_time(END, "2026-10-30T16:15:00-04:00") is None
     assert "fuso orario" in od.check_time(END, "2026-10-30T18:00:00")
-    saved, msg = od.record(result, END, "2026-10-30T12:00:00-04:00", "test")
+    saved, msg = od.record(result, END, "2026-10-30T12:00:00-04:00", "dashboard")
     assert not saved and not os.path.exists(od.DB)                             # nothing written, not even the file
-    saved, msg = od.record(result, "2026-10-29", EVENING, "test")               # prices of another session
+    saved, msg = od.record(result, "2026-10-29", EVENING, "dashboard")               # prices of another session
     assert not saved and "2026-10-30" in msg
 
 
@@ -155,13 +155,13 @@ def test_recorded_ranking_uses_no_price_after_the_session():
     a = o.scan(universe, future, qqq_f, as_of=END, today=TODAY, keep_all=True)
     b = o.scan(universe, past, QQQ, today=TODAY, keep_all=True)
     assert a == b
-    od.record(a, END, EVENING, "test")
+    od.record(a, END, EVENING, "dashboard")
     x = rows("SELECT ref_price FROM observations WHERE ticker='AAA' AND list='trading'")[0]
     assert x["ref_price"] == pytest.approx(past["AAA"]["Close"].iloc[-1])
 
 
 def test_original_rankings_can_never_be_changed(result):
-    od.record(result, END, EVENING, "test")
+    od.record(result, END, EVENING, "dashboard")
     with sqlite3.connect(od.DB) as con:
         with pytest.raises(sqlite3.DatabaseError, match="non si modifica"):
             con.execute("UPDATE observations SET rank=99 WHERE ticker='CCC'")
@@ -169,7 +169,7 @@ def test_original_rankings_can_never_be_changed(result):
             con.execute("DELETE FROM runs")
     better = json.loads(json.dumps(result))
     better["trading"]["all"][0]["rank"] = 42                                   # new data the next day: no rewrite
-    od.record(better, END, "2026-10-31T10:00:00-04:00", "test")
+    od.record(better, END, "2026-10-31T10:00:00-04:00", "dashboard")
     assert rows("SELECT rank FROM observations WHERE ticker='AAA' AND list='trading'")[0]["rank"] == 1
 
 
@@ -182,7 +182,7 @@ def calendar(n=40, start="2026-10-30"):
 
 
 def test_returns_use_the_sessions_of_the_calendar(result):
-    od.record(result, END, EVENING, "test")
+    od.record(result, END, EVENING, "dashboard")
     cal = calendar()
     bench = {d: 100.0 + i for i, d in enumerate(cal)}
     closes = {t: {d: 50.0 * (1 + 0.01 * i) for i, d in enumerate(cal)} for t in ("AAA", "BBB", "CCC", "GGG")}
@@ -199,7 +199,7 @@ def test_returns_use_the_sessions_of_the_calendar(result):
 
 
 def test_results_wait_until_the_horizon_has_passed(result):
-    od.record(result, END, EVENING, "test")
+    od.record(result, END, EVENING, "dashboard")
     cal = calendar(7)                                                           # only 6 sessions after the record
     od.update_outcomes({"AAA": {d: 10.0 for d in cal}}, {d: 10.0 for d in cal})
     assert {r["horizon"] for r in rows("SELECT horizon FROM outcomes WHERE ticker='AAA'")} == {5}
@@ -210,7 +210,7 @@ def test_results_wait_until_the_horizon_has_passed(result):
 
 
 def test_missing_price_or_benchmark(result):
-    od.record(result, END, EVENING, "test")
+    od.record(result, END, EVENING, "dashboard")
     cal = calendar(7)
     bench = {d: 10.0 for d in cal}
     closes = {"AAA": {d: 10.0 for d in cal if d != cal[5]}}                    # AAA without the end close; others absent
@@ -222,14 +222,14 @@ def test_missing_price_or_benchmark(result):
     assert rows("SELECT status, ret FROM outcomes WHERE ticker='AAA' AND horizon=5")[0]["status"] == "ok"
     bench2 = {d: (None if d == cal[5] else 10.0) for d in cal}
     os.remove(od.DB)
-    od.record(result, END, EVENING, "test")
+    od.record(result, END, EVENING, "dashboard")
     od.update_outcomes({"AAA": {d: 10.0 for d in cal}}, bench2)
     assert rows("SELECT status FROM outcomes WHERE ticker='AAA' AND horizon=5")[0]["status"] == "benchmark mancante"
     assert od.update_outcomes({}, {}) == 0
 
 
 def test_aggregates_only_with_enough_cases(result, monkeypatch):
-    od.record(result, END, EVENING, "test")
+    od.record(result, END, EVENING, "dashboard")
     cal = calendar()
     od.update_outcomes({t: {d: 10.0 * (1.02 if d != END else 1) for d in cal} for t in ("AAA", "BBB", "CCC", "GGG")},
                        {d: 10.0 * (1.01 if d != END else 1) for d in cal})
@@ -249,7 +249,7 @@ def test_diary_api(result):
     c = server.app.test_client()
     d = json.loads(c.get("/api/opportunities/diary").data)
     assert d["started"] is False and d["minCases"] == 100
-    od.record(result, END, EVENING, "test")
+    od.record(result, END, EVENING, "dashboard")
     d = json.loads(c.get("/api/opportunities/diary").data)
     assert d["started"] and d["days"] == 1 and d["first"] == END
     assert d["lists"]["trading"]["observations"] == 4 and set(d["lists"]["invest"]["horizons"]) == {"63", "126"}
@@ -313,7 +313,7 @@ def test_hash_change_opens_the_page_without_reload():
 
 
 def test_dataset_for_future_tests(result):
-    od.record(result, END, EVENING, "test")
+    od.record(result, END, EVENING, "dashboard")
     cal = calendar()
     od.update_outcomes({"AAA": {d: 10.0 * (1.1 if d != END else 1) for d in cal}}, {d: 10.0 for d in cal})
     rows_ = od.dataset("trading", 5)

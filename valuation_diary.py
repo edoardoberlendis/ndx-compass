@@ -45,12 +45,13 @@ def _j(x):
     return json.dumps(x, ensure_ascii=False, allow_nan=False, default=str)
 
 
-def connect(path=None):
-    """Only an existing diary file is opened: this module never creates the diary."""
+def connect(path=None, source=None):
+    """Only an existing diary file is opened: this module never creates the diary. Write connection: through the gate
+    of opportunity_diary.connect (phase 6C, app_env)."""
     path = path or od.DB
     if not os.path.exists(path):
         raise FileNotFoundError("diario delle opportunità non ancora avviato")
-    con = od.connect(path)
+    con = od.connect(path, source)
     con.executescript(SCHEMA)
     return con
 
@@ -99,7 +100,9 @@ def record(result, session, computed_at, source, opp_version, path=None):
                      _j(_slim(sc)), _j(x.get("inputs")), _j(x.get("reverse")), _j(x.get("sensitivity")),
                      _j(x.get("reasons")), _j(x.get("blockers")), _j(x.get("monitor")), _j(x.get("fundamental")),
                      _j(x.get("dataDates"))))
-    with closing(connect(path)) as con, con:
+    source = od.label(source, path)
+    with closing(connect(path, source)) as con, con:
+        con.execute("BEGIN IMMEDIATE")             # check and insert in one write transaction (phase 6C)
         if con.execute("SELECT 1 FROM val_runs WHERE session=? AND model_version=?", (session, version)).fetchone():
             return False, "seduta già registrata con questa versione del modello di valutazione"
         con.execute("INSERT INTO val_runs VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -125,9 +128,11 @@ def stats(path=None):
         con.row_factory = sqlite3.Row
         if not con.execute("SELECT 1 FROM sqlite_master WHERE name='val_runs'").fetchone():
             return empty
-        runs = con.execute("SELECT session, model_version FROM val_runs ORDER BY session").fetchall()
+        runs = con.execute("SELECT session, model_version FROM val_runs r WHERE " + od._official("r.source") + " ORDER BY session").fetchall()
         if not runs:
-            return empty
-        n = con.execute("SELECT COUNT(*) FROM val_observations").fetchone()[0]
+            return dict(empty, excluded=od.excluded(path, "val_runs", "val_observations"))
+        n = con.execute("SELECT COUNT(*) FROM val_observations o JOIN val_runs r ON r.session=o.session AND r.model_version=o.model_version "
+                        "WHERE " + od._official("r.source")).fetchone()[0]
         return {"started": True, "days": len({r["session"] for r in runs}), "first": runs[0]["session"],
-                "last": runs[-1]["session"], "observations": n, "versions": sorted({r["model_version"] for r in runs})}
+                "last": runs[-1]["session"], "observations": n, "versions": sorted({r["model_version"] for r in runs}),
+                "excluded": od.excluded(path, "val_runs", "val_observations")}

@@ -392,7 +392,7 @@ def engine_result(day="2026-10-30"):
 
 
 def test_investment_diary_never_starts_the_diary():
-    saved, why = invd.record(engine_result(), "2026-10-30", EVENING.isoformat(), "test", o.MODEL_VERSION)
+    saved, why = invd.record(engine_result(), "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)
     assert not saved and "non ha registrato la seduta" in why
     assert not os.path.exists(od.DB)                                        # no file, no artificial first day
     assert invd.stats() == {"started": False, "days": 0} and not invd.exists("2026-10-30", ie.VERSION)
@@ -402,7 +402,7 @@ def test_investment_diary_records_once_after_the_opportunity_diary_and_is_immuta
     from test_opportunity_diary import result as _r  # noqa: F401  (fixture module imported for its helpers)
     from test_opportunities import QQQ, RISING_VOL, TODAY, frame, path, stock
     scan = o.scan([stock("AAA")], {"AAA": frame(path(300, 0.004), RISING_VOL)}, QQQ, {}, today=TODAY, keep_all=True)
-    ok, _ = od.record(scan, "2026-10-30", EVENING.isoformat(), "test")
+    ok, _ = od.record(scan, "2026-10-30", EVENING.isoformat(), "dashboard")
     assert ok
     with sqlite3.connect(od.DB) as con:
         before = {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("runs", "observations")}
@@ -410,12 +410,12 @@ def test_investment_diary_records_once_after_the_opportunity_diary_and_is_immuta
     with sqlite3.connect(od.DB) as con:
         assert not con.execute("SELECT 1 FROM sqlite_master WHERE name='inv_runs'").fetchone()
     wrong = engine_result(day="2026-10-29")                                 # trend not of that session
-    assert invd.record(wrong, "2026-10-30", EVENING.isoformat(), "test", o.MODEL_VERSION)[0] is False
+    assert invd.record(wrong, "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)[0] is False
     early = datetime(2026, 10, 30, 15, 0, tzinfo=ET)                         # before the close
-    assert invd.record(engine_result(), "2026-10-30", early.isoformat(), "test", o.MODEL_VERSION)[0] is False
-    saved, why = invd.record(engine_result(), "2026-10-30", EVENING.isoformat(), "test", o.MODEL_VERSION)
+    assert invd.record(engine_result(), "2026-10-30", early.isoformat(), "dashboard", o.MODEL_VERSION)[0] is False
+    saved, why = invd.record(engine_result(), "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)
     assert saved and why == "6 giudizi fondamentali salvati"
-    assert invd.record(engine_result(), "2026-10-30", EVENING.isoformat(), "test", o.MODEL_VERSION)[0] is False
+    assert invd.record(engine_result(), "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)[0] is False
     with sqlite3.connect(od.DB) as con:
         assert {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("runs", "observations")} == before
         row = con.execute("SELECT model_version, profile, dims, indicators, data_dates FROM inv_observations WHERE ticker='A'").fetchone()

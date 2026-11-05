@@ -339,19 +339,19 @@ def test_status_labels_separate_the_kinds_of_reliability():
 def test_recorded_valuations_stay_unchanged_and_versions_are_kept_apart():
     from test_opportunities import QQQ, RISING_VOL, TODAY, frame, path, stock
     scan = o.scan([stock("AAA")], {"AAA": frame(path(300, 0.004), RISING_VOL)}, QQQ, {}, today=TODAY, keep_all=True)
-    assert od.record(scan, "2026-10-30", EVENING.isoformat(), "test")[0]
+    assert od.record(scan, "2026-10-30", EVENING.isoformat(), "dashboard")[0]
     techs = {t: {**TECH, "date": "2026-10-30"} for t in VPEERS}
     inv, r2 = val(VPEERS, techs=techs, now=EVENING)
-    assert invd.record(inv, "2026-10-30", EVENING.isoformat(), "test", o.MODEL_VERSION)[0]
+    assert invd.record(inv, "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)[0]
     fund = {"data": VPEERS, "fx": {}, "firstSeen": {}, "rates": RATES}
     closes = {x["ticker"]: {"close": x["price"], "date": x["priceDate"]} for x in inv["items"]}
     from test_investment_engine import ANALYST
     r1 = v1.analyze_all(inv, fund, {t: vinfo() for t in VPEERS}, {t: ANALYST for t in VPEERS}, EVENING, closes=closes)
-    assert vd.record(r1, "2026-10-30", EVENING.isoformat(), "test", o.MODEL_VERSION)[0]
+    assert vd.record(r1, "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)[0]
     with sqlite3.connect(od.DB) as con:
         before = con.execute("SELECT * FROM val_observations WHERE model_version='V1' ORDER BY ticker").fetchall()
-    assert vd.record(r2, "2026-10-30", EVENING.isoformat(), "test", o.MODEL_VERSION)[0]
-    assert vd.record(r2, "2026-10-30", EVENING.isoformat(), "test", o.MODEL_VERSION)[0] is False   # idempotent
+    assert vd.record(r2, "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)[0]
+    assert vd.record(r2, "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)[0] is False   # idempotent
     with sqlite3.connect(od.DB) as con:
         assert con.execute("SELECT * FROM val_observations WHERE model_version='V1' ORDER BY ticker").fetchall() == before
         row = con.execute("SELECT inputs FROM val_observations WHERE model_version='V2' AND ticker='A'").fetchone()

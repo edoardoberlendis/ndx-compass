@@ -938,15 +938,16 @@ strategie Trading delle Fasi 3–4B non hanno mostrato vantaggi).
 - **Due modi**: *Medio-lungo* (3–24 mesi: trend 50/200, forza relativa a 6 e 12 mesi, sua evoluzione in 21 sedute,
   volatilità 3/12 mesi, calo dal massimo a 12 mesi, condizioni L1–L4 e M1–M4) e *Breve* (3–30 sedute: medie 20/50, forza
   relativa a 1 e 3 mesi, evoluzione in 5 sedute, condizioni S1–S4 e K1–K4). Il breve periodo è solo esplorativo.
-- **Obbligazioni** con un modello separato, mai momentum: rendimento ÷ duration (O1), quota con rating A o superiore
-  (O2), peso del TER sul rendimento (O3), duration ≥ 10 anni (P1), un solo emittente (P2). Rendimento a scadenza, cedola
+- **Obbligazioni** con un modello separato, mai momentum: quota con rating A o superiore (O2), peso del TER sul
+  rendimento (O3), duration ≥ 10 anni (P1), un solo emittente (P2); nel modello E1 anche rendimento ÷ duration ≥ 1 (O1),
+  tolta nel modello E2 (vedi sotto). Rendimento a scadenza, cedola
   e rendimento da distribuzione restano tre numeri diversi; il rendimento a scadenza non è un rendimento netto garantito.
 - **Stati**: Esposizione da approfondire, Trend favorevole da monitorare, Condizioni contrastanti, Rischio elevato,
   Dati insufficienti, Nessuna opportunità convincente (più «Riferimento di mercato» per mondo e liquidità). Una
   condizione non valutabile non conta mai come soddisfatta. Rischio a parte (R1–R6: volatilità, concentrazione, calo,
   settore/tema, paese singolo, cambio). Prodotti con una lista di controlli (Q1–Q6: TER dell'emittente, patrimonio,
   tracking difference, scambi, spread a mercato aperto, anni di prezzi): nessun vincitore, indici diversi mai confrontati
-  come uguali. Soglie in cima a `etf_opportunity.py` (modello `E1`): cambiarle = nuova versione.
+  come uguali. Soglie in cima a `etf_opportunity.py` (modello attuale `E2`, `E1` riproducibile): cambiarle = nuova versione.
 - **Dati del catalogo completati** (`etf_catalog_build.py` + `etf_catalog_verifiche.json`): pagine prodotto iShares (dati
   con la loro data, classe, quotazioni, rendimenti annui di fondo e indice, rating e scadenze); **tracking difference**
   = rendimento annuo del fondo − indice nella stessa valuta, solo anni interi dopo il lancio, bloccata se valute diverse
@@ -958,6 +959,114 @@ strategie Trading delle Fasi 3–4B non hanno mostrato vantaggi).
   (le tabelle esistenti non cambiano), una volta per seduta di Borsa Italiana e versione, entrambi i modi, tutte le
   esposizioni, solo con prezzi scaricati dopo le 18:00, mai a posteriori, mai modificate (trigger). Salvato dal ciclo del
   server e dal job serale, mai all'apertura della pagina; nessuno scheduler nuovo.
+
+## Sicurezza dei diari e ambienti separati (Fase 6C)
+
+Il 4 novembre 2026 uno script di prova lanciato a mano nella cartella del progetto ha importato `server.py` e chiamato
+`save_etf_scan_diary(source="prova")`: 110 osservazioni (55 esposizioni × 2 modi, cioè una seduta completa del modello
+E1) sono finite nel diario reale. Non sono state cancellate né modificate. Da qui la Fase 6C (`app_env.py`):
+
+- **Tre ambienti**: `produzione` (predefinito), `test` (sempre, se pytest è caricato, qualunque cosa dica `NDX_ENV`),
+  `anteprima` (`NDX_ENV=anteprima`; un valore sbagliato vale come anteprima, mai come produzione).
+- **Produzione**: i diari SQLite si scrivono solo da un processo autorizzato — il server avviato con `server.py`, il job
+  serale, il comando `opportunity_diary.py update` — e solo con origine `dashboard`, `job serale` o `comando manuale`.
+  Uno script o una console che importa `server.py` può leggere ma non registrare (errore «non autorizzata»).
+- **Test e anteprima**: una guardia (audit hook di Python) blocca *prima* che avvenga ogni scrittura nella cartella del
+  progetto (file, cartelle, rinomine, cancellazioni, SQLite non in sola lettura); nei test anche la rete non locale.
+  Portafoglio, diari, report e cache vanno in cartelle temporanee (`app_env.isolate`, una sola lista per test e
+  anteprima; ora copre anche `portafoglio/ticker.json` e `classificazione.json`, prima rimasti sul percorso reale).
+- **Letture sempre in sola lettura** (`mode=ro`): aprire la pagina o un indirizzo API non scrive mai nei diari.
+- **Registrazioni atomiche e idempotenti**: controllo e inserimento nella stessa transazione `BEGIN IMMEDIATE`; se server
+  e job serale registrano insieme la stessa seduta, il secondo trova il primo e non scrive; un errore annulla tutta la
+  giornata.
+- **Prove escluse**: l'origine salvata decide (`app_env.classify`): `prova`/`test` → prova, `anteprima` → anteprima,
+  altre → esclusa. Restano consultabili ma non entrano in statistiche, risultati maturati, dataset e «rilevazione
+  precedente». La seduta ETF del 4 novembre resta occupata dalla prova (nessuna seconda registrazione): il diario ETF
+  ufficiale parte dalla prima seduta successiva.
+- **Stato dei diari** (sola lettura): `.venv/bin/python diaries_status.py` (o `--json`, e `/api/diaries/status`); in pagina
+  una tabella nel pannello chiuso «Monitoraggio risultati».
+- **Anteprima**: `.venv/bin/python preview.py` (porta 8101): portafoglio vuoto, copia dei diari in sola lettura (o
+  `--vuoto`), nessun download, guardia attiva.
+- **Orari ETF**: ogni serie salva borsa, fuso orario, ora di chiusura, ora del download e data del prezzo; l'ultima barra
+  si scarta se scaricata prima della chiusura della sua borsa + 30 minuti (18:00 vale per Milano e Xetra, non per una
+  borsa americana). Benchmark a data diversa e serie ferme sono segnalati; per gli obbligazionari le date di duration e
+  rendimento restano separate da quella del prezzo. La condizione O1 (rendimento ÷ duration ≥ 1) era stata dichiarata
+  **euristica sperimentale**; il 5 novembre 2026 l'utente ha deciso di toglierla (modello E2, sezione sotto).
+- **Telefono**: sotto i 760 px la riga delle schede scorre di lato al suo interno (la pagina non sborda più: prima 21 px
+  a 390 px e 91 px a 320 px), stesse schede nello stesso ordine, scheda attiva sempre visibile.
+
+## Modello ETF E2: obbligazioni senza la soglia O1 (5 novembre 2026)
+
+Decisione dell'utente: la soglia 1 di «rendimento a scadenza ÷ duration» non ha una giustificazione finanziaria
+abbastanza solida e non decide più se un'esposizione obbligazionaria è interessante.
+
+- **Due versioni nel codice**: `etf_opportunity.scan(..., version="E1")` riproduce esattamente il modello del 4 novembre
+  (stessi stati, stesse soglie, stesso risultato carattere per carattere sui dati reali); `E2` è quella attuale
+  (`VERSION`). Il diario salva la versione di ogni registrazione; le righe E1 già salvate non cambiano.
+- **Cosa cambia in E2 (solo obbligazioni)**: O1 non è più una condizione. Restano O2 (rating), O3 (costi), P1 (duration ≥
+  10 anni), P2 (un solo emittente), con le stesse soglie. O2 e O3 descrivono la qualità del prodotto, non un'opportunità:
+  senza condizioni contrarie lo stato è **«Da approfondire — evidenza insufficiente per un giudizio favorevole»**, mai
+  «Esposizione da approfondire» (nessuna promozione automatica, nessuna soglia nuova). Le obbligazioni non entrano più
+  nella selezione «Opportunità da approfondire».
+- **Mostrati a parte, senza soglie**: rendimento a scadenza, duration (modificata se l'emittente la pubblica, altrimenti
+  effettiva, dichiarato: oggi sempre effettiva), credito e rating, valuta e copertura del cambio, rapporto rendimento ÷
+  duration (solo descrittivo) e **sensibilità indicativa**: rendimenti di mercato +1 punto → prezzo circa −duration %,
+  −1 punto → circa +duration %. È un'approssimazione lineare (ignora la convessità, vale per spostamenti piccoli e uguali
+  su tutte le scadenze; per gli indicizzati all'inflazione riguarda i rendimenti reali), non una previsione, e non si somma
+  al rendimento a scadenza per fare un «rendimento certo».
+- **Effetto sui dati del 4 novembre** (entrambi i modi): Stato euro 1-3 anni da «Esposizione da approfondire» (era
+  favorevole solo grazie a O1: 1,79) a «evidenza insufficiente»; Stato euro legati all'inflazione, tutte le scadenze,
+  Obbligazioni societarie euro e Aggregato globale da «Condizioni contrastanti» (solo per O1) a «evidenza insufficiente»;
+  Stato euro 15-30 anni resta «Rischio elevato» (P1), BTP 10 anni resta «Dati insufficienti». Azioni invariate; nel modo
+  lungo la selezione passa da 6 a 5 esposizioni (esce Stato euro 1-3), nel breve non cambia.
+- **Diario**: una seduta si registra una volta sola, con una sola versione. Una seduta già registrata con E1 (anche la
+  prova del 4 novembre, che resta esclusa) non si registra di nuovo con E2: E2 vale dalla seduta successiva (controllo
+  in `etf_opportunity_diary.record`, nella stessa transazione, e in `server.save_etf_scan_diary`).
+- Test in `tests/test_etf_model_e2.py`; i quattro test della 6B/6C che descrivono O1 ora chiedono esplicitamente `E1`.
+
+## Decision Desk (Fase 7A)
+
+Prima modalità della scheda Opportunità (le modalità Trading, Investimento ed ETF restano). `investment_decision_engine.py`
+(versione **D1**, funzioni pure) **legge** i risultati dei motori esistenti — condizioni T1–T5 e Pagella
+(`opportunity_scanner`), analisi fondamentale F1, DCF V2, scanner ETF E2 — e non ne ricalcola né sostituisce nessuno. Per
+ogni azione e ogni esposizione ETF, per ciascun orizzonte, dà uno **stato** scelto da regole esplicite (mostrate in
+pagina con il loro codice), mai da una somma di punteggi:
+
+- **Stati**: Da approfondire · Attendi condizioni migliori · Monitora · Condizioni contrastanti · Rischio elevato · Dati
+  insufficienti · Nessuna opportunità convincente. Nessun punteggio complessivo, nessuna probabilità, nessun rendimento
+  atteso, nessuna indicazione di acquisto o vendita, nessun prezzo di ingresso. Se nulla convince lo dice.
+- **Azioni, medio-lungo periodo** (regole A-…): «Da approfondire» solo con qualità, crescita e solidità favorevoli, stime
+  non in peggioramento, trend non debole, DCF V2 calcolato con il prezzo non sopra lo scenario base **e nessuna evidenza
+  contraria** (dati in ritardo, prezzi di sedute diverse, stime non aggiornate, bilanci in valuta estera = rischio paese
+  fuori dal modello, criticità o forte sensibilità della valutazione). Qualità con prezzo sopra lo scenario base o
+  valutazione «Impegnativa» = «Attendi condizioni migliori». Solidità «Fragile» o qualità debole con ricavi in calo =
+  «Rischio elevato» anche se la valutazione sembra contenuta. La Pagella è mostrata ma non decide.
+- **Azioni, breve periodo** (B-…): solo descrizione; massimo «Monitora» (le regole T1–T5 non hanno mostrato vantaggi nelle
+  Fasi O3–4B). Volatilità alta su un candidato = «Rischio elevato»; avvisi (tirato, trimestrale vicina, sotto la media 200)
+  = «Condizioni contrastanti».
+- **ETF, medio-lungo** (E-…): parte dallo stato E2. «Esposizione da approfondire» diventa «Da approfondire» solo se almeno
+  un ETF è documentato (TER noto e non discordante, patrimonio e scambi sopra le soglie del catalogo) e le date di ETF e
+  benchmark sono allineate; altrimenti «Condizioni contrastanti» o «Monitora». Il giudizio sull'esposizione resta separato
+  dalla qualità dei prodotti (mostrata a parte, con TER da fonte di borsa, spread non aggiornati e dati del fondo datati
+  secondo le regole del catalogo). **Obbligazioni E2 «Da approfondire — evidenza insufficiente» → «Nessuna opportunità
+  convincente»** (regola E-N2): O2 e O3 sono caratteristiche del prodotto, non della convenienza; mai promosse; il rapporto
+  rendimento ÷ duration e la vecchia O1 non decidono nulla.
+- **ETF, breve** (F-…): solo azionari, massimo «Monitora» (momentum sulle categorie bocciato nella Fase 24); per le
+  obbligazioni nessun segnale di breve periodo (elencate tra i «non analizzati»).
+- **Ordine dichiarato**: stato, completezza dei dati, rischi bloccanti, evidenze contrarie, evidenze favorevoli, nome. Mai i
+  rendimenti recenti o lo sconto teorico del DCF.
+- **Date**: ogni riga mostra le date dei dati determinanti; un dato successivo al momento dell'analisi rende la riga
+  «Dati insufficienti»; date non allineate riducono il giudizio.
+- **Condizioni di cambiamento**: «migliora se», «peggiora se», «da verificare», prese dai motori (livelli DCF come soglie
+  per una nuova analisi, prossime trimestrali, invalidatori E2) e dalle regole (una dimensione che cambia stato).
+- **Indirizzi** (sola lettura, nessun download): `/api/decisions` (righe compatte) e `/api/decisions/<id>` (scheda). Cache
+  di 10 minuti come le classifiche; primo calcolo circa 1 secondo, poi pochi millisecondi.
+- **Diario delle decisioni** (`decision_diary.py`): tabelle nuove `dec_runs`/`dec_observations` in
+  `data/opportunita.sqlite3`, scritte da `server.save_decision_diary` nella stessa catena serale degli altri diari (nessuno
+  scheduler nuovo), una volta per seduta NYSE e versione, solo dopo che il diario delle opportunità ha registrato quella
+  seduta e dopo la chiusura; righe ETF solo se lo scanner ETF usa la stessa seduta con prezzi definitivi (altrimenti la
+  nota lo dice). Protezioni della Fase 6C (`app_env`), `BEGIN IMMEDIATE`, trigger anti-modifica, letture in sola lettura.
+- Nessun dato del portafoglio (compatibilità con il portafoglio: Fase 7B). Test in `tests/test_decision_engine.py`.
 
 ## Da verificare quando il diario avrà almeno 3 mesi di dati
 
@@ -1013,6 +1122,13 @@ obbligazionari, duration e sensibilità ai tassi, rendimento a scadenza contro c
 prodotti senza vincitore, dati mancanti mai soddisfatti, TER e conflitti non risolti, liquidità e spread, ordine e
 motivi, nessuna informazione futura, niente Compra/Vendi, diario (solo sedute chiuse, idempotente, immutabile, mai
 dall'apertura della pagina), indirizzi, pagine iShares e tracking difference, nessuna regressione.
+Ambienti e diari (`tests/test_environment_safety.py`, Fase 6C): cartelle sentinella che fanno da «produzione» (mai il
+database reale): ambiente test riconosciuto, scrittura e rete bloccate, processo di produzione non autorizzato o con
+origine «prova» rifiutato (il caso del 4 novembre), anteprima isolata in un processo separato, indirizzi API e server
+HTTP vero su porta temporanea senza scritture, letture che non scrivono, prove riconosciute ed escluse, immutabilità,
+registrazioni contemporanee, transazioni fallite senza giornate parziali, idempotenza, ultima seduta chiusa, fusi orari e
+chiusure delle borse, ETF e benchmark non allineati, date obbligazionarie, stato dei quattro diari, navigazione sul
+telefono e punti d'ingresso autorizzati.
 
 ## File del progetto
 
@@ -1052,6 +1168,11 @@ dall'apertura della pagina), indirizzi, pagine iShares e tracking difference, ne
 | `etf_prices.py` | Chiusure in euro degli ETF del catalogo (Fase 6B) in `cache/etf_prices.pkl`, scaricate in background dopo la chiusura |
 | `etf_opportunity.py` | Scanner esplorativo delle esposizioni ETF (Fase 6B): due modi, condizioni, rischi, prodotti; `/api/etf/opportunities` |
 | `etf_opportunity_diary.py` | Diario dello scanner ETF (tabelle nuove in `data/opportunita.sqlite3`, immutabili) |
+| `investment_decision_engine.py` | Decision Desk (Fase 7A): stati trasparenti da T1–T5, Pagella, F1, V2 ed E2, senza ricalcolarli |
+| `decision_diary.py` | Diario prospettico delle decisioni (Fase 7A), tabelle `dec_runs`/`dec_observations` |
+| `app_env.py` | Ambienti produzione/test/anteprima, autorizzazione degli scrittori dei diari, guardia e isolamento (Fase 6C) |
+| `diaries_status.py` | Stato dei quattro diari in sola lettura (Fase 6C); `/api/diaries/status` |
+| `preview.py` | Anteprima isolata della dashboard sulla porta 8101 (Fase 6C) |
 | `etf_catalog/` | Il catalogo: `strumenti.json`, `quotazioni.json`, `esposizione.json`, `fonti.json`, `controlli.json` (dati pubblici) |
 | `opportunity_validation.py` | Laboratorio di validazione (Fase O3): studio storico esplorativo delle condizioni Trading, simulazione sperimentale e controllo dei dati per l'Investimento; report in `data/validazione/` |
 | `decision.py` | Sezione Decisione della scheda titolo: cinque blocchi, verdetto e piani operativi con regole esplicite |
