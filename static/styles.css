@@ -1110,3 +1110,13 @@ button.cat-chip { cursor: pointer; font: inherit; font-size: var(--fs-xs); }
 .al-group > .al-list { margin-left: 6px; }
 .al-detail { padding: 0 10px 8px 14px; overflow-wrap: anywhere; }
 #alertsBody .kpis { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+
+/* Riepilogo del giorno (phase 8B) */
+.br-chain { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.br-d { font-size: 12px; padding: 3px 8px; border-radius: 10px; border: 1px solid var(--line, #ccc); }
+.br-d.ok { border-color: var(--up, #2e7d32); }
+.br-d.no { border-color: var(--warn, #b26a00); }
+.br-none { padding: 8px 10px; border-left: 3px solid var(--up, #2e7d32); }
+.br-stale { padding: 8px 10px; border-left: 3px solid var(--warn, #b26a00); }
+.br-list .br-card { padding: 8px 0; }
+.br-h { margin-bottom: 4px; }

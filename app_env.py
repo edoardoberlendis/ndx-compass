@@ -41,7 +41,19 @@ class ProductionWriteBlocked(PermissionError):
     handles a failed write (and logs it) keeps working, and nothing is written."""
 
 
-_state = {"authorized": None, "guard": None, "hook": False, "extra": [], "watch": None}
+class PrivateAccessBlocked(PermissionError):
+    """MARKET-ONLY mode (phase 8B): an attempt to read, list or write a file of the personal portfolio. Subclass of OSError:
+    code that already handles a missing file goes on, and nothing personal is read."""
+
+
+PRIVATE = os.path.join(ROOT, "portafoglio")
+# Every audited operation that reads, lists or changes a path: in MARKET-ONLY mode none of them may touch portafoglio/.
+PRIVATE_EVENTS = ("open", "os.listdir", "os.scandir", "glob.glob", "glob.glob/2", "os.chdir", "sqlite3.connect", "os.mkdir",
+                  "os.rename", "os.remove", "os.rmdir", "os.truncate", "shutil.rmtree", "shutil.copyfile", "shutil.copytree",
+                  "shutil.move", "os.symlink", "os.link", "os.chmod", "os.chown", "os.utime", "os.listxattr", "os.getxattr")
+
+_state = {"authorized": None, "guard": None, "hook": False, "extra": [], "watch": None,
+          "market_only": False, "private_roots": [], "private_blocked": []}
 _lock = threading.Lock()
 
 
@@ -221,7 +233,47 @@ def _is_write(event, args):
     return False, None
 
 
+def _private_paths(event, args):
+    """The paths an audited operation touches (relative paths resolved against the current folder or the dir_fd)."""
+    a = list(args)
+    if event == "open":
+        return [a[0]] if a and not isinstance(a[0], int) else []
+    if event == "sqlite3.connect":
+        db = os.fsdecode(a[0]) if a and isinstance(a[0], bytes) else (str(a[0]) if a and a[0] is not None else "")
+        if db in ("", ":memory:") or db.startswith("file::memory:"):
+            return []
+        return [db[5:].partition("?")[0] if db.startswith("file:") else db]
+    if event in ("glob.glob", "glob.glob/2"):
+        out = [a[0]] if a and isinstance(a[0], (str, bytes)) else []
+        if len(a) > 2 and isinstance(a[2], (str, bytes)):                     # root_dir
+            out.append(a[2])
+        return out
+    if event in ("os.rename", "shutil.copyfile", "shutil.copytree", "shutil.move", "os.symlink", "os.link"):
+        fd = a[3] if event == "os.rename" and len(a) > 3 else None
+        return [x for x in (a[0] if a else None, _at(a[1], fd) if len(a) > 1 else None) if x is not None and not isinstance(x, int)]
+    if not a or a[0] is None or isinstance(a[0], int):
+        return []
+    fd = a[2] if event == "os.mkdir" and len(a) > 2 else (a[1] if event in ("os.remove", "os.rmdir") and len(a) > 1 else None)
+    p = _at(a[0], fd)
+    return [p] if p is not None else []
+
+
+def _private_check(event, args):
+    if event not in PRIVATE_EVENTS:
+        return
+    try:
+        paths = [_real(p) for p in _private_paths(event, args)]
+    except Exception:
+        return
+    for p in paths:
+        if any(_under(p, r) for r in _state["private_roots"]):
+            _state["private_blocked"].append(event)          # only the kind of operation: never the name of a file
+            raise PrivateAccessBlocked("modalità MARKET-ONLY: accesso al portafoglio personale bloccato")
+
+
 def _hook(event, args):
+    if _state["market_only"]:
+        _private_check(event, args)
     g = _state["guard"]
     w = _state["watch"]
     if g is None and w is None:
@@ -263,6 +315,56 @@ def install_guard():
 
 def guard_active():
     return _state["guard"]
+
+
+# ---------------------------------------------------------------- MARKET-ONLY mode (phase 8B)
+
+def private_roots():
+    return list(_state["private_roots"])
+
+
+def enable_market_only(extra_roots=()):
+    """MARKET-ONLY for the rest of this process (phase 8B): every open, listing, database connection or change of a file
+    inside portafoglio/ (and inside the folders in `extra_roots`, sentinels of the tests) raises PrivateAccessBlocked
+    BEFORE the operation happens, so nothing personal is ever read. Call it before importing the other modules: it then
+    covers the side effects of the imports too. It cannot be turned off (audit hooks cannot be removed), it works in every
+    environment and it does not change the 6C rules (authorization, official origins, guard of tests and preview)."""
+    roots = [_real(PRIVATE)] + [_real(r) for r in extra_roots]
+    try:                                                     # a module may already point the portfolio elsewhere (tests)
+        portfolio = sys.modules.get("portfolio")
+        if portfolio is not None and getattr(portfolio, "PORTFOLIO_DIR", None):
+            roots.append(_real(portfolio.PORTFOLIO_DIR))
+    except Exception:
+        pass
+    with _lock:
+        if not _state["hook"]:
+            sys.addaudithook(_hook)
+            _state["hook"] = True
+        for r in roots:
+            if r not in _state["private_roots"]:
+                _state["private_roots"].append(r)
+        _state["market_only"] = True
+    return private_roots()
+
+
+def market_only():
+    return _state["market_only"]
+
+
+def private_blocked():
+    """How many accesses to the portfolio were blocked in this process, by kind of operation (no file names)."""
+    out = {}
+    for e in list(_state["private_blocked"]):
+        out[e] = out.get(e, 0) + 1
+    return out
+
+
+def _end_market_only_for_tests():
+    """Only for pytest (one process runs many tests): turns MARKET-ONLY off again. Refused anywhere else."""
+    if env() != "test":
+        raise RuntimeError("la modalità MARKET-ONLY non si spegne: dura fino alla fine del processo")
+    with _lock:
+        _state.update(market_only=False, private_roots=[], private_blocked=[])
 
 
 @contextlib.contextmanager
@@ -324,6 +426,8 @@ def isolate(base, setter=setattr, public_reads=False):
     setter(opportunity_diary, "DB", j("data", "opportunita.sqlite3"))
     import alert_engine
     setter(alert_engine, "DB", j("data", "alert.sqlite3"))                  # Phase 8A: the alert registry
+    import job_status
+    setter(job_status, "FILE", j("data", "job_status.json"))                # Phase 8B: runs of the evening job
     setter(opportunity_validation, "OUT_DIR", j("validazione"))
     setter(opportunity_validation, "LOG", j("validazione", "esperimenti.jsonl"))
     setter(opportunity_validation, "RECHECK_DIR", j("validazione", "rielaborazioni"))

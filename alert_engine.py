@@ -364,7 +364,8 @@ def detect_fundamentals(x):
         changed = {k: ((dp.get(k) or {}).get("state"), (dn.get(k) or {}).get("state")) for k in FUND_DIMS
                    if (dp.get(k) or {}).get("state") != (dn.get(k) or {}).get("state")}
         src = [{"name": "bilanci della fonte", "date": tn.get("statements")}, {"name": "trimestre più recente", "date": tn.get("latestQuarter")},
-               {"name": "esercizio più recente", "date": tn.get("latestYear")}]
+               {"name": "esercizio più recente", "date": tn.get("latestYear")},
+               {"name": "annuncio del trimestre secondo la fonte", "date": tn.get("latestQuarterAnnounced")}]
         common = dict(name=r["name"], session=m["session"], observed_at=m["observed_at"], model=m["model"], sources=src,
                       link={"view": "stock", "ticker": r["ticker"]})
         if new_period and changed:
@@ -428,6 +429,15 @@ def dcf_sides(history):
     return seq
 
 
+def _statements_note(tp, tn):
+    """Phase 8B: a new download of the statements is not new statements. Says which one it is (period of the data)."""
+    if tn.get("latestQuarter") and tn.get("latestQuarter") != tp.get("latestQuarter"):
+        return f" (nuovo periodo di bilancio al {tn['latestQuarter']})"
+    if tn.get("statements") != tp.get("statements"):
+        return f" (bilanci della fonte riscaricati, stesso periodo al {tn.get('latestQuarter') or 'n.d.'})"
+    return ""
+
+
 def detect_valuations(x):
     out = []
     if comparison(x) != "confronto":
@@ -462,7 +472,7 @@ def detect_valuations(x):
         value_eff = (np_ / nb - np_ / pb) * 100        # the rest: the new value (statements or assumptions)
         causes = {"prezzo": f"{it(pp_, 2)} → {it(np_, 2)} ({it((np_ / pp_ - 1) * 100)}%), effetto sulla distanza {it(price_eff)} punti",
                   "ipotesi e bilanci": f"valore base {it(pb, 2)} → {it(nb, 2)} ({it((nb / pb - 1) * 100)}%), effetto {it(value_eff)} punti"
-                  + (" (bilanci della fonte aggiornati)" if tn.get("statements") != tp.get("statements") else "")}
+                  + _statements_note(tp, tn)}
         crossed = False
         for sc, col in (("base", "value_base"), ("prudente", "value_prudent"), ("favorevole", "value_favourable")):
             a, b = s_prev.get((r["ticker"], sc)), s_now.get((r["ticker"], sc))
@@ -791,8 +801,27 @@ def generate(now, source, diary_path, catalog=None, status=None, path=None, as_o
 
 # ---------------------------------------------------------------- 4. reading the registry (read only, for the page)
 
-def read(path=None, days=120):
-    """The page: last run, alerts with their latest state, counts. mode=ro: never creates or changes anything."""
+def _announced(diary_path, keys):
+    """{(session, ticker): announcement date given by the source} from the fundamentals diary (read only), for the alerts
+    recorded before phase 8B whose payload does not carry it. Never written back into the registry."""
+    out = {}
+    if not diary_path or not keys or not os.path.exists(diary_path):
+        return out
+    try:
+        with closing(_ro(diary_path)) as con:
+            for session, ticker in keys:
+                r = con.execute("SELECT data_dates FROM inv_observations WHERE session=? AND ticker=?", (session, ticker)).fetchone()
+                d = _j(r["data_dates"], {}) if r else {}
+                if d.get("latestQuarterAnnounced"):
+                    out[(session, ticker)] = d["latestQuarterAnnounced"]
+    except sqlite3.Error:
+        return {}
+    return out
+
+
+def read(path=None, days=120, diary_path=None):
+    """The page: last run, alerts with their latest state, counts. mode=ro: never creates or changes anything.
+    diary_path (phase 8B): the diaries, read only, to complete the publication date of older fundamentals alerts."""
     p = path or DB
     base = {"version": VERSION, "rules": RULES, "disabled": disabled_rules(), "priorities": PRIORITY,
             "priorityRule": PRIORITY_RULE, "disclaimer": DISCLAIMER}
@@ -807,11 +836,12 @@ def read(path=None, days=120):
             return {**base, "started": False, "alerts": [], "lastRun": None}
         last = runs[-1]
         order = {r["run_id"]: i for i, r in enumerate(runs)}
-        rows = con.execute("SELECT e.alert_id, e.payload, e.created_at, l.run_id, l.status, l.at FROM alert_events e "
+        rows = con.execute("SELECT e.alert_id, e.payload, e.created_at, l.run_id, l.status, l.at, e.run_id AS created_run FROM alert_events e "
                            "JOIN alert_lifecycle l ON l.alert_id=e.alert_id").fetchall()
     hist = {}
     for r in rows:
-        h = hist.setdefault(r["alert_id"], {"payload": r["payload"], "firstSeen": r["created_at"], "states": []})
+        h = hist.setdefault(r["alert_id"], {"payload": r["payload"], "firstSeen": r["created_at"], "states": [],
+                                            "activation": order.get(r["created_run"]) == 0})
         h["states"].append((order.get(r["run_id"], -1), r["status"], r["at"]))
     out = []
     cutoff = runs[-1]["generated_at"][:10]
@@ -825,7 +855,14 @@ def read(path=None, days=120):
             continue
         a.update(status=status, current=a.get("current"), firstSeen=h["firstSeen"], lastSeen=st[2], active=cur and status != "risolto"
                  and status != "superato", history=[{"status": s, "at": at} for _, s, at in states][-6:])
-        out.append(a)
+        out.append((a, h))
+    need = [(a.get("session"), a["instrument"]) for a, _ in out if a.get("rule") == "AZ-FOND-PERIODO"
+            and not _src_date(a, "annuncio del trimestre secondo la fonte") and not (a.get("extra") or {}).get("grouped")]
+    ann = _announced(diary_path, need)
+    for a, h in out:
+        a["timeline"] = timeline(a, h["firstSeen"], h["activation"] and h["states"] and sorted(h["states"])[0][1] != "baseline",
+                                 ann.get((a.get("session"), a["instrument"])))
+    out = [a for a, _ in out]
     prio = {"critica": 0, "importante": 1, "ordinaria": 2}
     out.sort(key=lambda a: (not a["active"], a["status"] != "nuovo", prio.get(a["priority"], 3), a.get("session") or "", a["name"]))
     act = [a for a in out if a["active"]]
@@ -835,6 +872,39 @@ def read(path=None, days=120):
               "operational": sum(1 for a in act if a["scope"] == "operativo"), "active": len(act)}
     return {**base, "started": True, "lastRun": {"id": last["run_id"], "at": last["generated_at"], "source": last["source"],
             "inputs": _j(last["inputs"], {}), "counts": _j(last["counts"], {})}, "runs": len(runs), "counts": counts, "alerts": out}
+
+
+def _src_date(a, name):
+    return next((x.get("date") for x in a.get("sources") or [] if x.get("name") == name), None)
+
+
+def timeline(a, detected_at, at_activation, announced=None):
+    """The five dates of an alert, kept apart (phase 8B), derived at read time from what is already in the registry:
+    period of the data, publication (only when a source gives it, and never presented as verified), acquisition by the
+    system, detection by the alert engine, sessions compared. Never "published today": when the publication date is
+    unknown the text is "Nuovi dati acquisiti". The events of the first check (activation of the registry) are historical
+    events found at activation, not changes of the latest session. Nothing is written back."""
+    fund = a.get("rule") in ("AZ-FOND-PERIODO", "AZ-FOND-RIVISTI")
+    period = _src_date(a, "trimestre più recente") if fund else None
+    year = _src_date(a, "esercizio più recente") if fund else None
+    published = (_src_date(a, "annuncio del trimestre secondo la fonte") or announced) if a.get("rule") == "AZ-FOND-PERIODO" else None
+    acquired = _src_date(a, "bilanci della fonte") if fund else (_src_date(a, "dati degli analisti") if a.get("rule") == "AZ-FOND-STIME" else None)
+    prev = (a.get("model") or {}).get("previousSession")
+    out = {"period": period, "year": year, "published": published, "publishedVerified": False,
+           "publishedSource": "calendario delle trimestrali della fonte (Yahoo Finance), non verificato sul sito della società" if published else None,
+           "acquired": acquired, "observedAt": a.get("observedAt"), "detectedAt": detected_at,
+           "sessions": {"previous": prev, "current": a.get("session")}, "atActivation": bool(at_activation)}
+    if a.get("rule") == "AZ-FOND-PERIODO" and not (a.get("extra") or {}).get("grouped"):
+        out["headline"] = (f"Dati del periodo al {period} annunciati il {published} secondo la fonte (data non verificata), "
+                           f"acquisiti dal sistema il {str(acquired or '')[:10] or 'giorno non registrato'}") if published else "Nuovi dati acquisiti"
+    elif a.get("rule") == "AZ-FOND-PERIODO":
+        out["headline"] = "Nuovi dati acquisiti"
+    elif fund or a.get("rule") == "AZ-FOND-STIME":
+        out["headline"] = "Nuovi dati acquisiti"
+    if at_activation:
+        out["activationText"] = (f"Evento storico rilevato all'attivazione del registro degli alert (primo confronto {prev or '—'} → "
+                                 f"{a.get('session') or '—'}): non è un cambiamento dell'ultima seduta elaborata")
+    return out
 
 
 def _days_before(day, n):

@@ -23,6 +23,19 @@ import opportunity_diary as od
 ET = ZoneInfo("America/New_York")
 ROME = ZoneInfo("Europe/Rome")
 EVENING_PLIST = os.path.expanduser("~/Library/LaunchAgents/com.nasdaq100.daily.plist")
+MARKET_PLIST = os.path.expanduser("~/Library/LaunchAgents/com.nasdaq100.market.plist")     # phase 8B, market-only
+
+
+def evening_job():
+    """Which evening job is installed (from the launchd files only: never runs launchctl)."""
+    full, market = os.path.exists(EVENING_PLIST), os.path.exists(MARKET_PLIST)
+    if full and market:
+        return "installati il job serale completo (22:45) e quello MARKET-ONLY (23:00): la parte pubblica gira due volte (idempotente)"
+    if market:
+        return "installato il job MARKET-ONLY (launchd 23:00, solo dati pubblici)"
+    if full:
+        return "installato (launchd 22:45)"
+    return "non installato: si registra solo con la dashboard accesa"
 
 DIARIES = [
     {"key": "opportunity", "name": "Diario delle opportunità", "module": "opportunity_diary.py", "runs": "runs",
@@ -226,8 +239,7 @@ def status(now=None, path=None):
     vers = _versions()
     out = {"generatedAt": now.isoformat(timespec="seconds"), "path": path, "environment": app_env.describe(),
            "officialSources": list(app_env.OFFICIAL_SOURCES), "duplicates": DUPLICATES,
-           "eveningJob": "installato (launchd 22:45)" if os.path.exists(EVENING_PLIST) else
-                         "non installato: si registra solo con la dashboard accesa",
+           "eveningJob": evening_job(),
            "diaries": [], "problems": []}
     exists = os.path.exists(path)
     data = {}

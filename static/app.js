@@ -168,7 +168,7 @@ function spark(values, w = 80, h = 22, base = null, color = null) {
 
 // ------------------------------------------------------------ data
 // must equal DASHBOARD_VERSION in server.py: otherwise the server runs old code and the page says so
-const PAGE_VERSION = "2026-11-06b";
+const PAGE_VERSION = "2026-11-06c";
 async function load() {
   const r = await fetch("/api/snapshot", { cache: "no-store" });
   const sv = r.headers.get("X-Dashboard-Version");
@@ -232,6 +232,7 @@ function renderAll() {
   if (state.view === "diary") loadDiary();
   if (state.view === "etf") loadEtf();
   if (state.view === "alerts") loadAlerts();
+  if (state.view === "brief") loadBrief();
   if (state.detail) { renderDetailHeader(); renderTA(); }
 }
 
@@ -4089,13 +4090,28 @@ function alDetailHTML(a) {
     <li><b>Cosa è cambiato</b>: ${esc(a.title)}${a.exploratory ? " <span class=\"warn\">(esplorativo)</span>" : ""} — ${esc(a.reason || "")}</li>
     <li><b>Prima</b>: ${alVal(a.previous)}</li>
     <li><b>Ora</b>: ${alVal(a.current)}</li>
-    <li><b>Quando</b>: seduta ${esc(a.session ? dayIT(a.session) : "n.d.")} · osservato ${esc(String(a.observedAt || "").slice(0, 16).replace("T", " "))} · primo controllo ${esc(String(a.firstSeen || "").slice(0, 16).replace("T", " "))}</li>
+    <li><b>Quando</b>: ${alWhen(a)}</li>
     <li><b>Perché monitorarlo</b>: ${esc((D_RULE(a.rule) || {}).when || "")}. Priorità: ${esc(AL_PRIO[a.priority] || a.priority)} (${esc((D_RULE(a.rule) || {}).priority || "")}).</li>
     <li><b>Dati a supporto</b>: ${esc(a.model?.name || "")} ${esc(a.model?.version || "")}${a.model?.previousSession ? ` (confronto con la seduta ${esc(dayIT(a.model.previousSession))})` : ""}; ${(a.sources || []).filter(s => s.date).map(s => `${esc(s.name)} ${esc(String(s.date).slice(0, 16))}`).join(" · ") || "fonti n.d."}${ca ? `<br>Cause separate: ${Object.entries(ca).map(([k, v]) => `<b>${esc(k)}</b> ${esc(v)}`).join(" · ")}` : ""}</li>
     <li><b>Limiti</b>: ${esc([a.reliability, ...(a.limits || [])].filter(Boolean).join("; ") || "nessuno indicato")}${a.resolveWhen ? `. Si considera risolto quando: ${esc(a.resolveWhen)}` : ""}</li>
     <li><b>Dove approfondire</b>: ${go || "—"}</li></ol></div>`;
 }
 const D_RULE = id => (AL.data?.rules || []).find(r => r.id === id);
+// Phase 8B: the dates of an alert kept apart - period, publication (only from the source, never "verified"), acquisition
+// by the system, detection, sessions compared. Never "published today".
+const tsIT = x => x ? esc(String(x).slice(0, 16).replace("T", " ")) : "n.d.";
+function alWhen(a) {
+  const t = a.timeline || {};
+  const parts = [];
+  if (t.headline) parts.push(`<b>${esc(t.headline)}</b>`);
+  if (t.period) parts.push(`periodo di bilancio al ${esc(dayIT(t.period))}`);
+  if (t.published) parts.push(`annuncio indicato dalla fonte: ${esc(dayIT(t.published))} (${esc(t.publishedSource || "non verificato")})`);
+  else if (t.period) parts.push("data di pubblicazione non nota");
+  if (t.acquired) parts.push(`acquisiti dal sistema ${tsIT(t.acquired)}`);
+  parts.push(`sedute confrontate ${t.sessions?.previous ? esc(dayIT(t.sessions.previous)) + " → " : ""}${esc(a.session ? dayIT(a.session) : "n.d.")}`);
+  parts.push(`diario calcolato ${tsIT(a.observedAt)}`, `rilevato dagli alert ${tsIT(t.detectedAt || a.firstSeen)}`);
+  return parts.join(" · ") + (t.activationText ? `<br><span class="warn">${esc(t.activationText)}</span>` : "");
+}
 function alertsHTML() {
   if (AL.err) return `<div class="card empty">Alert non disponibili: ${esc(AL.err)}.</div>`;
   const D = AL.data;
@@ -4152,13 +4168,93 @@ document.addEventListener("change", e => {
   if (s && state.view === "alerts") { AL.f.family = s.value; LS.set("al.f", AL.f); renderAlerts(); }
 });
 
+// ---------------------------------------------------------------- Riepilogo del giorno (phase 8B)
+// Read only: GET /api/brief. At most 7 important events of the last processed session, never filled with other things;
+// "Nessun cambiamento rilevante…" only when the brief is up to date, otherwise "Riepilogo non aggiornato" and why.
+const BR = { data: null, err: null, loading: false, at: 0 };
+async function loadBrief(force) {
+  if (BR.loading || (!force && BR.data && Date.now() - BR.at < 60000)) { renderBrief(); return; }
+  BR.loading = true; renderBrief();
+  try { const r = await fetch("/api/brief", { cache: "no-store" }); BR.data = await r.json(); BR.err = r.ok ? null : (BR.data.error || "errore"); }
+  catch (e) { BR.err = "server non raggiungibile"; }
+  BR.loading = false; BR.at = Date.now(); renderBrief();
+}
+const BR_SECTION = { azioni: "Azioni", etf: "ETF", fondamentali: "Fondamentali e DCF", rischi: "Rischi", dati: "Dati e aggiornamento" };
+function brCardHTML(c) {
+  const link = c.link || {};
+  const go = link.view === "stock" && link.ticker ? `<button class="btn ghost" data-algo="stock" data-t="${esc(link.ticker)}">Apri ${esc(link.ticker)}</button>`
+    : link.view ? `<button class="btn ghost" data-algo="${esc(link.view)}">Apri ${link.view === "etf" ? "ETF" : link.view === "opps" ? "Opportunità" : esc(link.view)}</button>` : "";
+  const dd = c.dataDate || {};
+  const date = [dd.headline ? `<b>${esc(dd.headline)}</b>` : "", dd.session ? `seduta ${esc(dayIT(dd.session))}${c.previousSession ? ` (confronto con ${esc(dayIT(c.previousSession))})` : ""}` : "",
+    dd.period && !dd.published ? `periodo al ${esc(dayIT(dd.period))}` : "", dd.acquired && !dd.published ? `acquisiti ${tsIT(dd.acquired)}` : ""].filter(Boolean).join(" · ");
+  return `<li class="br-card al-item ${esc(c.priority)}"><div class="br-h"><span class="al-p">${esc(AL_PRIO[c.priority] || c.priority)}</span> <b>${esc(c.name || c.instrument)}</b> — ${esc(c.what || "")}${c.exploratory ? ` <span class="warn">esplorativo</span>` : ""} <span class="muted small">${esc(BR_SECTION[c.section] || "")}</span></div>
+    <ul class="why small">
+      ${c.grouped ? `<li><b>Società</b>: ${esc(c.grouped.join(", "))}</li>` : `<li><b>Prima</b>: ${alVal(c.before)} · <b>Ora</b>: ${alVal(c.after)}</li>`}
+      <li><b>Perché</b>: ${esc(c.why || "")}</li>
+      ${c.causes ? `<li><b>Effetto del prezzo</b>: ${esc(c.causes.prezzo || "n.d.")}<br><b>Effetto di ipotesi e bilanci</b>: ${esc(c.causes["ipotesi e bilanci"] || "n.d.")}</li>` : ""}
+      <li><b>Data effettiva dei dati</b>: ${date || "n.d."}</li>
+      <li><b>Limiti</b>: ${esc((c.limits || []).join("; ") || "nessuno indicato")}</li>
+      ${go ? `<li>${go}</li>` : ""}</ul></li>`;
+}
+function briefHTML() {
+  if (BR.err) return `<div class="card empty">Riepilogo non disponibile: ${esc(BR.err)}.</div>`;
+  const D = BR.data;
+  if (!D) return `<div class="card">Caricamento del riepilogo…</div>`;
+  const A = D.alerts, H = D.health;
+  const status = D.upToDate
+    ? (D.events.length ? `<p><b>Seduta elaborata: ${esc(dayIT(D.session))}</b> · ${A.important} ${A.important === 1 ? "cambiamento importante" : "cambiamenti importanti"}${A.ordinary ? ` · ${A.ordinary} aggiornamenti ordinari` : ""}</p>`
+                       : `<p class="br-none"><b>${esc(D.message)}</b> (seduta ${esc(dayIT(D.session))}${A.ordinary ? `; ${A.ordinary} aggiornamenti ordinari in Alert e cambiamenti` : ""})</p>`)
+    : `<p class="br-stale"><b>${esc(D.message)}</b>: ${esc(D.reasons.join("; "))}.</p>${D.session ? `<p class="small muted">Ultima seduta elaborata: ${esc(dayIT(D.session))}. Gli eventi sotto valgono per quella seduta.</p>` : ""}`;
+  const chain = D.diaries.map(c => `<span class="br-d ${c.state === "registrata" ? "ok" : "no"}" title="${esc(c.next || "")}">${esc(c.name)}: ${esc(c.state)}${c.lastSession && c.state !== "registrata" ? ` (ultima ${esc(dayIT(c.lastSession))})` : ""}</span>`).join("");
+  const events = D.events.length ? `<ul class="al-list br-list">${D.events.map(brCardHTML).join("")}</ul>${A.more ? `<p class="small">Altri ${A.more} cambiamenti importanti in <button class="btn ghost" data-algo="alerts">Alert e cambiamenti</button></p>` : ""}` : "";
+  const hist = D.historical.length ? `<div class="card"><details class="fold" data-k="br-hist"><summary><h3>Eventi storici rilevati all'attivazione</h3><span class="card-meta">${A.historicalAtActivation} · non sono cambiamenti dell'ultima seduta</span></summary>
+      <p class="small muted">Il primo controllo degli alert confronta due sedute già registrate: ciò che trova è un evento storico rilevato all'attivazione del registro, non una novità di oggi.</p>
+      <ul class="al-list br-list">${D.historical.map(brCardHTML).join("")}</ul>${D.historicalMore ? `<p class="small">e altri ${D.historicalMore}</p>` : ""}</details></div>` : "";
+  const issues = D.dataIssues.length ? `<div class="card"><details class="fold" data-k="br-data"><summary><h3>Problemi di dati e aggiornamento</h3><span class="card-meta">${D.dataIssues.length + D.dataIssuesMore} · separati dagli eventi finanziari</span></summary>
+      <ul class="why small">${D.dataIssues.map(c => `<li><b>${esc(c.name || c.instrument)}</b> — ${esc(c.what || "")}: ${esc(c.why || "")}</li>`).join("")}</ul>${D.dataIssuesMore ? `<p class="small">e altri ${D.dataIssuesMore}</p>` : ""}</details></div>` : "";
+  const job = H.lastJobCompleted;
+  const started = H.lastJobStarted;
+  const li = (l, v) => `<li><b>${l}</b>: ${v}</li>`;
+  const health = `<div class="card"><details class="fold" data-k="br-health"><summary><h3>Stato del sistema</h3><span class="card-meta">${H.errors.length ? `${H.errors.length} problemi recenti` : "nessun problema recente"}</span></summary>
+    <ul class="why small">
+      ${li("Ultimo job completato", job ? `${esc(job.mode)}, finito ${tsIT(job.finishedAt)} (seduta ${esc(job.session ? dayIT(job.session) : "n.d.")})${job.stepsWithErrors.length ? ` · passi con errori: ${esc(job.stepsWithErrors.join(", "))}` : ""}` : esc(H.jobNote || "nessuno"))}
+      ${started && !started.completed ? li("Ultimo job avviato", `${esc(started.mode)}, ${tsIT(started.startedAt)}: ${esc(started.state)}`) : ""}
+      ${li("Programmazione", esc(H.scheduler || "n.d."))}
+      ${li("Ultima seduta elaborata", esc(H.lastSession ? dayIT(H.lastSession) : "nessuna"))}
+      ${li("Ultimo aggiornamento dei prezzi", tsIT(H.prices))} ${li("Ultimo aggiornamento dei bilanci", tsIT(H.fundamentals))} ${li("Ultimi prezzi ETF", tsIT(H.etfPrices))}
+      ${li("Ultime registrazioni dei diari", H.diaries.map(d => `${esc(d.name)} ${esc(d.lastSession ? dayIT(d.lastSession) : "nessuna")}${d.lastComputedAt ? ` (${tsIT(d.lastComputedAt)}, ${esc(d.lastSource || "")})` : ""} — ${d.official.observations ?? 0} osservazioni registrate, ${d.admissible.observations} ammissibili`).join("<br>"))}
+      ${li("Ultimo controllo degli alert", `${tsIT(H.alertCheck.lastRun)}${H.alertCheck.serverMsg ? ` · ultimo tentativo del server ${tsIT(H.alertCheck.server)}: ${esc(H.alertCheck.serverMsg)}` : ""}`)}
+      ${li("Sedute mancanti", H.missing.length ? H.missing.map(m => `${esc(m.diary)}: ${esc(m.sessions.map(dayIT).join(", "))}`).join("; ") : "nessuna")}
+      ${li("Registrazioni escluse (registro delle esclusioni)", H.excluded.length ? H.excluded.map(x => `${esc(x.diary)} ${esc(dayIT(x.session))} (${x.observations} osservazioni): ${esc(x.reason)}`).join("<br>") : "nessuna")}
+      ${li("Errori recenti", H.errors.length ? H.errors.map(e => `${tsIT(e.at)} ${esc(e.mode || "")} · ${esc(e.step || "")}${e.error ? ` (${esc(e.error)})` : ""}${e.note ? `: ${esc(e.note)}` : ""}`).join("<br>") : "nessuno")}
+      ${li("File aperti dal server", H.openFiles.open != null ? `${H.openFiles.open} su un limite di ${H.openFiles.limit ?? "n.d."} (${esc(H.openFiles.note)})` : "n.d.")}
+    </ul><p class="small muted">Problemi operativi: non sono eventi finanziari. Un giorno è completo solo con tutti e cinque i diari registrati.</p></details></div>`;
+  return `<div class="card"><h2>Riepilogo del giorno</h2>${status}
+      <div class="br-chain">${chain}</div>
+      <p class="small muted">${D.complete ? "Tutti e cinque i diari registrati per la seduta." : "Disponibilità parziale: non tutti i diari hanno la seduta."} Alert: ${A.newOfSession} nuovi nella seduta${A.historicalAtActivation ? `, ${A.historicalAtActivation} storici all'attivazione` : ""} · ultimo controllo ${tsIT(A.lastCheck)}.</p>
+      ${events}
+      <p class="small muted">${esc(D.rules.priorities)}. ${esc(D.disclaimer)}</p></div>${hist}${issues}${health}`;
+}
+function renderBrief() {
+  const el = $("#briefBody");
+  if (!el || state.view !== "brief") return;
+  const keep = [...el.querySelectorAll("details.fold[data-k]")].filter(d => d.open).map(d => d.dataset.k);
+  el.innerHTML = briefHTML();
+  keep.forEach(k => { const d = el.querySelector(`details.fold[data-k="${k}"]`); if (d) d.open = true; });
+}
+document.addEventListener("click", e => {
+  if (state.view !== "brief") return;
+  const g = e.target.closest("[data-algo]");
+  if (g) { if (g.dataset.algo === "stock") openDetail(g.dataset.t); else setView(g.dataset.algo); }
+});
+
 const GROUPS = [
   { id: "opportunita", label: "Opportunità", ask: "Quali titoli meritano di essere approfonditi?", views: [["opps", "Opportunità"]] },
   { id: "mercato", label: "Mercato", ask: "Cosa sta succedendo?", views: [["overview", "Oggi"], ["sectors", "Settori"]] },
   { id: "portafoglio", label: "Portafoglio", ask: "Cosa ho e come sta andando?", views: [["portfolio", "Posizioni"], ["pfperf", "Performance"], ["pfconc", "Concentrazione"], ["pfrisk", "Rischio"], ["pffit", "Compatibilità"]] },
   { id: "azioni", label: "Azioni", ask: "Quali azioni del Nasdaq-100 potrei comprare?", views: [["screener", "Screener"], ["watch", "In osservazione"], ["diary", "Diario dei segnali"]] },
   { id: "etf", label: "ETF", ask: "Quali ETF potrei comprare?", views: [["etf", "ETF"]] },
-  { id: "alert", label: "Alert", ask: "Cosa è cambiato dall'ultima osservazione?", views: [["alerts", "Alert e cambiamenti"]] },
+  { id: "alert", label: "Alert", ask: "Cosa è cambiato dall'ultima osservazione?", views: [["brief", "Riepilogo del giorno"], ["alerts", "Alert e cambiamenti"]] },
 ];
 const PF_SUBS = ["portfolio", "pfperf", "pfconc", "pfrisk", "pffit"];
 const OLD_LINKS = { map: "sectors", ideas: "sectors", trade: "screener", rules: "portfolio", metodo: "screener", ricerca: "screener" };

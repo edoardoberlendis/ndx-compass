@@ -27,6 +27,7 @@ import requests
 import yfinance as yf
 from flask import Flask, jsonify, request, send_from_directory
 
+import app_env
 import macro_calendar
 import market_calendar
 import portfolio
@@ -797,6 +798,8 @@ store = Store()
 
 def diary_days():
     """Number of sessions in the signal diary (the Diario page is shown from diary.READY_SESSIONS on)."""
+    if app_env.market_only():
+        return 0                       # MARKET-ONLY: the signal diary is personal (portafoglio/diario), never listed
     try:
         import diary
         return len(diary.days())
@@ -807,72 +810,123 @@ def diary_days():
 _earn = {"data": {}, "key": None}
 
 
-def run_daily_job():
+def run_daily_job(market_only=False):
     """The evening job (daily_job.py, launchd at 22:45 Mon-Fri; phase 21): with the dashboard closed it does what the
     open dashboard does after the close - report, signal diary and the day's picture of my portfolio. It writes only
-    what is missing, so it does not clash with a dashboard that is also open."""
+    what is missing, so it does not clash with a dashboard that is also open.
+
+    market_only=True (phase 8B, `daily_job.py --market-only`): ONLY the public part - prices, public analyses, the five
+    prospective diaries (opportunities, fundamentals, valuations, ETF scanner, decisions), the alerts and the public evening
+    report. Never the portfolio, its picture, flussi.json, the signal/ETF/positions diaries in portafoglio/. The caller
+    turns on app_env.enable_market_only() first, so any access to portafoglio/ is blocked before it happens.
+    Every run is recorded in job_status (steps and outcome only, never personal data)."""
     import analysts
-    import history
+    import job_status
     import signals
+    if market_only and not app_env.market_only():
+        raise RuntimeError("market-only senza la protezione del portafoglio: chiamare prima app_env.enable_market_only()")
     authorize_writer("job serale")
     t0 = time.time()
-    store.constituents = load_constituents()
-    tickers = [c["ticker"] for c in store.constituents]
-    store.infos = load_infos(tickers)
-    store.analysts = analysts.load(tickers) if not analysts.is_fresh() else analysts.cached_data()
-    store.top_weights = qqq_top_weights()
-    store.refresh_daily()
-    store.refresh_intraday()
-    with ThreadPoolExecutor(4) as ex:                    # headlines for the news part of the signal, as the dashboard does
-        store.news_all = dict(zip(tickers, ex.map(lambda t: news(t, 40), tickers)))
-    store.news_at = time.time()
-    store.build()
-    macro_calendar.refresh()
-    try:                                                 # Phase 7C: statements as the open dashboard would have them
-        import fundamentals                              # (same rules: only the stocks that need it; synchronous here)
-        fundamentals.refresh(tickers)
-        _inv_invalidate()
-    except Exception:
-        log.exception("fundamentals not updated by the evening job: the diary uses the statements already on disk")
-    try:                                                 # Phase 8A: the personal part can never stop the five diaries
-        portfolio.refresh()
-        for _ in range(180):                             # my positions: tickers are matched in the background
-            if not portfolio._state["resolving"]:
-                break
-            time.sleep(1)
-        portfolio.refresh_quotes()
+    run = job_status.Run("market-only" if market_only else "completo", datetime.now(ET))
+    try:
+        store.constituents = load_constituents()
+        tickers = [c["ticker"] for c in store.constituents]
+        store.infos = load_infos(tickers)
+        store.analysts = analysts.load(tickers) if not analysts.is_fresh() else analysts.cached_data()
+        store.top_weights = qqq_top_weights()
+        store.refresh_daily()
+        store.refresh_intraday()
+        with ThreadPoolExecutor(4) as ex:                    # headlines for the news part of the signal, as the dashboard does
+            store.news_all = dict(zip(tickers, ex.map(lambda t: news(t, 40), tickers)))
+        store.news_at = time.time()
+        store.build()
+        run.step("prezzi", note=_bars_note())
+        try:
+            macro_calendar.refresh()
+            run.step("calendario macro")
+        except Exception as e:
+            log.exception("macro calendar not refreshed by the evening job")
+            run.step("calendario macro", "errore", error=e)
+        try:                                                 # Phase 7C: statements as the open dashboard would have them
+            import fundamentals                              # (same rules: only the stocks that need it; synchronous here)
+            fundamentals.refresh(tickers)
+            _inv_invalidate()
+            run.step("bilanci")
+        except Exception as e:
+            log.exception("fundamentals not updated by the evening job: the diary uses the statements already on disk")
+            run.step("bilanci", "errore", error=e)
+        if not market_only:
+            try:                                             # Phase 8A: the personal part can never stop the five diaries
+                import history
+                portfolio.refresh()
+                for _ in range(180):                         # my positions: tickers are matched in the background
+                    if not portfolio._state["resolving"]:
+                        break
+                    time.sleep(1)
+                portfolio.refresh_quotes()
+                with store.lock:
+                    snap, infos = store.snapshot, dict(store.infos)
+                history.record(portfolio.snapshot(snap, infos))
+                run.step("fotografia del portafoglio")
+            except Exception as e:                           # only the kind of error: never positions or values in the log
+                log.error("evening job: portfolio picture not saved (%s); the public diaries go on", type(e).__name__)
+                run.step("fotografia del portafoglio", "errore", error=e)
+            save_signal_diary()
+            run.step("diario dei segnali")
+        try:                                                 # phase 6B: ETF closes (in this process: no thread) and scan diary
+            import etf_catalog
+            import etf_prices
+            if etf_prices.due(etf_prices.load(), datetime.now(ROME_TZ)):
+                etf_prices.save(etf_prices.build(download, etf_catalog.load()))
+            run.step("prezzi ETF")
+        except Exception as e:
+            log.exception("ETF prices not updated by the evening job")
+            run.step("prezzi ETF", "errore", error=e)
+        save_etf_scan_diary(source="job serale")
+        # Phase 7C: the opportunity chain AFTER the ETF closes of the day: its last step (decision diary) records the ETF
+        # rows only with the ETF scanner on the same session; before, with the dashboard closed, they were always missing.
+        msg = save_opportunity_diary(source="job serale")
+        log.info("job serale: %s", msg)
+        run.step("catena dei diari", note=msg)
+        save_etf_scan_diary(source="job serale")            # idempotent: only if the diary file did not exist before
+        run.step("diario scanner ETF")
+        msg = save_alerts(source="job serale")              # phase 8A: after the five diaries
+        log.info("job serale: %s", msg)
+        run.step("alert", "errore" if "non riuscito" in str(msg) else "ok", note=msg)
+        if not market_only:
+            save_etf_diary(wait=True)
+            for _ in range(60):                              # positions diary: wait for the 2 years of prices (risk.py)
+                import pos_diary
+                save_pos_diary()
+                if pos_diary.exists(last_closed_session()) or last_closed_session() != datetime.now(ET).date().isoformat():
+                    break
+                time.sleep(5)
+            run.step("diari personali (ETF e posizioni)")
+        now = datetime.now(ET)
+        rid = f"{now:%Y-%m-%d}_close"
+        after_close = now.hour * 60 + now.minute >= market_calendar.close_minute(now)
+        if market_calendar.is_trading_day(now.date()) and after_close and rid not in signals.list_reports():
+            signals.run(notify_user=False)                   # the evening report, only once the session is closed
+            run.step("report della sera")
+        blocked = app_env.private_blocked() if market_only else {}
+        if blocked:                                          # a bug: some code tried to reach portafoglio/ (and was stopped)
+            log.error("market-only: %d accessi al portafoglio bloccati (%s)", sum(blocked.values()), ", ".join(sorted(blocked)))
+            run.problem(f"{sum(blocked.values())} accessi al portafoglio bloccati dalla protezione MARKET-ONLY")
+        run.finish(datetime.now(ET), session=last_closed_session())
+    except BaseException as e:
+        run.abort(datetime.now(ET), e)
+        raise
+    log.info("daily job done in %.0fs%s", time.time() - t0, " (market-only)" if market_only else "")
+
+
+def _bars_note():
+    """Last daily bar of the benchmark (QQQ), for the job registry: a date, no personal data."""
+    try:
         with store.lock:
-            snap, infos = store.snapshot, dict(store.infos)
-        history.record(portfolio.snapshot(snap, infos))
-    except Exception as e:                               # only the kind of error: never positions or values in the log
-        log.error("evening job: portfolio picture not saved (%s); the public diaries go on", type(e).__name__)
-    save_signal_diary()
-    try:                                                 # phase 6B: ETF closes (in this process: no thread) and scan diary
-        import etf_catalog
-        import etf_prices
-        if etf_prices.due(etf_prices.load(), datetime.now(ROME_TZ)):
-            etf_prices.save(etf_prices.build(download, etf_catalog.load()))
+            bench = store.daily.get(SIGNAL_BENCH)
+        return f"ultima barra QQQ {bench['Close'].dropna().index[-1].date()}" if bench is not None and len(bench) else "storico QQQ assente"
     except Exception:
-        log.exception("ETF prices not updated by the evening job")
-    save_etf_scan_diary(source="job serale")
-    # Phase 7C: the opportunity chain AFTER the ETF closes of the day: its last step (decision diary) records the ETF
-    # rows only with the ETF scanner on the same session; before, with the dashboard closed, they were always missing.
-    log.info("job serale: %s", save_opportunity_diary(source="job serale"))
-    save_etf_scan_diary(source="job serale")            # idempotent: only if the diary file did not exist before
-    log.info("job serale: %s", save_alerts(source="job serale"))   # phase 8A: after the five diaries
-    save_etf_diary(wait=True)
-    for _ in range(60):                                  # positions diary: wait for the 2 years of prices (risk.py)
-        import pos_diary
-        save_pos_diary()
-        if pos_diary.exists(last_closed_session()) or last_closed_session() != datetime.now(ET).date().isoformat():
-            break
-        time.sleep(5)
-    now = datetime.now(ET)
-    rid = f"{now:%Y-%m-%d}_close"
-    after_close = now.hour * 60 + now.minute >= market_calendar.close_minute(now)
-    if market_calendar.is_trading_day(now.date()) and after_close and rid not in signals.list_reports():
-        signals.run(notify_user=False)                   # the evening report, only once the session is closed
-    log.info("daily job done in %.0fs", time.time() - t0)
+        return None
 
 
 def save_signal_diary():
@@ -1189,7 +1243,7 @@ def movers_why(n=8):
 app = Flask(__name__, static_folder=None)
 # version of the code that serves the page: change it together with PAGE_VERSION in static/app.js whenever the data
 # sent to the page changes, so that a server left running with old code is noticed (the page asks to restart it)
-DASHBOARD_VERSION = "2026-11-06b"
+DASHBOARD_VERSION = "2026-11-06c"
 
 
 @app.route("/")
@@ -2523,8 +2577,47 @@ def api_alerts():
     """Alert e cambiamenti (Phase 8A): read only from the alert registry (mode=ro). Never generates alerts, never writes,
     never downloads, never reads the portfolio."""
     import alert_engine as ae
-    out = ae.read()
+    import opportunity_diary as od
+    out = ae.read(diary_path=od.DB)
     out["lastCheck"] = dict(_alerts_check)
+    resp = _json(out)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+def brief_feeds():
+    """Dates of the updates known to this process (phase 8B): memory and file times only, never a download."""
+    out = {"prices": datetime.fromtimestamp(store.last_daily, ET).isoformat(timespec="seconds") if store.last_daily else None,
+           "fundamentals": None, "etfPrices": None, "alertCheck": dict(_alerts_check)}
+    if not out["prices"]:
+        try:
+            out["prices"] = datetime.fromtimestamp(os.path.getmtime(DAILY_CACHE), ET).isoformat(timespec="seconds")
+        except OSError:
+            pass
+    try:
+        import daily_brief
+        out["fundamentals"] = daily_brief.fundamentals_date()
+    except Exception:
+        pass
+    try:
+        import etf_prices
+        out["etfPrices"] = (etf_prices.load() or {}).get("fetched")
+    except Exception:
+        pass
+    return out
+
+
+@app.route("/api/brief")
+def api_brief():
+    """Riepilogo del giorno + stato del sistema (Phase 8B): read only (alert registry, diaries, job registry). Never
+    generates alerts, never writes, never downloads, never reads the portfolio; no consent needed."""
+    import alert_engine as ae
+    import daily_brief
+    import diaries_status
+    import job_status
+    now = datetime.now(ET)
+    import opportunity_diary as od
+    out = daily_brief.build(now, ae.read(diary_path=od.DB), diaries_status.status(now), job_status.read(), brief_feeds())
     resp = _json(out)
     resp.headers["Cache-Control"] = "no-store"
     return resp

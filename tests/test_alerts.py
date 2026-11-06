@@ -196,7 +196,7 @@ def test_05_price_change_and_assumption_change_shown_separately(diary, reg):
     base = next(x for x in a if x["extra"]["scenario"] == "base")
     c = base["extra"]["causes"]
     assert "effetto sulla distanza 0,0 punti" in c["prezzo"] and "120,00 → 90,00" in c["ipotesi e bilanci"]
-    assert "bilanci della fonte aggiornati" in c["ipotesi e bilanci"]
+    assert "bilanci della fonte riscaricati, stesso periodo" in c["ipotesi e bilanci"]    # 8B: a new download is not new statements
 
 
 def test_05b_unusable_valuation_and_incomplete_data(diary, reg):
@@ -414,7 +414,7 @@ def test_19_isolation_and_authorized_writers_only(diary):
     job = src[src.index("def run_daily_job"):src.index("def save_signal_diary")]
     assert "save_alerts()" in loop and job.index('save_opportunity_diary(source="job serale")') < job.index('save_alerts(source="job serale")')
     api = src[src.index("def api_alerts"):src.index("def update_opportunity_diary_offline")]
-    assert "ae.generate" not in api and "save_alerts" not in api and "ae.read()" in api
+    assert "ae.generate" not in api and "save_alerts" not in api and "ae.read(diary_path=od.DB)" in api
 
 
 def test_20_no_personal_portfolio_and_no_external_notification(diary, reg, monkeypatch):

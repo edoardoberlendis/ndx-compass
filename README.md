@@ -1191,6 +1191,52 @@ pubblici di azioni ed ETF. Informativi e verificabili: nessuna previsione, nessu
   viene registrato col solo tipo); gli alert si generano dopo i diari.
 - Test in `tests/test_alerts.py` (diari, catalogo e registro sintetici).
 
+## Riepilogo del giorno e job MARKET-ONLY (Fase 8B)
+
+Scheda **Alert** → «Riepilogo del giorno» (prima sotto-pagina) e job serale che aggiorna **solo i dati pubblici**.
+
+- **Modalità MARKET-ONLY** (`.venv/bin/python daily_job.py --market-only`, stesso codice del job serale:
+  `server.run_daily_job(market_only=True)`): prezzi, analisi pubbliche di azioni ed ETF, i cinque diari prospettici
+  (opportunità, fondamentali, valutazioni, scanner ETF, decisioni), gli alert e il report pubblico della sera. **Mai**:
+  portafoglio, import Fineco, fotografia del giorno, `flussi.json`, diario dei segnali, diario ETF personale, diario
+  delle posizioni. La protezione `app_env.enable_market_only()` si accende **prima di ogni import**: da lì ogni
+  apertura, elenco, connessione SQLite o modifica di un file in `portafoglio/` viene bloccata prima che avvenga
+  (`PrivateAccessBlocked`) e contata (solo il tipo di operazione, mai il nome del file). Gli import dei 48 moduli non
+  toccano `portafoglio/` (test). Il job completo (`daily_job.py` senza opzioni) resta com'era.
+- **Programmazione** (solo su tua richiesta, mai da Claude), con etichetta separata `com.nasdaq100.market` che non
+  installa, sostituisce o rimuove i job personali:
+  ```bash
+  ./schedule.sh install-market   # job MARKET-ONLY lun–ven alle 23:00 (ora del Mac)
+  ./schedule.sh status-market    # installato o no, orari e argomenti letti da launchd, ultimi giri
+  ./schedule.sh remove-market    # toglie SOLO il job MARKET-ONLY
+  ```
+  Le 23:00 italiane sono sempre almeno un'ora dopo la chiusura NYSE (+20 minuti), anche nelle settimane in cui l'ora
+  legale USA ed europea non coincidono (chiusura alle 21:00 italiane) e nei giorni a chiusura anticipata (19:00), e
+  molto prima della fine della finestra di registrazione (04:00 di New York della seduta successiva = 10:00 italiane,
+  09:00 nelle settimane sfasate). Festività NYSE da `market_calendar.py`; Borsa Italiana e Xetra dalla serie di
+  riferimento degli ETF (un giorno festivo non ha barra e non è mai «mancante»).
+- **Mac spento o in stop**: in stop, macOS esegue il giro saltato al risveglio; se il risveglio arriva entro le 04:00 di
+  New York la seduta si registra, dopo è persa per sempre (nessuna registrazione tardiva). Mac spento: il giro salta.
+  Nessun recupero promesso: le sedute perse restano tra le mancanti.
+- **Registro dei giri** `data/job_status.json` (`job_status.py`): avvio, fine, modalità, esito di ogni passo e tipo
+  di errore; un giro iniziato e mai finito è «interrotto». Nessun dato personale; scrittura con lock e file temporaneo.
+- **Riepilogo del giorno** (`daily_brief.py`, `GET /api/brief`, sola lettura, senza consenso): ultima seduta elaborata,
+  stato dei cinque diari, nuovi alert, al massimo **7** cambiamenti importanti della seduta (mai riempiti con altro),
+  ognuno con strumento, cosa è cambiato, prima/dopo, perché, data effettiva dei dati, limiti e link; per il DCF effetto
+  del prezzo ed effetto di ipotesi e bilanci separati; trend ETF sempre esplorativi. «Nessun cambiamento rilevante
+  rilevato nell'ultima seduta elaborata.» solo con il riepilogo aggiornato; altrimenti «Riepilogo non aggiornato» con il
+  motivo. Gli eventi del primo controllo del registro sono **eventi storici rilevati all'attivazione**, a parte. I
+  problemi di dati e aggiornamento sono separati dagli eventi finanziari. Nessun punteggio, nessun compra/vendi.
+- **Date di un alert** tenute distinte (calcolate in lettura, il registro non cambia): periodo di bilancio, annuncio
+  indicato dalla fonte (calendario delle trimestrali di Yahoo, **non verificato**; per gli alert registrati prima della
+  8B letto dal diario dei fondamentali), acquisizione da parte del sistema, rilevazione degli alert, sedute confrontate.
+  Mai «pubblicata oggi»: senza data di pubblicazione il testo è «Nuovi dati acquisiti».
+- **Stato del sistema** (sezione chiusa nel riepilogo): ultimo job completato, ultimo avviato, programmazione, ultima
+  seduta, ultimi prezzi, bilanci e prezzi ETF, ultime registrazioni dei diari (registrate e ammissibili), ultimo
+  controllo degli alert, errori recenti, sedute mancanti, registrazioni escluse, file aperti dal server. Un giorno è
+  completo solo con tutti e cinque i diari.
+- Test in `tests/test_market_only.py` (cartelle sentinella, filesystem temporanei, nessuna rete, nessun launchctl).
+
 ## Da verificare quando il diario avrà almeno 3 mesi di dati
 
 - **"Entra ora"**: togliendo la regola D3 (Fase 21) i titoli con "Entra ora" sono passati da 18 a 33 su 101. Controllare
@@ -1313,6 +1359,7 @@ telefono e punti d'ingresso autorizzati.
 | `static/` | La pagina web (HTML, CSS, JavaScript) |
 | `requirements.txt` | Librerie Python necessarie |
 | `run.sh`, `schedule.sh` | Avvio da Terminale e programmazione del report |
+| `daily_brief.py`, `job_status.py` | Riepilogo del giorno e stato del sistema (sola lettura); registro dei giri del job serale (Fase 8B) |
 | `Nasdaq-100 Monitor.app` | Avvio con doppio clic |
 | `.venv/` | Ambiente Python isolato (si ricrea con `./run.sh`) |
 | `cache/` | Dati temporanei e log del server (si può cancellare) |
