@@ -122,8 +122,17 @@ def read_cache(name, ttl):
 
 
 def write_cache(name, data):
-    with open(os.path.join(CACHE_DIR, name), "w") as f:
-        json.dump(data, f)
+    """Atomic (Phase 7C): written to a temporary file of this process, then renamed. A reader in the other process (server
+    and evening job at the same time) sees the old file or the new one, never half a file."""
+    p = os.path.join(CACHE_DIR, name)
+    tmp = f"{p}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(data, f)
+        os.replace(tmp, p)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 def today_et():
@@ -421,8 +430,9 @@ def load_daily_cache():
 
 def save_daily_cache(data):
     try:
-        pd.to_pickle({"v": 1, "saved": time.time(), "data": data}, DAILY_CACHE + ".tmp")
-        os.replace(DAILY_CACHE + ".tmp", DAILY_CACHE)
+        tmp = f"{DAILY_CACHE}.{os.getpid()}.tmp"           # one temporary file per process (server and job together)
+        pd.to_pickle({"v": 1, "saved": time.time(), "data": data}, tmp)
+        os.replace(tmp, DAILY_CACHE)
     except Exception as e:
         log.warning("daily cache not saved (%s)", e)
 
@@ -818,6 +828,12 @@ def run_daily_job():
     store.news_at = time.time()
     store.build()
     macro_calendar.refresh()
+    try:                                                 # Phase 7C: statements as the open dashboard would have them
+        import fundamentals                              # (same rules: only the stocks that need it; synchronous here)
+        fundamentals.refresh(tickers)
+        _inv_invalidate()
+    except Exception:
+        log.exception("fundamentals not updated by the evening job: the diary uses the statements already on disk")
     portfolio.refresh()
     for _ in range(180):                                 # my positions: tickers are matched in the background
         if not portfolio._state["resolving"]:
@@ -828,7 +844,6 @@ def run_daily_job():
         snap, infos = store.snapshot, dict(store.infos)
     history.record(portfolio.snapshot(snap, infos))
     save_signal_diary()
-    save_opportunity_diary(source="job serale")         # phase O2: logs its own errors, the rest of the job goes on
     try:                                                 # phase 6B: ETF closes (in this process: no thread) and scan diary
         import etf_catalog
         import etf_prices
@@ -837,6 +852,10 @@ def run_daily_job():
     except Exception:
         log.exception("ETF prices not updated by the evening job")
     save_etf_scan_diary(source="job serale")
+    # Phase 7C: the opportunity chain AFTER the ETF closes of the day: its last step (decision diary) records the ETF
+    # rows only with the ETF scanner on the same session; before, with the dashboard closed, they were always missing.
+    log.info("job serale: %s", save_opportunity_diary(source="job serale"))
+    save_etf_scan_diary(source="job serale")            # idempotent: only if the diary file did not exist before
     save_etf_diary(wait=True)
     for _ in range(60):                                  # positions diary: wait for the 2 years of prices (risk.py)
         import pos_diary
@@ -1164,7 +1183,7 @@ def movers_why(n=8):
 app = Flask(__name__, static_folder=None)
 # version of the code that serves the page: change it together with PAGE_VERSION in static/app.js whenever the data
 # sent to the page changes, so that a server left running with old code is noticed (the page asks to restart it)
-DASHBOARD_VERSION = "2026-11-05c"
+DASHBOARD_VERSION = "2026-11-06a"
 
 
 @app.route("/")
@@ -1514,6 +1533,18 @@ def api_earnings():
         return jsonify(loading=False, data=_earn["data"])
     earnings.details_async(tickers, daily, anl, lambda d: _earn.update(data=d, key=key))
     return jsonify(loading=True, data=_earn["data"])
+
+
+LOCAL_HOSTS = ("localhost", "127.0.0.1")
+
+
+@app.before_request
+def only_local_host():
+    """Phase 7C: every answer only to a request addressed to localhost / 127.0.0.1. Against DNS rebinding: a site whose
+    name is made to point to 127.0.0.1 would otherwise read the GET answers (e.g. /api/portfolio) as its own; its
+    requests carry its own name in the Host header and are refused here."""
+    if (request.host or "").rsplit(":", 1)[0] not in LOCAL_HOSTS:
+        return jsonify(error="solo da http://localhost o http://127.0.0.1 su questo Mac"), 403
 
 
 @app.after_request
@@ -1877,6 +1908,165 @@ def api_portfolio_risk():
     return app.response_class(json.dumps(risk.snapshot(portfolio.snapshot(snap, infos)), default=clean), mimetype="application/json")
 
 
+# ------------------------------------------------------------ phase 7B: compatibility with the portfolio (portfolio_fit.py)
+# Personal data are used ONLY after an explicit action in the page (POST with "consent": true, from this Mac): opening the
+# Decision Desk or the Compatibilità page never reads the portfolio. Source "mio" = the snapshot portfolio.py already keeps in
+# memory for the Portafoglio tab (no new file read, no copy saved); source "esempio" = a made-up portfolio. Nothing is
+# written, nothing is downloaded, no position is logged or sent outside.
+FIT_KINDS = {"azione": "azione", "azioni": "azione", "etf": "etf", "etc": "etc", "etn": "etn"}
+
+
+def fit_stock_meta(snap, infos):
+    """Public data of the Nasdaq-100 stocks (sector, country, listing currency) for the composition of a stock."""
+    return {r["ticker"]: {"sector": r.get("sector"), "country": (infos.get(r["ticker"]) or {}).get("country"), "currency": "USD",
+                          "name": r.get("name")} for r in (snap or {}).get("stocks", [])}
+
+
+def fit_book(source, snap, infos):
+    """(book, reason): the positions to analyse. "mio" reads only the in-memory snapshot of portfolio.py."""
+    import portfolio_fit as pfit
+    as_of = today_et()
+    if source == "esempio":
+        return pfit.demo_book(as_of), None
+    pf = portfolio.snapshot(snap, infos)
+    if not pf.get("file"):
+        return None, "nessun export del portafoglio in portafoglio/: il Decision Desk resta utilizzabile senza questa analisi"
+    if pf.get("error"):
+        return None, "export del portafoglio non leggibile: controlla la scheda Portafoglio"
+    if pf.get("resolving"):
+        return None, "posizioni ancora in caricamento: riprova tra poco"
+    if not pf.get("positions"):
+        return None, "portafoglio vuoto"
+    quoted = datetime.fromtimestamp(pf["quotesAt"], ET).date().isoformat() if pf.get("quotesAt") else None
+    filed = datetime.fromtimestamp(pf["fileTime"], ET).date().isoformat() if pf.get("fileTime") else None
+    out = []
+    for i, p in enumerate(pf["positions"], 1):
+        kind = (p.get("kind") or "").strip().lower()
+        raw = {"id": f"p{i}", "name": p.get("name"), "isin": p.get("isin"), "ticker": p.get("ticker"),
+               "kind": FIT_KINDS.get(kind, "azione" if kind.startswith("azion") else kind), "value": p.get("value"),
+               "valueCurrency": "EUR", "priceDate": quoted if p.get("live") else filed,
+               "conversionNote": (f"valore in euro di portfolio.py ({'prezzo e cambio di Yahoo' if p.get('live') else 'prezzo e cambio del file Fineco'})"
+                                  if (p.get("currency") or "EUR").upper() != "EUR" else None)}
+        if kind.startswith("azion"):
+            for k in ("sector", "country"):
+                if p.get(k) and p[k] not in ("Non disponibile", "Non classificato", portfolio.LOOK_THROUGH_NDX):
+                    raw[k] = p[k]
+            raw["currency"] = (p.get("currency") or "").upper() or None
+        out.append(raw)
+    fx = {"USD": {"rate": pf["fx"], "date": quoted, "source": "Yahoo EURUSD=X (quotazioni del portafoglio)"}} if pf.get("fx") else {}
+    return {"asOf": as_of, "fx": fx, "positions": out, "source": "mio"}, None
+
+
+def fit_series(norm, daily):
+    """EUR price series already in memory or in the public cache (never a download): ETFs from cache/etf_prices.pkl,
+    stocks only when the 2-year EUR/USD series of the Rischio page is already loaded today."""
+    import etf_prices
+    import risk
+    closes = (etf_prices.load() or {}).get("closes") or {}
+    with risk._lock:
+        fresh = risk._hist["day"] == datetime.now().date()
+        usd = (risk._hist["closes"] or {}).get(portfolio.FX) if fresh else None
+    out = {}
+    for x in norm["positions"]:
+        if x["isin"] and x["isin"] in closes:
+            out[x["id"]] = closes[x["isin"]]
+        elif x["class"] == "azione" and x.get("ticker") in daily and usd is not None:
+            c = daily[x["ticker"]]["Close"].dropna()
+            c.index = c.index.tz_localize(None) if getattr(c.index, "tz", None) else c.index
+            u = usd.copy()
+            u.index = u.index.tz_localize(None) if getattr(u.index, "tz", None) else u.index
+            out[x["id"]] = (c / u.reindex(c.index, method="ffill")).dropna()
+    return out
+
+
+def fit_candidate(ref, snap, catalog):
+    """A candidate from a Decision Desk row id ("azione:ADBE:lungo", "etf:sanita_mondo:lungo"), a ticker or an ISIN,
+    with its D2 state (read only, never changed)."""
+    import investment_decision_engine as de
+    d2 = None
+    try:
+        data = decisions()
+        row = de.detail(data, ref) if data and isinstance(ref, str) else None
+    except Exception:
+        row = None
+    if row:
+        d2 = {"state": row["state"], "rule": row["rule"], "version": data["version"], "horizon": row["horizonLabel"]}
+    kind, key = (ref.split(":")[:2] + [None])[:2] if isinstance(ref, str) and ":" in ref else (None, ref)
+    names = {r["ticker"]: r.get("name") for r in (snap or {}).get("stocks", [])}
+    items = (catalog or {}).get("items") or {}
+    if kind == "azione" or (kind is None and key in names):
+        return {"kind": "azione", "ticker": key, "name": names.get(key) or key}, d2
+    if kind == "etf":
+        isin = (row or {}).get("code") if row and row.get("code") in items else next(
+            (i for i, e in items.items() if (e.get("classification") or {}).get("exposure") == key), None)
+        return ({"kind": "etf", "isin": isin} if isin else None), d2
+    if key in items:
+        return {"kind": "etf", "isin": key}, d2
+    return None, d2
+
+
+def fit_choices(snap, catalog):
+    stocks = [{"ref": r["ticker"], "label": f"{r['ticker']} · {r.get('name') or ''}"} for r in sorted((snap or {}).get("stocks", []), key=lambda r: r["ticker"])]
+    etfs = [{"ref": i, "label": f"{(e['identity'].get('name') or {}).get('v') or i} · {i}"} for i, e in sorted(((catalog or {}).get("items") or {}).items(),
+            key=lambda kv: ((kv[1]['identity'].get('name') or {}).get('v') or ""))]
+    return stocks + etfs
+
+
+@app.route("/api/portfolio/fit", methods=["POST"])
+def api_portfolio_fit():
+    """Compatibilità con il portafoglio (phase 7B). Only after an explicit action in the page; read only; personal data
+    never cached, logged or sent anywhere."""
+    import etf_catalog
+    import portfolio_fit as pfit
+    if not local_request():
+        return jsonify({"error": "solo dalla dashboard su questo Mac"}), 403
+    body = request.get_json(silent=True) or {}
+    if body.get("consent") is not True:
+        return jsonify({"error": "serve un'azione esplicita: «Analizza compatibilità con il mio portafoglio»"}), 400
+    source = body.get("source") if body.get("source") in ("mio", "esempio") else None
+    if not source:
+        return jsonify({"error": "fonte non valida (mio o esempio)"}), 400
+    try:
+        with store.lock:
+            snap, infos, daily = store.snapshot, dict(store.infos), store.daily
+        catalog = etf_catalog.load()
+        out = {"version": pfit.VERSION, "source": source,
+               "sourceLabel": "il mio portafoglio (solo in memoria, sola lettura)" if source == "mio" else
+                              "portafoglio di esempio (valori inventati, nessun dato personale)",
+               "disclaimer": pfit.DISCLAIMER, "choices": fit_choices(snap, catalog)}
+        book, why = fit_book(source, snap, infos)
+        if book is None:
+            resp = _json(dict(out, available=False, why=why))
+        else:
+            meta = fit_stock_meta(snap, infos)
+            limits = body.get("limits") if isinstance(body.get("limits"), dict) else None
+            norm = pfit.normalize(book, catalog)
+            an = pfit.analyse(norm, meta, limits, fit_series(norm, daily))
+            out.update(available=True, analysis=an,
+                       positions=[{"id": p["id"], "name": p["name"]} for p in an["positions"]])
+            if body.get("candidate"):
+                cand, d2 = fit_candidate(body["candidate"], snap, catalog)
+                if cand is None:
+                    out["compatError"] = "candidato non riconosciuto (né titolo del Nasdaq-100 né ETF del catalogo)"
+                else:
+                    out["compat"] = pfit.compatibility(an, norm, cand, catalog, meta, d2)
+                    w = body.get("whatif")
+                    if isinstance(w, dict) and w.get("amount") is not None:
+                        try:
+                            amount = float(w["amount"])
+                        except (TypeError, ValueError):
+                            amount = None
+                        out["whatif"] = pfit.simulate(book, catalog, cand, amount, w.get("currency") or "EUR",
+                                                      w.get("funding") or "nuova", w.get("reduce"), meta, limits) if amount else \
+                            {"ok": False, "why": "importo ipotetico non valido"}
+            resp = _json(out)
+    except Exception as e:                      # never the content in the log: only the kind of error
+        log.error("portfolio fit failed (%s)", type(e).__name__)
+        resp = _json({"error": "analisi di compatibilità non calcolabile"}, 500)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 @app.route("/api/rules", methods=["POST"])
 def api_rules():
     """Save my risk per trade in portafoglio/regole.json (only from the dashboard open on this Mac)."""
@@ -1896,11 +2086,13 @@ def api_rules():
 
 def local_request():
     """True only for a request made on this Mac by the dashboard's own page. The server already listens on 127.0.0.1
-    only; the Host/Origin check and the custom header also stop another site open in the browser from posting here."""
+    only; the Host/Origin check and the custom header also stop another site open in the browser from posting here
+    (the custom header forces a CORS preflight that this server never approves). Phase 7C: the Origin, when the
+    browser sends it, must be exactly the dashboard's own (same host and port), not any local port."""
     host = (request.host or "").rsplit(":", 1)[0]
     origin = request.headers.get("Origin")
-    return (request.remote_addr in ("127.0.0.1", "::1") and host in ("localhost", "127.0.0.1")
-            and (origin is None or re.fullmatch(r"http://(localhost|127\.0\.0\.1)(:\d+)?", origin) is not None)
+    return (request.remote_addr in ("127.0.0.1", "::1") and host in LOCAL_HOSTS
+            and (origin is None or origin == f"http://{request.host}")
             and request.headers.get("X-Requested-With") == "ndx-dashboard")
 
 
@@ -2235,6 +2427,7 @@ def save_opportunity_diary(source="dashboard"):
     (data/opportunita.sqlite3), never portafoglio/. Any failure is logged and never stops the price refresh.
     Returns a short text of what happened (for the manual command and the log)."""
     try:
+        import diaries_status
         import opportunity_diary as od
         import opportunity_scanner
         import technical  # local import: technical imports this module
@@ -2247,7 +2440,14 @@ def save_opportunity_diary(source="dashboard"):
         if bench is None or not len(bench):
             return "storico dei prezzi non ancora caricato"
         msg = "seduta già registrata"
-        if not od.exists(day, opportunity_scanner.MODEL_VERSION):
+        until = diaries_status.recordable_until(day)
+        if until is not None and now >= until:
+            # Phase 7C: between the next close and close + 20 minutes `day` is still the last closed session, but its
+            # window ended at the pre-market: no diary of the chain records it any more (on 5 Nov 2026 16:00 ET the
+            # decisions of 4 Nov had been recorded with the statements of 5 Nov). Matured results are still measured.
+            msg = (f"seduta {day}: finestra di registrazione chiusa alle {until:%H:%M} di New York del {until.date()}: "
+                   "nessuna registrazione retroattiva")
+        elif not od.exists(day, opportunity_scanner.MODEL_VERSION):
             last_bar = str(bench["Close"].dropna().index[-1].date())
             if last_bar != day:
                 return f"lo storico dei prezzi arriva al {last_bar}, non ancora alla seduta {day}: nuovo tentativo più tardi"
@@ -2259,9 +2459,10 @@ def save_opportunity_diary(source="dashboard"):
             saved, msg = od.record(data, day, now.isoformat(timespec="seconds"), source)
             if saved:
                 log.info("opportunity diary: %s for %s (%s)", msg, day, source)
-        msg += "; " + save_investment_diary(day, now, source)
-        msg += "; " + save_valuation_diary(day, now, source)
-        msg += "; " + save_decision_diary(day, now, source)
+        if until is None or now < until:
+            msg += "; " + save_investment_diary(day, now, source)
+            msg += "; " + save_valuation_diary(day, now, source)
+            msg += "; " + save_decision_diary(day, now, source)
         if _od["measured"] != day:
             closed = technical.closed_sessions(daily, now)
             new = od.update_outcomes({t: od.as_map(df["Close"]) for t, df in closed.items() if t != SIGNAL_BENCH},

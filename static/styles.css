@@ -1082,3 +1082,15 @@ button.cat-chip { cursor: pointer; font: inherit; font-size: var(--fs-xs); }
 .dk-tbl tr.sel td { background: var(--surface-2); }
 .dk-tbl td.small { min-width: 160px; }
 @media (max-width: 760px) { .dk-tbl td.small { min-width: 140px; } }
+
+/* phase 7B: compatibility with the portfolio */
+.fit-tbl td.l, .fit-tbl th.l { white-space: normal; }
+.fit-form { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-end; }
+.fit-form label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fit-form input, .fit-form select, .fit-lim { max-width: 100%; min-width: 0; padding: 4px 6px; border: 1px solid var(--line, #ccc); border-radius: 6px; background: var(--bg, transparent); color: inherit; font: inherit; }
+.fit-form input[list] { width: 260px; max-width: 100%; }
+.fit-lim { width: 64px; }
+
+/* Phase 7C: what the risk figures cover, before the figures */
+.fit-scope { border-left: 3px solid var(--line, #8884); padding: 2px 0 2px 10px; margin: 4px 0 8px; }
+.fit-scope.partial { border-left-color: var(--warn, #c98a00); }

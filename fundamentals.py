@@ -281,9 +281,10 @@ def refresh(tickers, force=False, now=None, path=None):
            "firstSeen": first_seen(c.get("firstSeen"), new, now.date().isoformat())}
     path = path or CACHE
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path + ".tmp", "w") as f:
+    tmp = f"{path}.{os.getpid()}.tmp"      # Phase 7C: one temporary file per process (server and evening job together)
+    with open(tmp, "w") as f:
         json.dump(out, f, default=str)
-    os.replace(path + ".tmp", path)
+    os.replace(tmp, path)
     log.info("fundamentals: %d of %d stocks downloaded in %.1fs", len(new), len(tickers), time.time() - t0)
     return {"downloaded": len(new), "requested": len(todo), "total": len(tickers), "seconds": round(time.time() - t0, 1)}
 

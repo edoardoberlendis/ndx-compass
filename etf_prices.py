@@ -219,7 +219,7 @@ def load(path=None):
 def save(data, path=None):
     path = path or CACHE
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
+    tmp = f"{path}.{os.getpid()}.tmp"     # Phase 7C: one temporary file per process (server and evening job together)
     with open(tmp, "wb") as f:
         pickle.dump(data, f)
     os.replace(tmp, path)

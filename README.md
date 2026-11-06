@@ -1085,6 +1085,80 @@ pagina con il loro codice), mai da una somma di punteggi:
 - Nessun dato del portafoglio (compatibilità con il portafoglio: Fase 7B). Test in `tests/test_decision_engine.py` e
   `tests/test_decision_d2.py`.
 
+## Compatibilità con il portafoglio (Fase 7B)
+
+Portafoglio → **Compatibilità** (e un riepilogo nella scheda di ogni riga del Decision Desk). `portfolio_fit.py` (modello
+**P1**, funzioni pure: nessun file letto, nessun download, nessuna scrittura) descrive come un'azione o un ETF cambierebbe la
+composizione di un portafoglio. È un giudizio **separato** dal Decision Desk: lo stato D2 resta quello che è (una riga «Da
+approfondire» può essere poco compatibile; una riga poco interessante non diventa interessante perché diversifica).
+Nessun punteggio unico, nessuna indicazione di acquisto o vendita, nessun ordine, nessuna probabilità, nessun VaR.
+
+- **Attivazione esplicita**: aprire il Decision Desk o la pagina Compatibilità non legge il portafoglio. Solo i pulsanti
+  «Analizza compatibilità con il mio portafoglio» o «Usa un portafoglio di esempio» chiamano `POST /api/portfolio/fit` con
+  `consent: true`, dalla pagina della dashboard su questo Mac (`local_request`; GET = 405, senza consenso = 400). «Mio» usa
+  la fotografia che `portfolio.py` tiene già in memoria per la scheda Portafoglio (nessuna nuova lettura dell'export,
+  nessuna copia, niente nei diari, risposta `Cache-Control: no-store`, nei log solo il tipo di errore). «Esempio» è un
+  portafoglio inventato su strumenti pubblici (`portfolio_fit.demo_book`). Nei test e nell'anteprima la cartella
+  `portafoglio/` è una cartella temporanea vuota: «mio» risponde «nessun export», «esempio» funziona.
+- **Normalizzazione**: azioni, ETF UCITS (ISIN del catalogo), ETC/ETN, liquidità, strumenti non identificati (mai una
+  corrispondenza inventata). Le quotazioni dello stesso ISIN diventano un solo strumento; un ETF senza ISIN si riconosce
+  dal ticker del catalogo; società con più titoli o ADR si uniscono per nome normalizzato (`etf_holdings.company_key`).
+  Valute: mai sommate senza un cambio dichiarato (tasso, data, fonte); senza cambio il valore resta fuori dai totali con il
+  motivo; prezzo o cambio con più di 5 giorni = valore «indicativo».
+- **Composizione**: classe, settore, paese delle società, valuta **economica** (dai paesi dei titoli, stima; o copertura
+  dichiarata), con la qualità del dato (osservato, stima, non disponibile). La valuta di negoziazione di un ETF non è la sua
+  esposizione. «Non classificato» e «altri (non dettagliati)» restano visibili: nessun 100% costruito ripartendo i mancanti.
+  Settori di azioni (ICB/Yahoo) ed ETF (justETF) confrontati in modo indicativo.
+- **Sovrapposizioni (look-through)**: il valore di un ETF è ripartito tra i titoli noti (primi 10 del catalogo, con la
+  data), mai sommato una seconda volta; la parte oltre i titoli noti resta «non analizzabile» (mai zero). Esposizione a una
+  società = diretta + dentro gli ETF, «limite inferiore» quando i titoli sono solo i primi 10. Sovrapposizione nota tra due
+  ETF = somma dei pesi minimi dei titoli in comune. Controllo: analizzato + oltre i titoli noti + senza dati + non
+  azionario = 100%.
+- **Concentrazione**: pesi, prime 5 e 10, numero equivalente di posizioni (1 ÷ Σ pesi²), società, settori, paesi, valuta
+  principale, gestori dei fondi. Nessuna soglia: «oltre il limite» solo contro limiti personali impostati nella pagina
+  (non salvati); senza limiti «non configurato».
+- **Rischio**: volatilità, massima perdita e correlazioni settimanali con i pesi di oggi, solo con almeno 126 sedute in euro
+  allineate (altrimenti «Non calcolabile con affidabilità sufficiente»); serie solo da memoria o cache (ETF:
+  `cache/etf_prices.pkl`; azioni: solo se la pagina Rischio ha già caricato oggi il cambio EUR/USD giornaliero). Duration
+  solo sulla parte obbligazionaria con dato. Ipotesi deterministiche (azioni −10% e −20%, tassi +1 punto, dollaro −10%):
+  non previsioni.
+- **Compatibilità di un candidato** (descrizioni verificabili con codice): C-P1 già presente direttamente, C-P2 esposizione
+  equivalente, C-I1 esposizione indiretta già presente, C-O1 sovrapposizione con le società detenute, C-S1/C-G1/C-V1/C-A1
+  aumento della concentrazione (la voce più pesante pesa di più nel candidato), C-N1/C-N2/C-N3/C-N4 nuova esposizione,
+  C-D1 dati insufficienti.
+- **Simulatore**: importo, valuta (convertita solo con cambio noto), finanziamento con nuova liquidità, liquidità già
+  presente (solo se nota e sufficiente) o riduzione di una posizione scelta; prima e dopo, differenze, rischi aggiuntivi,
+  limiti personali, dati mancanti. Non è un ordine, non modifica nulla, non viene salvato.
+- Test in `tests/test_portfolio_fit.py` (portafogli, catalogo e prezzi inventati).
+
+## Messa in esercizio e affidabilità dei diari (Fase 7C)
+
+Nessun nuovo modello: solo controlli e correzioni per l'uso quotidiano.
+
+- **Finestra di registrazione**: una seduta NYSE si registra (opportunità, analisi fondamentale, valutazioni, decisioni)
+  solo dalla chiusura + 20 minuti fino alle 04:00 di New York della seduta successiva (`diaries_status.recordable_until`).
+  Prima della 7C, tra le 16:00 e le 16:20 del giorno dopo la seduta precedente risultava ancora «ultima chiusa» e la catena
+  poteva registrarla in ritardo: così il 5 novembre 2026 alle 16:00 ET il diario delle decisioni ha registrato il 4 novembre
+  con i bilanci del 5. Ora `server.save_opportunity_diary` rifiuta ogni seduta fuori finestra («nessuna registrazione
+  retroattiva»). Le registrazioni tardive già presenti (opportunità 3 nov, decisioni 4 nov) **restano nel file come sono**:
+  `diaries_status.py` le segnala con una nota («registrata in ritardo»), senza cambiarle né toglierle.
+- **Job serale senza dashboard** (`daily_job.py`): aggiorna anche i bilanci (stesse regole della dashboard) e scarica i prezzi
+  ETF **prima** della catena dei diari, così le decisioni della sera hanno anche le righe ETF. I file di cache sono scritti
+  in modo atomico con un file temporaneo per processo (server e job insieme non si leggono mai un file a metà).
+- **Installazione** (solo su tua richiesta, mai da Claude): `./schedule.sh install` installa due LaunchAgent dell'utente
+  (`com.nasdaq100.signals` lun–ven 08:30, `com.nasdaq100.daily` lun–ven 22:45 ora del Mac). Verifica:
+  `./schedule.sh status` e `.venv/bin/python diaries_status.py`; log in `reports/logs/`. Rimozione: `./schedule.sh remove`.
+  Mac in stop alle 22:45: macOS esegue il job al risveglio (se è dopo le 04:00 di New York del giorno dopo, la seduta è persa
+  e non viene ricostruita); Mac spento: quella sera salta.
+- **Sicurezza della dashboard**: ogni risposta solo a richieste indirizzate a `localhost` / `127.0.0.1` (contro il «DNS
+  rebinding», anche per le pagine GET come `/api/portfolio`); le richieste che modificano o leggono dati personali con POST
+  (`local_request`) vogliono l'origine esatta della dashboard (stesso host e porta), l'intestazione `X-Requested-With:
+  ndx-dashboard` (che obbliga il browser a una verifica CORS mai approvata) e, per il Portfolio Fit, `consent: true`.
+- **Rischio parziale**: la scheda Rischio della Compatibilità dice prima dei numeri quale parte è coperta dalle serie
+  storiche (% del portafoglio e della parte investita), quale no, la liquidità esclusa e le posizioni senza valore in euro;
+  con copertura incompleta il titolo è «Rischio parziale» e le statistiche sono «della sola parte coperta». Formule invariate.
+- Test in `tests/test_environment_safety.py`, `tests/test_opportunity_diary.py`, `tests/test_portfolio_fit.py` (sezioni 7C).
+
 ## Da verificare quando il diario avrà almeno 3 mesi di dati
 
 - **"Entra ora"**: togliendo la regola D3 (Fase 21) i titoli con "Entra ora" sono passati da 18 a 33 su 101. Controllare
@@ -1187,6 +1261,7 @@ telefono e punti d'ingresso autorizzati.
 | `etf_opportunity_diary.py` | Diario dello scanner ETF (tabelle nuove in `data/opportunita.sqlite3`, immutabili) |
 | `investment_decision_engine.py` | Decision Desk (Fase 7A, versione D2): stati trasparenti da T1–T5, Pagella, F1, V2 ed E2, senza ricalcolarli |
 | `decision_diary.py` | Diario prospettico delle decisioni (Fase 7A), tabelle `dec_runs`/`dec_observations` |
+| `portfolio_fit.py` | Compatibilità con il portafoglio (Fase 7B, P1): look-through, concentrazioni, valute, simulatore ipotetico |
 | `app_env.py` | Ambienti produzione/test/anteprima, autorizzazione degli scrittori dei diari, guardia e isolamento (Fase 6C) |
 | `diaries_status.py` | Stato dei cinque diari in sola lettura (Fase 6C, decisioni dalla D2); `/api/diaries/status` |
 | `preview.py` | Anteprima isolata della dashboard sulla porta 8101 (Fase 6C) |

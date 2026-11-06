@@ -168,7 +168,7 @@ function spark(values, w = 80, h = 22, base = null, color = null) {
 
 // ------------------------------------------------------------ data
 // must equal DASHBOARD_VERSION in server.py: otherwise the server runs old code and the page says so
-const PAGE_VERSION = "2026-11-05c";
+const PAGE_VERSION = "2026-11-06a";
 async function load() {
   const r = await fetch("/api/snapshot", { cache: "no-store" });
   const sv = r.headers.get("X-Dashboard-Version");
@@ -224,7 +224,8 @@ function renderAll() {
   if (state.view === "opps") loadOpps();
   if (state.view === "overview") renderOverview();
   if (state.view === "watch") renderMyStocks();
-  if (PF_SUBS.includes(state.view)) loadPortfolio();
+  if (PF_SUBS.includes(state.view) && state.view !== "pffit") loadPortfolio();   // pffit: nothing personal until a click
+  if (state.view === "pffit") renderFit();
   if (state.view === "screener") renderScreener();
   if (state.view === "sectors") renderSectors();
   if (state.view === "sectors") loadRotation();
@@ -3683,6 +3684,7 @@ function dkDetailHTML() {
     ${ch("verifica").length ? `<h4>Da verificare</h4><ul class="why small">${li(ch("verifica"))}</ul>` : ""}
     ${o.kind === "azione" && o.horizon === "lungo" ? `<p class="muted small">I livelli del DCF sono soglie per una nuova analisi, non prezzi ai quali un acquisto è conveniente.</p>` : ""}
     ${prod}
+    ${dkFitHTML(o)}
     <h3>Dati</h3><p class="small">Qualità dei dati: <b>${esc(o.dataQuality)}</b>. Date: ${Object.entries(o.dates).map(([k, v]) => `${esc(DK_DATES[k] || k)} ${esc(dayIT(String(v).slice(0, 10)))}`).join(" · ") || "n.d."}.</p>
     ${o.missing.length ? `<h4>Dati mancanti</h4><ul class="why small">${li(o.missing)}</ul>` : ""}
     ${o.notes.length ? `<h4>Note</h4><ul class="why small">${li(o.notes)}</ul>` : ""}
@@ -3871,6 +3873,183 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape" && (state.detail || state.macro || state.panel)) closeDetail();
 });
 
+// ------------------------------------------------------------ Compatibilità con il portafoglio (phase 7B, portfolio_fit.py)
+// Nothing personal is requested until the user presses a button: "mio" uses the portfolio already in the server's memory
+// (read only), "esempio" a made-up one. Results stay in this page's memory only (never saved, never sent elsewhere).
+const FIT = { source: null, data: null, loading: false, err: null, cand: "", amount: "", currency: "EUR", funding: "nuova", reduce: "", limits: {}, sim: null, simErr: null };
+const FIT_SRC = { mio: "il mio portafoglio", esempio: "il portafoglio di esempio" };
+const FIT_Q = q => Object.entries(q || {}).map(([k, v]) => `${k} ${fNum(v, 0)}%`).join(", ");
+async function fitRequest(source, extra = {}) {
+  return pfPost("/api/portfolio/fit", { headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ consent: true, source, limits: FIT.limits, ...extra }) });
+}
+async function loadFit(source) {
+  FIT.source = source; FIT.loading = true; FIT.err = null; FIT.sim = null; FIT.simErr = null; renderFit();
+  try { FIT.data = await fitRequest(source); } catch (e) { FIT.err = e.message || "server non raggiungibile"; FIT.data = null; }
+  FIT.loading = false; renderFit();
+}
+async function runFitSim() {
+  if (!FIT.cand) { FIT.simErr = "scegli uno strumento"; renderFit(); return; }
+  FIT.simErr = null; FIT.sim = "loading"; renderFit();
+  try {
+    const d = await fitRequest(FIT.source, { candidate: FIT.cand, whatif: FIT.amount ? { amount: Number(String(FIT.amount).replace(",", ".")), currency: FIT.currency, funding: FIT.funding, reduce: FIT.reduce || null } : null });
+    FIT.sim = d.available ? { compat: d.compat, whatif: d.whatif, err: d.compatError } : null;
+    if (!d.available) FIT.simErr = d.why;
+  } catch (e) { FIT.sim = null; FIT.simErr = e.message; }
+  renderFit();
+}
+const fitRows = (rows, n = 8) => rows.slice(0, n).map(r => `<tr><td class="l">${esc(r.label)}</td><td>${fNum(r.pct, 1)}%</td><td class="l small muted">${esc(FIT_Q(r.quality))}</td></tr>`).join("");
+function fitTable(title, rows, sub) {
+  return `<div><h4>${title}</h4><div class="table-wrap"><table class="scr fit-tbl"><thead><tr><th class="l">Voce</th><th>Peso</th><th class="l">Qualità del dato</th></tr></thead><tbody>${fitRows(rows, 10)}</tbody></table></div>${sub ? `<p class="muted small">${esc(sub)}</p>` : ""}</div>`;
+}
+function fitCompatHTML(c, compact) {
+  if (!c) return "";
+  const li = a => a.map(x => `<li>${esc(typeof x === "string" ? x : x.text)}</li>`).join("");
+  const d2 = c.d2 ? `<p class="small">Stato del Decision Desk ${esc(c.d2.version)}: <b>${esc(c.d2.state)}</b> (regola ${esc(c.d2.rule)}, ${esc(c.d2.horizon)}): <span class="muted">${esc(c.separate)}</span></p>` : "";
+  const pres = c.present?.direct ? `Sì, direttamente: ${fNum(c.present.weight, 1)}% (${esc(c.present.how)})` : "No, non direttamente";
+  const ind = c.indirect ? (isNum(c.indirect.pct) ? `${fNum(c.indirect.pct, 2)}% tramite ${esc(c.indirect.via.map(v => v.fund).join(", "))} (${esc(c.indirect.kind)})` : esc(c.indirect.text || "non determinabile")) : (c.candidate.class === "azione" ? "nessuna tra i titoli noti degli ETF" : "—");
+  const ov = c.overlap ? `${c.overlap.common.length} società in comune, ${fNum(c.overlap.sharedPct, 1)}% del fondo su ${fNum(c.overlap.candidateKnownPct, 1)}% noto${c.overlap.date ? " (composizione del " + esc(dayIT(c.overlap.date)) + ")" : ""}` : null;
+  const st = d => (c.strengthen[d] || []).slice(0, 4).map(r => `${esc(r.label)} (${fNum(r.candidate, 0)}% nel candidato, ${fNum(r.portfolio, 1)}% oggi)`).join(", ") || "nessuna";
+  const nw = d => (c.new[d] || []).slice(0, 4).map(r => esc(r.label)).join(", ") || "nessuna";
+  const lim = c.limits.configured ? c.limits.rows.filter(r => r.limit != null).map(r => `${esc(r.label)}: ${esc(r.state)} (${fNum(r.observed, 1)}% / limite ${fNum(r.limit, 1)}%)`).join("; ") : esc(c.limits.text);
+  return `${d2}<ul class="why small">${c.tags.length ? li(c.tags) : "<li>Nessuna sovrapposizione o concentrazione rilevata con i dati disponibili.</li>"}</ul>
+    ${compact ? "" : `<div class="table-wrap"><table class="scr fit-tbl"><tbody>
+      <tr><td class="l">1. È già presente?</td><td class="l">${pres}${c.equivalent.length ? `; esposizione equivalente: ${esc(c.equivalent.map(e => e.name + " (" + e.how + ")").join(", "))}` : ""}</td></tr>
+      <tr><td class="l">2–3. Esposizione diretta / indiretta</td><td class="l">${c.present?.direct ? fNum(c.present.weight, 1) + "%" : "0%"} / ${ind}${ov ? "; sovrapposizione: " + ov : ""}</td></tr>
+      <tr><td class="l">4. Rafforzerebbe</td><td class="l">settori: ${st("sector")}; paesi: ${st("country")}; valute: ${st("currency")}</td></tr>
+      <tr><td class="l">6. Nuove esposizioni</td><td class="l">settori: ${nw("sector")}; paesi: ${nw("country")}; valute: ${nw("currency")}; classi: ${nw("assetClass")}</td></tr>
+      <tr><td class="l">7. Dati non disponibili</td><td class="l">${c.missing.length ? esc(c.missing.join("; ")) : "nessuno rilevato"}</td></tr>
+      <tr><td class="l">8. Limiti personali</td><td class="l">${lim}</td></tr></tbody></table></div>
+      <p class="muted small">${esc(c.rule)}</p>`}`;
+}
+function fitSimHTML(w) {
+  if (!w) return "";
+  if (!w.ok) return `<p class="warn small">Simulazione non eseguibile: ${esc(w.why)}</p>`;
+  const B = w.before, A = w.after;
+  const row = (l, b, a, d = 1, u = "%") => `<tr><td class="l">${l}</td><td>${fNum(b, d)}${u}</td><td>${fNum(a, d)}${u}</td></tr>`;
+  const dl = (dim, t) => (w.delta[dim] || []).slice(0, 6).map(r => `<tr><td class="l">${t}: ${esc(r.label)}</td><td>${fNum(r.before, 1)}%</td><td>${fNum(r.after, 1)}%</td></tr>`).join("");
+  const sb = w.stressBefore, sa = w.stressAfter;
+  return `<p class="small"><b>Ipotesi</b>: ${fEur(w.amountEUR, 0)} · ${esc(w.fundingText)}. ${esc(w.note)}</p>
+    <div class="table-wrap"><table class="scr fit-tbl"><thead><tr><th class="l">Misura</th><th>Prima</th><th>Dopo</th></tr></thead><tbody>
+      ${row("Valore totale", B.totalEUR, A.totalEUR, 0, " €")}${row("Prime 5 posizioni", B.top5, A.top5)}${row("Numero equivalente di posizioni", B.effective, A.effective, 1, "")}
+      ${row("Parte analizzabile a livello di società", B.coverage.analysed, A.coverage.analysed)}
+      ${dl("assetClass", "Classe")}${dl("sector", "Settore")}${dl("country", "Paese")}${dl("currency", "Valuta")}
+      ${(w.companies || []).slice(0, 5).map(r => `<tr><td class="l">Società: ${esc(r.name)} <span class="cat-src">${esc(r.kind)}</span></td><td>${fNum(r.before, 2)}%</td><td>${fNum(r.after, 2)}%</td></tr>`).join("")}
+      ${sb.map((s, i) => `<tr><td class="l">Ipotesi: ${esc(s.scenario)}</td><td>${fNum(s.impactPct, 1)}%</td><td>${fNum(sa[i]?.impactPct, 1)}%</td></tr>`).join("")}
+    </tbody></table></div>
+    <h4>Rischi aggiuntivi</h4><ul class="why small">${w.risks.length ? w.risks.map(r => `<li>${esc(r)}</li>`).join("") : "<li>Nessuna voce più pesante aumenta.</li>"}</ul>
+    ${w.missing.length ? `<h4>Dati mancanti</h4><ul class="why small">${w.missing.map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
+    <p class="muted small">Le ipotesi su azioni, tassi e dollaro sono spostamenti deterministici scelti a priori: non sono previsioni e non hanno probabilità.</p>`;
+}
+function fitPageHTML() {
+  const D = FIT.data, A = D?.analysis;
+  const intro = `<div class="card"><div class="card-h"><h2>Compatibilità con il portafoglio</h2></div>
+    <p class="small">Come cambierebbe la composizione con un'azione o un ETF: concentrazione, sovrapposizioni dentro gli ETF, settori, paesi e valute. È un giudizio <b>separato</b> dal Decision Desk e non lo cambia; nessuna indicazione di acquisto o vendita, nessun ordine.</p>
+    <p class="small muted">I dati del portafoglio si usano solo dopo il tuo clic, in sola lettura e solo in memoria su questo Mac: niente copie, niente diari, niente servizi esterni.</p>
+    <p class="eo-act"><button class="btn" data-fit="mio">Analizza compatibilità con il mio portafoglio</button> <button class="btn ghost" data-fit="esempio">Usa un portafoglio di esempio</button></p></div>`;
+  if (FIT.loading) return intro + `<div class="card">Analisi di ${esc(FIT_SRC[FIT.source])} in corso…</div>`;
+  if (FIT.err) return intro + `<div class="card empty">Analisi non disponibile: ${esc(FIT.err)}.</div>`;
+  if (!D) return intro;
+  if (!D.available) return intro + `<div class="card empty">${esc(D.why)}</div>`;
+  const kpi = (l, v, s) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s || ""}</div></div>`;
+  const C = A.concentration, L = A.lookthrough, cov = L.coverage;
+  const R = A.risk || {};
+  const opts = (D.choices || []).map(c => `<option value="${esc(c.ref)}">${esc(c.label)}</option>`).join("");
+  const lim = Object.entries({ position: "posizione", company: "società", sector: "settore", country: "paese", currency: "valuta" })
+    .map(([k, l]) => `<label class="small">${l} % <input class="fit-lim" data-fitlim="${k}" inputmode="decimal" value="${esc(FIT.limits[k] ?? "")}" placeholder="—"></label>`).join(" ");
+  return intro + `<p class="small"><b>Fonte</b>: ${esc(D.sourceLabel)} · analisi ${esc(A.version)} del ${esc(dayIT(A.asOf))}.</p>
+    <div class="kpis">${kpi("Valore", fEur(A.totalEUR, 0), A.indicative.length ? "indicativo: prezzi o cambi non recenti" : "valori in euro")}${kpi("Posizioni", C.n, `numero equivalente ${fNum(C.effective, 1)}`)}
+      ${kpi("Prime 5", fNum(C.top5, 1) + "%", "del valore")}${kpi("Analizzabile per società", fNum(cov.analysed, 1) + "%", `oltre i titoli noti ${fNum(cov.beyondKnown, 1)}% · non azionario ${fNum(cov.nonEquity, 1)}%`)}</div>
+    <div class="card"><h3>Posizioni principali</h3><div class="table-wrap"><table class="scr fit-tbl"><thead><tr><th class="l">Strumento</th><th class="l">Tipo</th><th>Peso</th><th class="l">Dentro il fondo</th></tr></thead><tbody>
+      ${A.positions.slice().sort((a, b) => (b.weight || 0) - (a.weight || 0)).map(p => `<tr><td class="l">${esc(p.name)}${p.isin ? `<br><span class="cat-src">${esc(p.isin)}</span>` : ""}</td><td class="l small">${esc(p.classLabel)}${p.indicative ? " · <span class=\"warn\">indicativo</span>" : ""}</td><td>${isNum(p.weight) ? fNum(p.weight, 1) + "%" : "non valutato"}</td><td class="l small">${esc(p.lookthrough)}${p.class === "etf" && p.covered ? ` (${fNum(p.covered * 100, 0)}% noto)` : ""}</td></tr>`).join("")}
+    </tbody></table></div><p class="muted small">Date: ${Object.entries(A.dates).map(([k, v]) => `${esc(k)} ${esc(dayIT(String(v).slice(0, 10)))}`).join(" · ")}.</p></div>
+    <div class="card"><h3>Composizione</h3><div class="opp-cols">${fitTable("Classe di investimento", A.breakdown.assetClass)}${fitTable("Settori", A.breakdown.sector, A.taxonomy)}</div>
+      <div class="opp-cols">${fitTable("Paesi delle società", A.breakdown.country)}${fitTable("Valuta economica", A.breakdown.currency, "La valuta in cui si compra un ETF non è la sua esposizione: qui conta la valuta dei titoli dentro il fondo (stima) o la copertura dichiarata.")}</div>
+      <p class="muted small">Le parti «non classificate» o «non dettagliate» restano visibili: nessun dato mancante viene ripartito per arrivare al 100%.</p></div>
+    <div class="card"><h3>Sovrapposizioni: stesse società in più strumenti</h3>
+      ${L.overlaps.length ? `<div class="table-wrap"><table class="scr fit-tbl"><thead><tr><th class="l">Società</th><th>Diretta</th><th>Dentro gli ETF</th><th>Totale</th><th class="l">Tipo</th></tr></thead><tbody>
+        ${L.overlaps.slice(0, 12).map(o => `<tr><td class="l">${esc(o.name)}</td><td>${fNum(o.directEUR / A.totalEUR * 100, 2)}%</td><td>${fNum(o.indirectEUR / A.totalEUR * 100, 2)}%</td><td><b>${fNum(o.pct, 2)}%</b></td><td class="l small">${esc(o.kind)} · ${esc(o.via.map(v => v.fund).join(", "))}</td></tr>`).join("")}</tbody></table></div>` : `<p class="small">Nessuna società presente in più strumenti tra i titoli noti.</p>`}
+      ${L.fundPairs.length ? `<ul class="why small">${L.fundPairs.map(p => `<li>${esc(p.a)} e ${esc(p.b)}: ${p.common.length} titoli in comune tra i primi 10, sovrapposizione nota ${fNum(p.overlapKnown, 1)}% (composizioni del ${esc(p.dates.filter(Boolean).map(dayIT).join(" e ") || "n.d.")})</li>`).join("")}</ul>` : ""}
+      <p class="muted small">${esc(L.rule)}</p></div>
+    <div class="card"><h3>Rischio (descrittivo)</h3>
+      ${R.scopeText ? `<div class="fit-scope ${R.scope === "parte investita" ? "" : "partial"}"><p class="small"><b>${R.scope === "parziale" ? "Rischio parziale" : R.scope === "nessuna" ? "Nessuna copertura" : "Copertura"}:</b> ${esc(R.scopeText)}</p>
+        ${isNum(R.coverageTotalPct) ? `<p class="small muted">Coperto dalle serie storiche ${fNum(R.coverageTotalPct, 1)}% del portafoglio · non coperto ${fNum(Math.max(0, R.uncoveredTotalPct), 1)}% · liquidità esclusa ${fNum(R.cashPct || 0, 1)}%${R.unvaluedCount ? ` · ${R.unvaluedCount} posizioni senza valore in euro` : ""}.</p>` : ""}</div>` : ""}
+      ${R.state === "calcolato" ? `<p class="small">${R.scope === "parziale" ? "Della sola parte coperta" : "Della parte investita"}: volatilità annua ${fNum(R.vol, 1)}% · massima perdita ${fNum(R.maxDrawdown, 1)}% (dal ${esc(dayIT(R.first))} al ${esc(dayIT(R.last))}, ${R.sessions} sedute).</p>
+        <p class="small muted">Metodo: ${esc(R.method)}; ${esc(R.weightsNote || "")}.</p>
+        ${R.correlations.length ? `<p class="small">Correlazioni settimanali più alte: ${R.correlations.slice(0, 4).map(c => `${esc(c.a)} / ${esc(c.b)} ${fNum(c.corr, 2)}`).join(" · ")}.</p>` : ""}
+        <ul class="why small">${R.limits.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : `<p class="small">${esc(R.why || "Non calcolabile con affidabilità sufficiente")}.</p>`}
+      ${R.left?.length ? `<p class="small muted">Fuori dal calcolo: ${esc(R.left.map(x => x.name + " (" + x.why + ")").join("; "))}.</p>` : ""}
+      <p class="small">${esc(A.duration.text || A.duration.state)}${isNum(A.duration.bondPct) ? ` · obbligazioni ${fNum(A.duration.bondPct, 1)}% del portafoglio` : ""}. <span class="muted">${esc(A.duration.note || "")}</span></p>
+      <h4>Ipotesi deterministiche (non previsioni)</h4><ul class="why small">${A.stress.map(s => `<li>${esc(s.scenario)}: ${fEurS(s.impactEUR, 0)} (${fPct(s.impactPct, 1)} del portafoglio)${s.note ? ` — ${esc(s.note)}` : ""}</li>`).join("")}</ul></div>
+    <div class="card"><details class="fold" data-k="fit-lim"><summary><h3>Limiti personali (facoltativi)</h3><span class="card-meta">${A.limits.configured ? "impostati per questa analisi" : "non configurati"}</span></summary>
+      <p class="small">${esc(A.limits.text)} Valgono solo in questa pagina e non vengono salvati.</p><p>${lim} <button class="btn ghost" data-fitlimapply>Applica</button></p>
+      <ul class="why small">${A.limits.rows.map(r => `<li>${esc(r.label)}: ${esc(r.state)}${isNum(r.observed) ? ` (oggi ${fNum(r.observed, 1)}%)` : ""}${r.note ? ` — ${esc(r.note)}` : ""}</li>`).join("")}</ul></details></div>
+    <div class="card"><h3>Simulatore (ipotetico)</h3><p class="small muted">Nessun ordine, nessuna modifica al portafoglio, nulla viene salvato.</p>
+      <div class="fit-form"><label class="small">Strumento <input list="fitChoices" data-fitin="cand" value="${esc(FIT.cand)}" placeholder="ticker o ISIN"></label><datalist id="fitChoices">${opts}</datalist>
+        <label class="small">Importo <input data-fitin="amount" inputmode="decimal" value="${esc(FIT.amount)}" placeholder="es. 3000"></label>
+        <label class="small">Valuta <select data-fitin="currency">${["EUR", "USD"].map(c => `<option ${c === FIT.currency ? "selected" : ""}>${c}</option>`).join("")}</select></label>
+        <label class="small">Finanziamento <select data-fitin="funding">${[["nuova", "nuova liquidità"], ["liquidita", "liquidità già presente"], ["riduzione", "riduzione di una posizione"]].map(([k, l]) => `<option value="${k}" ${k === FIT.funding ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+        ${FIT.funding === "riduzione" ? `<label class="small">Posizione da ridurre <select data-fitin="reduce"><option value="">—</option>${D.positions.map(p => `<option value="${esc(p.id)}" ${p.id === FIT.reduce ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label>` : ""}
+        <button class="btn" data-fitsim>Analizza</button></div>
+      ${FIT.simErr ? `<p class="warn small">${esc(FIT.simErr)}</p>` : ""}
+      ${FIT.sim === "loading" ? `<p class="small">Calcolo…</p>` : FIT.sim ? `${FIT.sim.err ? `<p class="warn small">${esc(FIT.sim.err)}</p>` : ""}${FIT.sim.compat ? `<h4>Compatibilità di ${esc(FIT.sim.compat.candidate.name)}</h4>${fitCompatHTML(FIT.sim.compat)}` : ""}${FIT.sim.whatif ? `<h4>Prima e dopo</h4>${fitSimHTML(FIT.sim.whatif)}` : FIT.sim.compat ? `<p class="small muted">Indica un importo per vedere il prima e dopo.</p>` : ""}` : ""}</div>
+    <div class="card"><h3>Dati incompleti</h3><ul class="why small">${A.missing.length ? A.missing.map(m => `<li>${esc(m)}</li>`).join("") : "<li>Nessuno rilevato.</li>"}</ul>${A.notes.length ? `<p class="small muted">${esc(A.notes.join("; "))}</p>` : ""}</div>
+    <p class="muted small">${esc(D.disclaimer)}</p>`;
+}
+function renderFit() {
+  const el = $("#pfFit");
+  if (!el || state.view !== "pffit") return;
+  $("#pfEmpty").hidden = true;
+  const keep = [...el.querySelectorAll("details.fold[data-k]")].filter(d => d.open).map(d => d.dataset.k);
+  el.innerHTML = fitPageHTML();
+  keep.forEach(k => { const d = el.querySelector(`details.fold[data-k="${k}"]`); if (d) d.open = true; });
+}
+document.addEventListener("click", e => {
+  const f = e.target.closest("[data-fit]");
+  if (f) { loadFit(f.dataset.fit); return; }
+  if (e.target.closest("[data-fitsim]")) { runFitSim(); return; }
+  if (e.target.closest("[data-fitlimapply]")) {
+    FIT.limits = {};
+    $$(".fit-lim").forEach(i => { const v = Number(String(i.value).replace(",", ".")); if (i.value && isNum(v) && v > 0) FIT.limits[i.dataset.fitlim] = v; });
+    if (FIT.source) loadFit(FIT.source);
+    return;
+  }
+  const df = e.target.closest("[data-dkfit]");
+  if (df) { loadDeskFit(df.dataset.dkfitref, df.dataset.dkfit); return; }
+  const go = e.target.closest("[data-dkfitopen]");
+  if (go) { FIT.cand = go.dataset.dkfitopen; FIT.source = go.dataset.dkfitsrc; setView("pffit"); loadFit(FIT.source).then(runFitSim); }
+});
+document.addEventListener("change", e => {
+  const i = e.target.closest("[data-fitin]");
+  if (!i) return;
+  FIT[i.dataset.fitin] = i.value;
+  if (i.dataset.fitin === "funding") renderFit();
+});
+document.addEventListener("input", e => { const i = e.target.closest("[data-fitin]"); if (i && i.tagName === "INPUT") FIT[i.dataset.fitin] = i.value; });
+// Decision Desk: compatibility summary of the opened row (only after a click; never part of the D2 state)
+async function loadDeskFit(ref, source) {
+  DK.fit = DK.fit || {};
+  DK.fit[ref] = { source, loading: true };
+  renderOpps();
+  try {
+    const d = await fitRequest(source, { candidate: ref });
+    DK.fit[ref] = { source, data: d };
+  } catch (e) { DK.fit[ref] = { source, err: e.message }; }
+  renderOpps();
+}
+function dkFitHTML(o) {
+  const F = (DK.fit || {})[o.id];
+  const btn = `<p class="eo-act"><button class="btn ghost" data-dkfit="mio" data-dkfitref="${esc(o.id)}">Analizza compatibilità con il mio portafoglio</button> <button class="btn ghost" data-dkfit="esempio" data-dkfitref="${esc(o.id)}">con un portafoglio di esempio</button></p>`;
+  let body = `<p class="small muted">Giudizio separato dallo stato del Decision Desk: il portafoglio si legge solo dopo il clic, in sola lettura.</p>`;
+  if (F?.loading) body = `<p class="small">Analisi in corso…</p>`;
+  else if (F?.err) body = `<p class="warn small">${esc(F.err)}</p>`;
+  else if (F?.data && !F.data.available) body = `<p class="small">${esc(F.data.why)}</p>`;
+  else if (F?.data?.compatError) body = `<p class="small">${esc(F.data.compatError)}</p>`;
+  else if (F?.data?.compat) body = `<p class="small muted">Con ${esc(FIT_SRC[F.source])}:</p>${fitCompatHTML(F.data.compat, true)}
+    <p class="eo-act"><button class="btn" data-dkfitopen="${esc(o.id)}" data-dkfitsrc="${esc(F.source)}">Dettagli e simulatore</button></p>`;
+  return `<h3>Compatibilità con il portafoglio</h3>${body}${btn}`;
+}
+
 // ------------------------------------------------------------ views, theme, resize
 // Four tabs that follow a manager's work; each groups the older views, whose ids (and saved links) are unchanged.
 // Phase 21: three tabs. The Diario dei segnali appears in Ricerca only with about 3 months of data (it keeps recording
@@ -3879,11 +4058,11 @@ const DIARY_READY = 63;
 const GROUPS = [
   { id: "opportunita", label: "Opportunità", ask: "Quali titoli meritano di essere approfonditi?", views: [["opps", "Opportunità"]] },
   { id: "mercato", label: "Mercato", ask: "Cosa sta succedendo?", views: [["overview", "Oggi"], ["sectors", "Settori"]] },
-  { id: "portafoglio", label: "Portafoglio", ask: "Cosa ho e come sta andando?", views: [["portfolio", "Posizioni"], ["pfperf", "Performance"], ["pfconc", "Concentrazione"], ["pfrisk", "Rischio"]] },
+  { id: "portafoglio", label: "Portafoglio", ask: "Cosa ho e come sta andando?", views: [["portfolio", "Posizioni"], ["pfperf", "Performance"], ["pfconc", "Concentrazione"], ["pfrisk", "Rischio"], ["pffit", "Compatibilità"]] },
   { id: "azioni", label: "Azioni", ask: "Quali azioni del Nasdaq-100 potrei comprare?", views: [["screener", "Screener"], ["watch", "In osservazione"], ["diary", "Diario dei segnali"]] },
   { id: "etf", label: "ETF", ask: "Quali ETF potrei comprare?", views: [["etf", "ETF"]] },
 ];
-const PF_SUBS = ["portfolio", "pfperf", "pfconc", "pfrisk"];
+const PF_SUBS = ["portfolio", "pfperf", "pfconc", "pfrisk", "pffit"];
 const OLD_LINKS = { map: "sectors", ideas: "sectors", trade: "screener", rules: "portfolio", metodo: "screener", ricerca: "screener" };
 const diaryReady = () => (state.snap?.diaryDays || 0) >= DIARY_READY;
 const VIEWS = GROUPS.flatMap(g => g.views.map(v => v[0]));

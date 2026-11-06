@@ -98,6 +98,46 @@ def last_nyse_session(now):
     return None
 
 
+PRE_MARKET_MIN = 4 * 60    # NYSE pre-market from 04:00 ET: from then on the server no longer records the previous session
+
+
+def recordable_until(day):
+    """Last moment the server can still record `day`: the start of the pre-market of the next NYSE session. The evening
+    chain never runs with the market open or in pre-market; between the next close and close + 20 minutes `day` is
+    still the "last closed session", and from Phase 7C server.save_opportunity_diary refuses it there too (on 5 Nov
+    2026 at 16:00 ET the decisions of 4 Nov had been recorded with the data of 5 Nov)."""
+    import market_calendar
+    d = datetime.fromisoformat(day).date() + timedelta(days=1)
+    for _ in range(15):
+        if market_calendar.is_trading_day(d):
+            return datetime(d.year, d.month, d.day, tzinfo=ET) + timedelta(minutes=PRE_MARKET_MIN)
+        d += timedelta(days=1)
+    return None
+
+
+def next_text(last, last_closed, now):
+    """What the next record will be, said without promising what cannot happen: a session whose window has passed is
+    never recorded later (no retroactive records)."""
+    nxt = next_nyse_close(now) or "n.d."
+    if not last_closed:
+        return None
+    if last and last["session"] == last_closed:
+        return "prossima seduta: " + nxt
+    until = recordable_until(last_closed)
+    open_window = until is not None and now < until
+    if not last:
+        start = (f"la seduta {last_closed} si può ancora registrare con il server acceso entro le "
+                 f"{until.astimezone(ET):%H:%M} di New York del {until.date().isoformat()}" if open_window else
+                 f"la seduta {last_closed} non è stata registrata e non verrà recuperata (nessuna registrazione retroattiva)")
+        return (f"nessuna registrazione ufficiale finora: il diario registra in avanti dalla prima seduta utile; {start}; "
+                f"prossima seduta: {nxt}")
+    if open_window:
+        return (f"seduta {last_closed} non ancora registrata: la registra il server acceso entro le "
+                f"{until.astimezone(ET):%H:%M} di New York del {until.date().isoformat()} (o il job serale)")
+    return (f"seduta {last_closed} non registrata e non più recuperabile (nessuna registrazione retroattiva): "
+            f"resta tra le sedute mancanti; prossima seduta: {nxt}")
+
+
 def nyse_sessions(first, last):
     import market_calendar
     if not first or not last or first > last:
@@ -121,10 +161,23 @@ def next_nyse_close(now):
     return None
 
 
+def late_record(session, computed_at):
+    """True when a NYSE session was recorded after its window (recordable_until): part of its inputs (statements,
+    estimates, base market data) may be those of the moment of the record, not of the session. Read only:
+    the record stays in the file as it is; it is only declared."""
+    until = recordable_until(session)
+    try:
+        at = datetime.fromisoformat(computed_at)
+    except (TypeError, ValueError):
+        return False
+    return until is not None and at.tzinfo is not None and at >= until
+
+
 def _diary(con, d):
     runs_all = con.execute(f"SELECT session, model_version, computed_at, source FROM {d['runs']} ORDER BY session").fetchall()
     obs = {(r[0], r[1]): r[2] for r in con.execute(f"SELECT session, model_version, COUNT(*) FROM {d['obs']} GROUP BY 1, 2")}
     off = [r for r in runs_all if app_env.classify(r["source"]) == "produzione"]
+    late = [] if d["key"] == "etf" else [r for r in off if late_record(r["session"], r["computed_at"])]
     exc = [r for r in runs_all if app_env.classify(r["source"]) != "produzione"]
     last = off[-1] if off else None
     return {"tables": [d["runs"], d["obs"]] + d["extra"],
@@ -137,6 +190,8 @@ def _diary(con, d):
             "last": {"session": last["session"], "version": last["model_version"], "computedAt": last["computed_at"],
                      "source": last["source"], "observations": obs.get((last["session"], last["model_version"]), 0)} if last else None,
             "versionsRecorded": sorted({r["model_version"] for r in runs_all}),
+            "late": [{"session": r["session"], "version": r["model_version"], "computedAt": r["computed_at"],
+                      "observations": obs.get((r["session"], r["model_version"]), 0)} for r in late],
             "incomplete": [f"{s} {v}: registrazione senza osservazioni" for (s, v) in
                            {(r["session"], r["model_version"]) for r in runs_all} if not obs.get((s, v))]}
 
@@ -176,8 +231,12 @@ def status(now=None, path=None):
                    missing=[], next=None, errors=[])
         if x:
             row.update(tables=x["tables"], official={k: x["official"][k] for k in ("runs", "observations")}, excluded=x["excluded"],
-                       last=x["last"], versionsRecorded=x["versionsRecorded"])
+                       last=x["last"], versionsRecorded=x["versionsRecorded"], late=x["late"])
             row["errors"] += x["incomplete"]
+            row["notes"] = [f"seduta {i['session']} ({i['version']}, {i['observations']} osservazioni) registrata in ritardo, il "
+                            f"{i['computedAt'][:16].replace('T', ' ')} (dopo la pre-apertura della seduta successiva): una parte "
+                            "dei dati (bilanci, stime, dati di mercato di base) può essere quella del momento della "
+                            "registrazione, non della seduta; resta nel file com'è, da leggere con questa avvertenza" for i in x["late"]]
         out["diaries"].append(row)
     by = {r["key"]: r for r in out["diaries"]}
     # NYSE diaries: missing official sessions from the first official one to the last closed session
@@ -192,10 +251,7 @@ def status(now=None, path=None):
             by[k]["missing"] = [s for s in opp["official"]["sessions"] if first and s >= first and s not in have]
     for k in ("opportunity", "investment", "valuation", "decision"):
         r = by[k]
-        if r["last"] and r["last"]["session"] == last_closed:
-            r["next"] = "prossima seduta: " + (next_nyse_close(now) or "n.d.")
-        elif last_closed:
-            r["next"] = f"seduta {last_closed} non ancora registrata: la registra il server acceso (o il job serale)"
+        r["next"] = next_text(r["last"], last_closed, now)
         if k != "opportunity" and r["last"] and r["last"]["version"] != vers[k]:
             r["errors"].append(f"ultima registrazione con la versione {r['last']['version']}, il modello attuale è {vers[k]}")
     # ETF diary: calendar of the reference series; a session taken by an excluded record is declared, never rewritten
@@ -211,7 +267,7 @@ def status(now=None, path=None):
         e["missing"] = [s for s in etf_sessions_after(ex["official"]["sessions"][0], prices) if s not in set(ex["official"]["sessions"])
                         and s not in taken]
     if taken:
-        e["notes"] = [f"seduta {s} occupata da una registrazione di prova con la versione {v}: resta nel file, "
+        e["notes"] = e.get("notes", []) + [f"seduta {s} occupata da una registrazione di prova con la versione {v}: resta nel file, "
                       "esclusa dalle statistiche; non si registra una seconda volta (idempotenza, anche con una versione "
                       f"più recente): il diario ufficiale riparte dalla prima seduta successiva" for s, v in sorted(taken.items())]
     fetched = (prices or {}).get("fetched")

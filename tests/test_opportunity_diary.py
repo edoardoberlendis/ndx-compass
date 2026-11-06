@@ -269,6 +269,12 @@ def live(monkeypatch, result):
     monkeypatch.setattr(st, "last_daily", datetime.fromisoformat(EVENING).timestamp())
     monkeypatch.setattr(server, "market_status", lambda now=None: "closed")
     monkeypatch.setattr(server, "last_closed_session", lambda now=None: END)
+
+    class Evening(datetime):                       # Phase 7C: the clock of that evening (inside the session window)
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.fromisoformat(EVENING).astimezone(tz)
+    monkeypatch.setattr(server, "datetime", Evening)
     monkeypatch.setattr(server, "patterns_test", lambda: {})
     monkeypatch.setattr(server, "download", lambda *a, **k: pytest.fail("no download for the diary"))
     server._od["measured"] = None
@@ -320,3 +326,40 @@ def test_dataset_for_future_tests(result):
     assert len(rows_) == 4 and rows_[0]["ticker"] == "AAA" and rows_[0]["rank"] == 1
     assert rows_[0]["ret"] == pytest.approx(10.0) and rows_[0]["market"]["date"] == END and rows_[0]["model_version"] == o.MODEL_VERSION
     assert next(r for r in rows_ if r["ticker"] == "BBB")["result"] == "prezzo mancante"
+
+
+def test_server_refuses_a_session_after_its_window(live, monkeypatch):
+    """Phase 7C: on Monday 2 Nov at 16:05 ET the Friday session END is still the "last closed session" (close + 20
+    minutes not reached), but its window ended at 04:00: no diary of the chain records it (5 Nov 2026 incident)."""
+    class Late(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.fromisoformat("2026-11-02T16:05:00-05:00").astimezone(tz)
+    monkeypatch.setattr(live, "datetime", Late)
+    monkeypatch.setattr(live, "market_status", lambda now=None: "post")
+    for f in ("save_investment_diary", "save_valuation_diary", "save_decision_diary", "opportunities"):
+        monkeypatch.setattr(live, f, lambda *a, _f=f, **k: pytest.fail(f"{_f} called after the window"))
+    msg = live.save_opportunity_diary(source="test")
+    assert "finestra di registrazione chiusa" in msg and "nessuna registrazione retroattiva" in msg
+    assert not os.path.exists(od.DB) or not rows("SELECT * FROM runs")
+
+
+def test_evening_job_records_the_chain_after_the_etf_closes_of_the_day():
+    src = open(os.path.join(ROOT, "server.py")).read()
+    job = src[src.index("def run_daily_job"):src.index("def save_signal_diary")]
+    assert job.index("fundamentals.refresh(tickers)") < job.index('save_opportunity_diary(source="job serale")')
+    assert job.index("etf_prices.save(") < job.index('save_opportunity_diary(source="job serale")')
+    assert 'authorize_writer("job serale")' in job
+
+
+def test_cache_files_are_written_atomically(tmp_path, monkeypatch):
+    import server
+    monkeypatch.setattr(server, "CACHE_DIR", str(tmp_path))
+    server.write_cache("x.json", {"a": 1})
+    with pytest.raises(TypeError):
+        server.write_cache("x.json", {"b": object()})                                 # fails while writing
+    assert json.load(open(tmp_path / "x.json")) == {"a": 1}                           # the old file is intact
+    assert os.listdir(tmp_path) == ["x.json"]                                         # no temporary file left behind
+    src = open(os.path.join(ROOT, "server.py")).read() + open(os.path.join(ROOT, "etf_prices.py")).read() + \
+        open(os.path.join(ROOT, "fundamentals.py")).read()
+    assert src.count("os.getpid()}.tmp") >= 4                                         # one temporary file per process

@@ -496,3 +496,35 @@ def test_18_only_the_real_entry_points_authorize_writes():
     pv = open(os.path.join(ROOT, "preview.py")).read()
     assert 'os.environ["NDX_ENV"] = "anteprima"' in pv and "install_guard()" in pv and "authorize" not in pv.replace("Non autorizza", "")
     assert open(os.path.join(ROOT, "tests", "conftest.py")).read().count("app_env.install_guard()") == 1
+
+
+# ------------------------------------------------------------------ Phase 7C: audit of the five diaries
+
+def test_7c_late_records_are_declared_never_changed():
+    start_diary(od.DB)
+    assert etf_session(od.DB, "2026-11-03", source="prova")[0][0]
+    con = sqlite3.connect(od.DB)
+    with con:   # 3 Nov recorded on 4 Nov at 16:00 ET (after its window), 4 Nov the same evening
+        for s, at in (("2026-11-03", "2026-11-04T16:00:00-05:00"), ("2026-11-04", "2026-11-04T16:25:00-05:00")):
+            con.execute("INSERT INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?)", (s, "O2.1", at, "dashboard", "x", "[]", None, 1, 1, None, None))
+            con.execute("INSERT INTO observations (session, model_version, list, ticker, in_top) VALUES (?,?,?,?,?)", (s, "O2.1", "trading", "AAA", 0))
+    con.close()
+    before = sha(od.DB)
+    with app_env.record_writes() as seen:
+        st = ds.status(now=datetime(2026, 11, 5, 20, 0, tzinfo=ET))
+    assert [w for w in seen if "opportunita" in w[1]] == [] and sha(od.DB) == before        # read only
+    by = {d["key"]: d for d in st["diaries"]}
+    assert [x["session"] for x in by["opportunity"]["late"]] == ["2026-11-03"]
+    assert by["opportunity"]["official"] == {"runs": 2, "observations": 2}                    # counted as they are, only declared
+    assert any("registrata in ritardo" in n for n in by["opportunity"]["notes"]) and "registrata in ritardo" in ds.text(st)
+    assert by["etf"]["excluded"]["runs"] == 1 and by["etf"]["official"]["runs"] == 0          # test records kept and excluded
+    assert ds.late_record("2026-11-04", "2026-11-05T03:59:00-05:00") is False
+    assert ds.late_record("2026-11-04", "2026-11-05T04:00:00-05:00") is True
+
+
+def test_7c_window_of_each_session():
+    assert ds.recordable_until("2026-11-04") == datetime(2026, 11, 5, 4, 0, tzinfo=ET)
+    assert ds.recordable_until("2026-11-06") == datetime(2026, 11, 9, 4, 0, tzinfo=ET)        # Friday: until Monday's pre-market
+    assert ds.recordable_until("2026-11-25") == datetime(2026, 11, 27, 4, 0, tzinfo=ET)       # Thanksgiving skipped
+    # summer time ends in the US on 1 Nov 2026: the window is in New York time, whatever the offset
+    assert ds.recordable_until("2026-10-30").utcoffset().total_seconds() == -5 * 3600
