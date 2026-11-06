@@ -1159,6 +1159,38 @@ Nessun nuovo modello: solo controlli e correzioni per l'uso quotidiano.
   con copertura incompleta il titolo è «Rischio parziale» e le statistiche sono «della sola parte coperta». Formule invariate.
 - Test in `tests/test_environment_safety.py`, `tests/test_opportunity_diary.py`, `tests/test_portfolio_fit.py` (sezioni 7C).
 
+## Alert e cambiamenti (Fase 8A)
+
+Scheda **Alert** → «Alert e cambiamenti»: cosa è cambiato dall'ultima osservazione valida dei diari, con soli dati
+pubblici di azioni ed ETF. Informativi e verificabili: nessuna previsione, nessun ordine, nessun compra/vendi.
+
+- **Motore** `alert_engine.py` (versione «A1»): legge le registrazioni **ufficiali e ammissibili** dei cinque diari,
+  il catalogo ETF e lo stato dei diari; non ricalcola modelli e non scarica nulla. Confronta l'ultima seduta ammissibile
+  con la precedente **solo se hanno la stessa versione del modello**; con una sola seduta c'è solo la base di partenza
+  (nessun alert di cambiamento); un cambio di versione è un cambiamento metodologico (OP-VERSIONE).
+- **Regole** (tutte scritte in `alert_engine.RULES`, visibili nella pagina): azioni — stato D2, nuovi bilanci con
+  giudizi cambiati (solo con un periodo nuovo identificabile; giudizi invariati = un solo avviso raggruppato), revisione
+  osservabile delle stime, prezzo oltre un valore di scenario DCF (isteresi del 3%; prezzo e ipotesi mostrati come cause
+  separate), forte cambio della distanza dal valore base, valutazione non più utilizzabile, nuovo rischio bloccante, dati
+  insufficienti; ETF — stato E2 e D2 (i trend solo esplorativi), trend confermato per 2 sedute, rischio E2, concentrazione
+  dei primi 10 titoli, costi e struttura del prodotto, duration/rendimento/credito (solo con dati del fondo più recenti),
+  dati obsoleti; operativi — sedute non registrate, registrazioni da classificare. Una regola rumorosa si disattiva in
+  `alert_rules.json` senza toccare i modelli.
+- **Priorità** per tipo di evento (Criticità da verificare / Cambiamento importante / Aggiornamento ordinario), mai per
+  probabilità di guadagno. **Antirumore**: identificativi deterministici, deduplicazione, eventi collegati raggruppati,
+  problemi persistenti seguiti senza ripetizioni (nuovo → persistente → risolto), isteresi su DCF e trend.
+- **Registro** `data/alert.sqlite3` (fuori da Git, separato dai diari): giri identificati dall'impronta degli input
+  (lo stesso stato dei dati non crea mai un secondo giro), righe mai modificate né cancellate, stato del ciclo di vita
+  in una tabella additiva, versioni del catalogo ETF salvate per i confronti. Scritto solo dal server avviato e dal job
+  serale (`server.save_alerts`, dopo i diari e mai su una catena incompleta); `GET /api/alerts` lo legge in sola lettura.
+  «Consultato» è un segno del solo browser.
+- **Registro delle esclusioni** `diary_exclusions.json` (additivo, in Git): opportunità del 3 nov 2026 e decisioni del
+  4 nov 2026 (registrate in ritardo) restano nei diari come sono, ma escono da risultati, statistiche, dataset di
+  validazione, confronti e alert. `diaries_status.py` mostra separate le osservazioni registrate e quelle ammissibili.
+- **Job serale**: la fotografia del portafoglio (`portafoglio/storico/`) non può più fermare i cinque diari (un errore
+  viene registrato col solo tipo); gli alert si generano dopo i diari.
+- Test in `tests/test_alerts.py` (diari, catalogo e registro sintetici).
+
 ## Da verificare quando il diario avrà almeno 3 mesi di dati
 
 - **"Entra ora"**: togliendo la regola D3 (Fase 21) i titoli con "Entra ora" sono passati da 18 a 33 su 101. Controllare

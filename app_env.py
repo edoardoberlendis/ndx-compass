@@ -322,6 +322,8 @@ def isolate(base, setter=setattr, public_reads=False):
     setter(etf_buy, "DIR", j("diario_etf"))
     setter(etf_holdings, "PRIVATE", j("etf_composizioni.json"))
     setter(opportunity_diary, "DB", j("data", "opportunita.sqlite3"))
+    import alert_engine
+    setter(alert_engine, "DB", j("data", "alert.sqlite3"))                  # Phase 8A: the alert registry
     setter(opportunity_validation, "OUT_DIR", j("validazione"))
     setter(opportunity_validation, "LOG", j("validazione", "esperimenti.jsonl"))
     setter(opportunity_validation, "RECHECK_DIR", j("validazione", "rielaborazioni"))

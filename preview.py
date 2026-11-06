@@ -54,11 +54,12 @@ import etf  # noqa: E402
 
 etf.public = lambda: None
 etf.status = lambda: {"error": None, "running": True}
+ALERTS = server.save_alerts(source="anteprima")         # phase 8A: one check, into the temporary registry only
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8101))
     if port == 8100:
         sys.exit("la porta 8100 è della dashboard reale: scegli un'altra porta per l'anteprima")
     print(f"anteprima su http://127.0.0.1:{port} — cartella temporanea {BASE}, diari "
-          f"{'copiati in sola lettura' if copied else 'vuoti'}, guardia «{app_env.guard_active()}»", flush=True)
+          f"{'copiati in sola lettura' if copied else 'vuoti'}, guardia «{app_env.guard_active()}»; {ALERTS}", flush=True)
     server.app.run(host="127.0.0.1", port=port, debug=False, threaded=True)

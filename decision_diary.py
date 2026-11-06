@@ -166,11 +166,11 @@ def stats(path=None):
             return empty
         exc = od.excluded(path, "dec_runs", "dec_observations")
         runs = con.execute("SELECT session, model_version, computed_at, source, etf_note FROM dec_runs r WHERE "
-                           + od._official("r.source") + " ORDER BY session").fetchall()
+                           + od._official("r.source", "decision") + " ORDER BY session").fetchall()
         if not runs:
             return dict(empty, excluded=exc)
         n = con.execute("SELECT COUNT(*) FROM dec_observations o JOIN dec_runs r ON r.session=o.session AND "
-                        "r.model_version=o.model_version WHERE " + od._official("r.source")).fetchone()[0]
+                        "r.model_version=o.model_version WHERE " + od._official("r.source", "decision")).fetchone()[0]
         return {"started": True, "days": len({r["session"] for r in runs}), "first": runs[0]["session"],
                 "last": runs[-1]["session"], "lastAt": runs[-1]["computed_at"], "lastSource": runs[-1]["source"],
                 "lastEtfNote": runs[-1]["etf_note"], "observations": n,

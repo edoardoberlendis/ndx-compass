@@ -35,6 +35,7 @@
     <button class="tab" data-main="portafoglio" title="Cosa ho e come sta andando?">Portafoglio</button>
     <button class="tab" data-main="azioni" title="Quali azioni del Nasdaq-100 potrei comprare?">Azioni</button>
     <button class="tab" data-main="etf" title="Quali ETF potrei comprare?">ETF</button>
+    <button class="tab" data-main="alert" title="Cosa è cambiato dall'ultima osservazione?">Alert</button>
   </div>
   <div class="updated"><span class="status" id="status"></span><span class="info cal-warn" id="calWarn" tabindex="0" role="button" aria-label="Avvisi da controllare" data-info="" hidden>⚠</span><span id="updated"></span></div>
   <div class="subtabs" id="subtabs" hidden></div>
@@ -46,6 +47,7 @@
 
   <!-- OPPORTUNITÀ (phase O1, opportunity_scanner.py): two exploratory rankings, never a buy signal -->
   <section id="view-opps" class="view" hidden><div id="oppsBody"></div></section>
+  <section id="view-alerts" class="view" hidden><div id="alertsBody"></div></section>
 
   <!-- TODAY (view id "overview" kept for saved links) -->
   <section id="view-overview" class="view" hidden>

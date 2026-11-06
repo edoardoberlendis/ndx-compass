@@ -259,9 +259,14 @@ def _summary(rows):
     return out
 
 
-def _official(col="source"):
+def _official(col="source", diary="opportunity"):
+    """Official AND admissible records: official origin (app_env) and not in the exclusion registry of `diary`
+    (diary_exclusions.json, Phase 8A: late records stay in the file, left out of results, statistics and datasets)."""
     import app_env
-    return app_env.official_sql(col)
+    import diary_exclusions
+    alias = col.rsplit(".", 1)[0] if "." in col else None
+    base = app_env.official_sql(col)
+    return f"({base} AND {diary_exclusions.sql(diary, alias)})" if alias else base
 
 
 def excluded(path=None, runs_table="runs", obs_table="observations"):

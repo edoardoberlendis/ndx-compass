@@ -128,11 +128,11 @@ def stats(path=None):
         con.row_factory = sqlite3.Row
         if not con.execute("SELECT 1 FROM sqlite_master WHERE name='val_runs'").fetchone():
             return empty
-        runs = con.execute("SELECT session, model_version FROM val_runs r WHERE " + od._official("r.source") + " ORDER BY session").fetchall()
+        runs = con.execute("SELECT session, model_version FROM val_runs r WHERE " + od._official("r.source", "valuation") + " ORDER BY session").fetchall()
         if not runs:
             return dict(empty, excluded=od.excluded(path, "val_runs", "val_observations"))
         n = con.execute("SELECT COUNT(*) FROM val_observations o JOIN val_runs r ON r.session=o.session AND r.model_version=o.model_version "
-                        "WHERE " + od._official("r.source")).fetchone()[0]
+                        "WHERE " + od._official("r.source", "valuation")).fetchone()[0]
         return {"started": True, "days": len({r["session"] for r in runs}), "first": runs[0]["session"],
                 "last": runs[-1]["session"], "observations": n, "versions": sorted({r["model_version"] for r in runs}),
                 "excluded": od.excluded(path, "val_runs", "val_observations")}

@@ -834,15 +834,18 @@ def run_daily_job():
         _inv_invalidate()
     except Exception:
         log.exception("fundamentals not updated by the evening job: the diary uses the statements already on disk")
-    portfolio.refresh()
-    for _ in range(180):                                 # my positions: tickers are matched in the background
-        if not portfolio._state["resolving"]:
-            break
-        time.sleep(1)
-    portfolio.refresh_quotes()
-    with store.lock:
-        snap, infos = store.snapshot, dict(store.infos)
-    history.record(portfolio.snapshot(snap, infos))
+    try:                                                 # Phase 8A: the personal part can never stop the five diaries
+        portfolio.refresh()
+        for _ in range(180):                             # my positions: tickers are matched in the background
+            if not portfolio._state["resolving"]:
+                break
+            time.sleep(1)
+        portfolio.refresh_quotes()
+        with store.lock:
+            snap, infos = store.snapshot, dict(store.infos)
+        history.record(portfolio.snapshot(snap, infos))
+    except Exception as e:                               # only the kind of error: never positions or values in the log
+        log.error("evening job: portfolio picture not saved (%s); the public diaries go on", type(e).__name__)
     save_signal_diary()
     try:                                                 # phase 6B: ETF closes (in this process: no thread) and scan diary
         import etf_catalog
@@ -856,6 +859,7 @@ def run_daily_job():
     # rows only with the ETF scanner on the same session; before, with the dashboard closed, they were always missing.
     log.info("job serale: %s", save_opportunity_diary(source="job serale"))
     save_etf_scan_diary(source="job serale")            # idempotent: only if the diary file did not exist before
+    log.info("job serale: %s", save_alerts(source="job serale"))   # phase 8A: after the five diaries
     save_etf_diary(wait=True)
     for _ in range(60):                                  # positions diary: wait for the 2 years of prices (risk.py)
         import pos_diary
@@ -951,6 +955,7 @@ def worker():
         log.exception("startup failed")
         store.ready.set()
         return
+    save_alerts()                                                # phase 8A: one check at start (idempotent)
     while True:
         time.sleep(QUOTE_REFRESH_S if market_status() in ("open", "pre", "post") else 5 * 60)
         try:
@@ -970,6 +975,7 @@ def worker():
             save_opportunity_diary()                             # opportunity diary (phase O2): never stops the loop
             refresh_etf_prices()                                 # phase 6B: ETF closes once after each Borsa Italiana close
             save_etf_scan_diary()                                # phase 6B: scanner of the ETF exposures, once per session
+            save_alerts()                                        # phase 8A: after the diaries; idempotent, cheap when nothing changed
             refresh_fundamentals(tickers)                        # at most every 30 minutes, only stocks that need it
             save_etf_diary()
             save_pos_diary()
@@ -1183,7 +1189,7 @@ def movers_why(n=8):
 app = Flask(__name__, static_folder=None)
 # version of the code that serves the page: change it together with PAGE_VERSION in static/app.js whenever the data
 # sent to the page changes, so that a server left running with old code is noticed (the page asks to restart it)
-DASHBOARD_VERSION = "2026-11-06a"
+DASHBOARD_VERSION = "2026-11-06b"
 
 
 @app.route("/")
@@ -2473,6 +2479,55 @@ def save_opportunity_diary(source="dashboard"):
     except Exception:
         log.exception("opportunity diary not saved")
         return "errore: vedi cache/server.log"
+
+
+_alerts_check = {"at": None, "msg": None}
+
+
+def save_alerts(source="dashboard"):
+    """Phase 8A: one check of the alerts (alert_engine.py) AFTER the diaries, only from the authorized writers (server
+    loop, evening job). Never on a partial chain: while the last NYSE session is still recordable and one of its four
+    diaries is missing, it waits. Public data only (diaries, ETF catalog, state of the diaries): never the portfolio.
+    A failure is logged as an operational problem, never turned into a market change. Returns a short text."""
+    try:
+        import alert_engine as ae
+        import diaries_status
+        import etf_catalog
+        import opportunity_diary as od
+        now = datetime.now(ET)
+        if not os.path.exists(od.DB):
+            msg = "alert: diari non ancora avviati"
+        else:
+            st = diaries_status.status(now)
+            by = {d["key"]: d for d in st["diaries"]}
+            last = (by["opportunity"].get("last") or {}).get("session")
+            until = diaries_status.recordable_until(last) if last else None
+            waiting = [k for k in ("investment", "valuation", "decision") if last and (by[k].get("last") or {}).get("session") != last]
+            if waiting and until is not None and now < until:
+                msg = f"alert: in attesa della catena della seduta {last} ({', '.join(waiting)})"
+            else:
+                r = ae.generate(now, source, od.DB, catalog=etf_catalog.load(), status=st)
+                msg = (f"alert: controllo {r['run']}: {r['alerts']} attivi, {r['new']} nuovi, {r['resolved']} risolti ({r['ms']} ms)"
+                       if r["created"] else "alert: " + r["why"])
+                if r["created"]:
+                    log.info(msg)
+    except Exception as e:
+        log.exception("alert check failed")
+        msg = f"alert: controllo non riuscito ({type(e).__name__}): nessun cambiamento registrato"
+    _alerts_check.update(at=datetime.now(ROME_TZ).isoformat(timespec="seconds"), msg=msg)
+    return msg
+
+
+@app.route("/api/alerts")
+def api_alerts():
+    """Alert e cambiamenti (Phase 8A): read only from the alert registry (mode=ro). Never generates alerts, never writes,
+    never downloads, never reads the portfolio."""
+    import alert_engine as ae
+    out = ae.read()
+    out["lastCheck"] = dict(_alerts_check)
+    resp = _json(out)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 def update_opportunity_diary_offline():

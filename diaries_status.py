@@ -176,9 +176,13 @@ def late_record(session, computed_at):
 def _diary(con, d):
     runs_all = con.execute(f"SELECT session, model_version, computed_at, source FROM {d['runs']} ORDER BY session").fetchall()
     obs = {(r[0], r[1]): r[2] for r in con.execute(f"SELECT session, model_version, COUNT(*) FROM {d['obs']} GROUP BY 1, 2")}
+    import diary_exclusions
     off = [r for r in runs_all if app_env.classify(r["source"]) == "produzione"]
     late = [] if d["key"] == "etf" else [r for r in off if late_record(r["session"], r["computed_at"])]
     exc = [r for r in runs_all if app_env.classify(r["source"]) != "produzione"]
+    reg = {diary_exclusions.key(i["session"], i["version"], i["computedAt"]): i for i in diary_exclusions.items(d["key"])}
+    ruled = [r for r in off if diary_exclusions.key(r["session"], r["model_version"], r["computed_at"]) in reg]
+    adm = [r for r in off if r not in ruled]
     last = off[-1] if off else None
     return {"tables": [d["runs"], d["obs"]] + d["extra"],
             "official": {"runs": len(off), "observations": sum(obs.get((r["session"], r["model_version"]), 0) for r in off),
@@ -191,7 +195,16 @@ def _diary(con, d):
                      "source": last["source"], "observations": obs.get((last["session"], last["model_version"]), 0)} if last else None,
             "versionsRecorded": sorted({r["model_version"] for r in runs_all}),
             "late": [{"session": r["session"], "version": r["model_version"], "computedAt": r["computed_at"],
-                      "observations": obs.get((r["session"], r["model_version"]), 0)} for r in late],
+                      "observations": obs.get((r["session"], r["model_version"]), 0),
+                      "registry": reg.get(diary_exclusions.key(r["session"], r["model_version"], r["computed_at"]), {}).get("id")}
+                     for r in late],
+            "admissible": {"runs": len(adm), "observations": sum(obs.get((r["session"], r["model_version"]), 0) for r in adm),
+                           "sessions": sorted({r["session"] for r in adm})},
+            "registryExcluded": [{"id": reg[k]["id"], "session": r["session"], "version": r["model_version"],
+                                  "computedAt": r["computed_at"], "reason": reg[k]["reason"],
+                                  "decision": f"{reg[k]['decisionVersion']} del {reg[k]['decidedAt']}",
+                                  "observations": obs.get((r["session"], r["model_version"]), 0)}
+                                 for r in ruled for k in [diary_exclusions.key(r["session"], r["model_version"], r["computed_at"])]],
             "incomplete": [f"{s} {v}: registrazione senza osservazioni" for (s, v) in
                            {(r["session"], r["model_version"]) for r in runs_all} if not obs.get((s, v))]}
 
@@ -231,12 +244,16 @@ def status(now=None, path=None):
                    missing=[], next=None, errors=[])
         if x:
             row.update(tables=x["tables"], official={k: x["official"][k] for k in ("runs", "observations")}, excluded=x["excluded"],
-                       last=x["last"], versionsRecorded=x["versionsRecorded"], late=x["late"])
+                       last=x["last"], versionsRecorded=x["versionsRecorded"], late=x["late"], admissible=x["admissible"],
+                       registryExcluded=x["registryExcluded"])
             row["errors"] += x["incomplete"]
             row["notes"] = [f"seduta {i['session']} ({i['version']}, {i['observations']} osservazioni) registrata in ritardo, il "
                             f"{i['computedAt'][:16].replace('T', ' ')} (dopo la pre-apertura della seduta successiva): una parte "
                             "dei dati (bilanci, stime, dati di mercato di base) può essere quella del momento della "
-                            "registrazione, non della seduta; resta nel file com'è, da leggere con questa avvertenza" for i in x["late"]]
+                            "registrazione, non della seduta; resta nel file com'è" +
+                            (f"; esclusa dalle statistiche prospettiche dal registro delle esclusioni ({i['registry']})"
+                             if i["registry"] else "; DA CLASSIFICARE: non ancora nel registro delle esclusioni")
+                            for i in x["late"]]
         out["diaries"].append(row)
     by = {r["key"]: r for r in out["diaries"]}
     # NYSE diaries: missing official sessions from the first official one to the last closed session
@@ -284,6 +301,7 @@ def status(now=None, path=None):
     if not exists:
         out["problems"].append("diario delle opportunità non ancora avviato")
     out["summary"] = {"officialObservations": sum(r["official"]["observations"] for r in out["diaries"]),
+                      "admissibleObservations": sum((r.get("admissible") or {}).get("observations", 0) for r in out["diaries"]),
                       "excludedObservations": sum(r["excluded"]["observations"] for r in out["diaries"]),
                       "missing": sum(len(r["missing"]) for r in out["diaries"]),
                       "lastSession": max((r["last"]["session"] for r in out["diaries"] if r["last"]), default=None)}
@@ -295,7 +313,11 @@ def text(s):
              f"Job serale: {s['eveningJob']}", f"Origini ufficiali: {', '.join(s['officialSources'])}", ""]
     for r in s["diaries"]:
         lines.append(f"■ {r['name']} ({r['module']}) — {r['state']}, modello {r['version']}")
-        lines.append(f"  ufficiali: {r['official']['runs']} sedute, {r['official']['observations']} osservazioni; "
+        adm = r.get("admissible")
+        if adm is not None:
+            lines.append(f"  ammissibili alla validazione: {adm['runs']} sedute, {adm['observations']} osservazioni "
+                         f"(escluse dal registro: {len(r.get('registryExcluded') or [])})")
+        lines.append(f"  registrate ufficiali: {r['official']['runs']} sedute, {r['official']['observations']} osservazioni; "
                      f"escluse: {r['excluded']['runs']} sedute, {r['excluded']['observations']} osservazioni; "
                      f"versioni presenti: {', '.join(r.get('versionsRecorded') or []) or 'nessuna'}")
         if r["last"]:

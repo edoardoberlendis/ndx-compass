@@ -181,7 +181,7 @@ def previous(before=None, version=None, path=None):
         con.row_factory = sqlite3.Row
         if not _has_tables(con):
             return {}
-        q = "SELECT session FROM etf_runs r WHERE " + od._official("r.source") + (" AND session < ?" if before else "") + (" AND model_version = ?" if version else "")
+        q = "SELECT session FROM etf_runs r WHERE " + od._official("r.source", "etf") + (" AND session < ?" if before else "") + (" AND model_version = ?" if version else "")
         args = [a for a in (before, version) if a]
         last = con.execute(q.replace("SELECT session", "SELECT session, model_version") + " ORDER BY session DESC LIMIT 1", args).fetchone()
         if not last:
@@ -203,12 +203,12 @@ def stats(path=None):
         if not _has_tables(con):
             return empty
         exc = od.excluded(path, "etf_runs", "etf_observations")
-        runs = con.execute("SELECT session, model_version, computed_at, source FROM etf_runs r WHERE " + od._official("r.source") +
+        runs = con.execute("SELECT session, model_version, computed_at, source FROM etf_runs r WHERE " + od._official("r.source", "etf") +
                            " ORDER BY session").fetchall()
         if not runs:
             return dict(empty, excluded=exc)
         n = con.execute("SELECT COUNT(*) FROM etf_observations o JOIN etf_runs r ON r.session=o.session AND "
-                        "r.model_version=o.model_version WHERE " + od._official("r.source")).fetchone()[0]
+                        "r.model_version=o.model_version WHERE " + od._official("r.source", "etf")).fetchone()[0]
         return {"started": True, "days": len({r["session"] for r in runs}), "first": runs[0]["session"], "last": runs[-1]["session"],
                 "lastAt": runs[-1]["computed_at"], "lastSource": runs[-1]["source"], "observations": n,
                 "versions": sorted({r["model_version"] for r in runs}), "excluded": exc}

@@ -1094,3 +1094,19 @@ button.cat-chip { cursor: pointer; font: inherit; font-size: var(--fs-xs); }
 /* Phase 7C: what the risk figures cover, before the figures */
 .fit-scope { border-left: 3px solid var(--line, #8884); padding: 2px 0 2px 10px; margin: 4px 0 8px; }
 .fit-scope.partial { border-left-color: var(--warn, #c98a00); }
+
+/* Phase 8A: Alert e cambiamenti */
+.al-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.al-list { list-style: none; margin: 0; padding: 0; }
+.al-item { border-left: 3px solid var(--line); margin: 6px 0; }
+.al-item.critica { border-left-color: var(--neg); }
+.al-item.importante { border-left-color: var(--warn); }
+.al-item.seen .al-row { opacity: .75; }
+.al-row { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 6px 10px; color: var(--ink); font: inherit; cursor: pointer; overflow-wrap: anywhere; }
+.al-row:hover { background: var(--surface-2); }
+.al-p { font-size: var(--fs-sm); color: var(--ink-2); }
+.al-st { display: block; font-size: var(--fs-sm); color: var(--ink-3); }
+.al-group { margin: 10px 0; }
+.al-group > .al-list { margin-left: 6px; }
+.al-detail { padding: 0 10px 8px 14px; overflow-wrap: anywhere; }
+#alertsBody .kpis { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }

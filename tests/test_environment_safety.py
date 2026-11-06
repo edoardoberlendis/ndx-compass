@@ -475,7 +475,7 @@ def test_17_phone_navigation_scrolls_the_tab_row_not_the_page():
     assert "overflow-x: auto" in block and "min-width: 0" in block and "flex: 0 0 auto" in block
     assert "display: none" not in block.split(".tablist::-webkit-scrollbar")[0]           # no tab hidden
     tabs = __import__("re").findall(r'data-main="(\w+)"', html.split('<div class="tablist"')[1].split("</div>")[0])
-    assert tabs == ["opportunita", "mercato", "portafoglio", "azioni", "etf"]               # same tabs, same order
+    assert tabs == ["opportunita", "mercato", "portafoglio", "azioni", "etf", "alert"]      # same tabs, same order (+ Alert, 8A)
     set_view = js[js.index("function setView"):js.index("function setView") + 900]
     assert "keepTabVisible()" in set_view and "function keepTabVisible" in js
     assert 'addEventListener("hashchange"' in js                                          # direct links and Back unchanged

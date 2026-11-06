@@ -168,7 +168,7 @@ function spark(values, w = 80, h = 22, base = null, color = null) {
 
 // ------------------------------------------------------------ data
 // must equal DASHBOARD_VERSION in server.py: otherwise the server runs old code and the page says so
-const PAGE_VERSION = "2026-11-06a";
+const PAGE_VERSION = "2026-11-06b";
 async function load() {
   const r = await fetch("/api/snapshot", { cache: "no-store" });
   const sv = r.headers.get("X-Dashboard-Version");
@@ -231,6 +231,7 @@ function renderAll() {
   if (state.view === "sectors") loadRotation();
   if (state.view === "diary") loadDiary();
   if (state.view === "etf") loadEtf();
+  if (state.view === "alerts") loadAlerts();
   if (state.detail) { renderDetailHeader(); renderTA(); }
 }
 
@@ -4055,12 +4056,109 @@ function dkFitHTML(o) {
 // Phase 21: three tabs. The Diario dei segnali appears in Ricerca only with about 3 months of data (it keeps recording
 // in the background in any case). Removed pages (Report, Pattern tecnici, Le mie regole) send old links to the nearest one.
 const DIARY_READY = 63;
+// ---------------------------------------------------------------- Alert e cambiamenti (phase 8A)
+// Read only: GET /api/alerts never creates alerts. "Consultato" is a mark of this browser only (localStorage).
+const AL = { data: null, err: null, loading: false, at: 0, open: null,
+  f: LS.get("al.f", { scope: "tutti", family: "tutti", priority: "tutte", when: "attivi", seen: "tutti" }) };
+const AL_SCOPE = { tutti: "Tutti", azione: "Azioni", etf: "ETF", operativo: "Operativi" };
+const AL_PRIO = { critica: "Criticità da verificare", importante: "Cambiamento importante", ordinaria: "Aggiornamento ordinario" };
+const AL_STATUS = { nuovo: "nuovo", persistente: "già segnalato", baseline: "base di partenza", risolto: "risolto", superato: "superato" };
+const alSeen = () => new Set(LS.get("al.seen", []));
+function alMarkSeen(ids) { const s = alSeen(); ids.forEach(i => s.add(i)); LS.set("al.seen", [...s].slice(-3000)); }
+async function loadAlerts(force) {
+  if (AL.loading || (!force && AL.data && Date.now() - AL.at < 60000)) { renderAlerts(); return; }
+  AL.loading = true; renderAlerts();
+  try { const r = await fetch("/api/alerts", { cache: "no-store" }); AL.data = await r.json(); AL.err = r.ok ? null : (AL.data.error || "errore"); }
+  catch (e) { AL.err = "server non raggiungibile"; }
+  AL.loading = false; AL.at = Date.now(); renderAlerts();
+}
+function alFiltered(D) {
+  const f = AL.f, seen = alSeen(), last = D.lastRun?.inputs?.diaries?.opportunity?.last?.session;
+  return D.alerts.filter(a => (f.scope === "tutti" || a.scope === f.scope) && (f.family === "tutti" || a.family === f.family)
+    && (f.priority === "tutte" || a.priority === f.priority)
+    && (f.when === "attivi" ? a.active : f.when === "seduta" ? a.active && (!last || (a.session || "") >= last) : f.when === "storico" ? !a.active : true)
+    && (f.seen === "tutti" || (f.seen === "nuovi" ? !seen.has(a.id) : seen.has(a.id))));
+}
+const alVal = v => v == null ? "—" : typeof v === "object" ? Object.entries(v).map(([k, x]) => `${esc(k)}: ${esc(Array.isArray(x) ? x.join(", ") : String(x))}`).join(" · ") : esc(String(v));
+function alDetailHTML(a) {
+  const link = a.link || {};
+  const go = link.view === "stock" && link.ticker ? `<button class="btn ghost" data-algo="stock" data-t="${esc(link.ticker)}">Apri la scheda di ${esc(link.ticker)}</button>`
+    : link.view ? `<button class="btn ghost" data-algo="${esc(link.view)}">Apri ${link.view === "etf" ? "ETF" : link.view === "opps" ? "Opportunità e Decision Desk" : esc(link.view)}</button>` : "";
+  const ca = a.extra?.causes;
+  return `<div class="al-detail"><ol class="why small">
+    <li><b>Cosa è cambiato</b>: ${esc(a.title)}${a.exploratory ? " <span class=\"warn\">(esplorativo)</span>" : ""} — ${esc(a.reason || "")}</li>
+    <li><b>Prima</b>: ${alVal(a.previous)}</li>
+    <li><b>Ora</b>: ${alVal(a.current)}</li>
+    <li><b>Quando</b>: seduta ${esc(a.session ? dayIT(a.session) : "n.d.")} · osservato ${esc(String(a.observedAt || "").slice(0, 16).replace("T", " "))} · primo controllo ${esc(String(a.firstSeen || "").slice(0, 16).replace("T", " "))}</li>
+    <li><b>Perché monitorarlo</b>: ${esc((D_RULE(a.rule) || {}).when || "")}. Priorità: ${esc(AL_PRIO[a.priority] || a.priority)} (${esc((D_RULE(a.rule) || {}).priority || "")}).</li>
+    <li><b>Dati a supporto</b>: ${esc(a.model?.name || "")} ${esc(a.model?.version || "")}${a.model?.previousSession ? ` (confronto con la seduta ${esc(dayIT(a.model.previousSession))})` : ""}; ${(a.sources || []).filter(s => s.date).map(s => `${esc(s.name)} ${esc(String(s.date).slice(0, 16))}`).join(" · ") || "fonti n.d."}${ca ? `<br>Cause separate: ${Object.entries(ca).map(([k, v]) => `<b>${esc(k)}</b> ${esc(v)}`).join(" · ")}` : ""}</li>
+    <li><b>Limiti</b>: ${esc([a.reliability, ...(a.limits || [])].filter(Boolean).join("; ") || "nessuno indicato")}${a.resolveWhen ? `. Si considera risolto quando: ${esc(a.resolveWhen)}` : ""}</li>
+    <li><b>Dove approfondire</b>: ${go || "—"}</li></ol></div>`;
+}
+const D_RULE = id => (AL.data?.rules || []).find(r => r.id === id);
+function alertsHTML() {
+  if (AL.err) return `<div class="card empty">Alert non disponibili: ${esc(AL.err)}.</div>`;
+  const D = AL.data;
+  if (!D) return `<div class="card">Caricamento degli alert…</div>`;
+  const head = `<div class="card"><h2>Alert e cambiamenti</h2><p class="small">Cosa è cambiato dall'ultima osservazione valida dei diari (solo registrazioni ufficiali e ammissibili), con dati pubblici di azioni ed ETF. ${esc(D.disclaimer)}</p>`;
+  if (!D.started) return head + `<p class="small muted">${esc(D.note || "nessun controllo registrato")}${D.lastCheck?.msg ? ` · ultimo tentativo: ${esc(D.lastCheck.msg)}` : ""}</p></div>`;
+  const C = D.counts, R = D.lastRun, seen = alSeen();
+  const kpi = (l, v, s) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
+  const diaries = Object.entries(R.inputs.diaries || {}).map(([k, x]) => `${esc({ opportunity: "opportunità", investment: "fondamentali", valuation: "DCF", decision: "decisioni", etf: "ETF" }[k] || k)} ${esc(x.comparison)}${x.last ? " " + esc(dayIT(x.last.session)) : ""}`).join(" · ");
+  const fams = ["tutti", ...new Set(D.alerts.map(a => a.family))];
+  const seg = (k, opts) => `<div class="seg">${Object.entries(opts).map(([v, l]) => `<button data-alf="${k}" data-v="${esc(v)}" class="${AL.f[k] === v ? "on" : ""}">${esc(l)}</button>`).join("")}</div>`;
+  const list = alFiltered(D);
+  const groups = {};
+  list.forEach(a => (groups[a.group] = groups[a.group] || []).push(a));
+  const rows = Object.values(groups).map(g => {
+    const a0 = g[0];
+    const items = g.map(a => `<li class="al-item ${a.priority}${seen.has(a.id) ? " seen" : ""}"><button class="al-row" data-alopen="${esc(a.id)}">
+        <span class="al-p">${esc(AL_PRIO[a.priority] || a.priority)}</span> <b>${esc(a.name)}</b>${a.horizon ? ` <span class="muted">${esc(a.horizon)}</span>` : ""} — ${esc(a.title)}${a.exploratory ? " · esplorativo" : ""}
+        <span class="al-st">${esc(AL_STATUS[a.status] || a.status)}${seen.has(a.id) ? " · consultato" : ""} · ${esc(a.session ? dayIT(a.session) : "")}</span></button>
+        ${AL.open === a.id ? alDetailHTML(a) : ""}</li>`).join("");
+    return g.length > 1 ? `<li class="al-group"><div class="small muted">${esc(a0.family)} · ${g.length} eventi collegati</div><ul class="al-list">${items}</ul></li>` : items;
+  }).join("");
+  const miss = D.alerts.filter(a => a.active && a.scope === "operativo");
+  return head + `<p class="small muted">Ultimo controllo registrato ${esc(String(R.at).slice(0, 16).replace("T", " "))} (${esc(R.source)}, motore ${esc(D.version)}) · ultimo tentativo ${esc(String(D.lastCheck?.at || "n.d.").slice(0, 16).replace("T", " "))}${D.lastCheck?.msg ? ": " + esc(D.lastCheck.msg) : ""}<br>Diari: ${diaries}.</p>
+    <div class="kpis">${kpi("Nuovi", C.new, "dall'ultimo controllo")}${kpi("Importanti", C.important, "cambiamenti attivi")}${kpi("Azioni", C.stocks, "alert attivi")}${kpi("ETF", C.etf, "alert attivi")}${kpi("Qualità dei dati", C.quality, "problemi seguiti")}${kpi("Aggiornamenti mancanti", C.operational, miss.length ? "da verificare" : "nessuno")}</div></div>
+    <div class="card"><div class="al-filters">${seg("scope", AL_SCOPE)}${seg("priority", { tutte: "Tutte le priorità", ...AL_PRIO })}${seg("when", { attivi: "Attivi", seduta: "Ultima seduta", storico: "Storico", tutto: "Tutto" })}${seg("seen", { tutti: "Tutti", nuovi: "Da consultare", visti: "Consultati" })}
+      <label class="small">Tipo <select data-alfam>${fams.map(x => `<option ${AL.f.family === x ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>
+      <button class="btn ghost" data-alallseen>Segna tutti come consultati</button></div>
+      ${list.length ? `<ul class="al-list">${rows}</ul>` : `<p class="small">Nessun alert con questi filtri.${C.active === 0 ? " La prima osservazione di ogni diario è solo la base di partenza: gli alert compaiono quando cambia qualcosa." : ""}</p>`}
+      <p class="small muted">${esc(D.priorityRule)}</p></div>
+    <div class="card"><details class="fold" data-k="al-rules"><summary><h3>Regole di emissione</h3><span class="card-meta">${D.rules.length} regole${D.disabled.length ? ` · disattivate: ${esc(D.disabled.join(", "))}` : ""}</span></summary>
+      <ul class="why small">${D.rules.map(r => `<li><b>${esc(r.id)}</b> ${esc(r.title)} (${esc(r.kind)}): ${esc(r.when)}. Priorità: ${esc(r.priority)}.</li>`).join("")}</ul>
+      <p class="small muted">Una regola si disattiva in alert_rules.json senza toccare i modelli finanziari.</p></details></div>`;
+}
+function renderAlerts() {
+  const el = $("#alertsBody");
+  if (!el || state.view !== "alerts") return;
+  const keep = [...el.querySelectorAll("details.fold[data-k]")].filter(d => d.open).map(d => d.dataset.k);
+  el.innerHTML = alertsHTML();
+  keep.forEach(k => { const d = el.querySelector(`details.fold[data-k="${k}"]`); if (d) d.open = true; });
+}
+document.addEventListener("click", e => {
+  if (state.view !== "alerts") return;
+  const f = e.target.closest("[data-alf]");
+  if (f) { AL.f[f.dataset.alf] = f.dataset.v; LS.set("al.f", AL.f); renderAlerts(); return; }
+  const o = e.target.closest("[data-alopen]");
+  if (o) { const id = o.dataset.alopen; AL.open = AL.open === id ? null : id; alMarkSeen([id]); renderAlerts(); return; }
+  if (e.target.closest("[data-alallseen]") && AL.data) { alMarkSeen(alFiltered(AL.data).map(a => a.id)); renderAlerts(); return; }
+  const g = e.target.closest("[data-algo]");
+  if (g) { if (g.dataset.algo === "stock") openDetail(g.dataset.t); else setView(g.dataset.algo); }
+});
+document.addEventListener("change", e => {
+  const s = e.target.closest("[data-alfam]");
+  if (s && state.view === "alerts") { AL.f.family = s.value; LS.set("al.f", AL.f); renderAlerts(); }
+});
+
 const GROUPS = [
   { id: "opportunita", label: "Opportunità", ask: "Quali titoli meritano di essere approfonditi?", views: [["opps", "Opportunità"]] },
   { id: "mercato", label: "Mercato", ask: "Cosa sta succedendo?", views: [["overview", "Oggi"], ["sectors", "Settori"]] },
   { id: "portafoglio", label: "Portafoglio", ask: "Cosa ho e come sta andando?", views: [["portfolio", "Posizioni"], ["pfperf", "Performance"], ["pfconc", "Concentrazione"], ["pfrisk", "Rischio"], ["pffit", "Compatibilità"]] },
   { id: "azioni", label: "Azioni", ask: "Quali azioni del Nasdaq-100 potrei comprare?", views: [["screener", "Screener"], ["watch", "In osservazione"], ["diary", "Diario dei segnali"]] },
   { id: "etf", label: "ETF", ask: "Quali ETF potrei comprare?", views: [["etf", "ETF"]] },
+  { id: "alert", label: "Alert", ask: "Cosa è cambiato dall'ultima osservazione?", views: [["alerts", "Alert e cambiamenti"]] },
 ];
 const PF_SUBS = ["portfolio", "pfperf", "pfconc", "pfrisk", "pffit"];
 const OLD_LINKS = { map: "sectors", ideas: "sectors", trade: "screener", rules: "portfolio", metodo: "screener", ricerca: "screener" };
