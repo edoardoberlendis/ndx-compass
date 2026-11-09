@@ -2,6 +2,7 @@
 
     .venv/bin/python preview.py            # http://127.0.0.1:8101 (PORT=... per un'altra porta)
     .venv/bin/python preview.py --vuoto    # senza la copia dei diari (diari vuoti)
+    .venv/bin/python preview.py --portafoglio-finto   # con un portafoglio INVENTATO, solo in memoria (Fase 8B.1)
 
 Cosa fa:
 - dichiara l'ambiente «anteprima» e accende la guardia di app_env: ogni scrittura nella cartella del progetto (diari,
@@ -54,6 +55,48 @@ import etf  # noqa: E402
 
 etf.public = lambda: None
 etf.status = lambda: {"error": None, "running": True}
+
+# Fase 8B.1: eventi macro e trimestrali dai file pubblici già in cache/ (sola lettura, nessun download)
+import json  # noqa: E402
+
+import earnings  # noqa: E402
+import macro_calendar  # noqa: E402
+
+for path, target in ((macro_calendar.AUTO_CACHE, macro_calendar._auto), (macro_calendar.BLS_CACHE, macro_calendar._bls)):
+    try:
+        with open(path) as f:
+            target.update(json.load(f))
+    except (OSError, ValueError):
+        pass
+macro_calendar.check_official = lambda: None           # mai le pagine Fed / BEA dall'anteprima
+macro_calendar.refresh_bls = lambda: None              # mai l'API BLS dall'anteprima
+earnings._dates = lambda ticker: []                    # trimestrali: solo quelle già in cache/earnings.json
+
+
+def _cached_reports(tickers):
+    """Come earnings.reports, ma in sola lettura: niente download e niente scrittura della cache."""
+    c = server.read_cache(earnings.CACHE, 7 * 86400) or {}
+    data = c.get("data") or {}
+    return {t: (data.get(t) or {}).get("reports") or [] for t in tickers}
+
+
+earnings.reports = _cached_reports
+
+# Fase 8B.1: --portafoglio-finto = posizioni INVENTATE in memoria, per vedere le pagine del Portafoglio senza dati reali
+FAKE = [  # name, isin, symbol, market, kind, currency, qty, price, ticker
+    ("NVIDIA CORP", "US67066G1040", "NVDA", "OQ", "Azioni", "USD", 10, 180.0, "NVDA"),
+    ("MICROSOFT CORP", "US5949181045", "MSFT", "OQ", "Azioni", "USD", 4, 500.0, "MSFT"),
+    ("ETF INVENTATO NASDAQ 100", "XX0000000001", "FNDQ", "MI", "ETF", "EUR", 20, 100.0, None),
+    ("ETF INVENTATO 3X LEVA", "XX0000000002", "FLV3", "MI", "ETF", "EUR", 15, 40.0, None),
+]
+if "--portafoglio-finto" in sys.argv:
+    import portfolio  # noqa: E402
+    fake = [{"name": n, "isin": i, "symbol": sy, "market": m, "kind": k, "currency": c, "qty": q, "costPrice": pr * 0.9,
+             "costFx": 1.1 if c == "USD" else 1.0, "costValue": q * pr * 0.9 / (1.1 if c == "USD" else 1.0), "filePrice": pr,
+             "fileFx": 1.1 if c == "USD" else 1.0, "fileValue": q * pr / (1.1 if c == "USD" else 1.0), "ticker": t,
+             "tickerHow": "inventato" if t else None} for n, i, sy, m, k, c, q, pr, t in FAKE]
+    portfolio._state.update(path=os.path.join(BASE, "portafoglio_inventato.xls"), mtime=__import__("time").time(), positions=fake, error=None,
+                            resolving=False, quotes={}, fx=None, quotesAt=None)
 ALERTS = server.save_alerts(source="anteprima")         # phase 8A: one check, into the temporary registry only
 
 if __name__ == "__main__":

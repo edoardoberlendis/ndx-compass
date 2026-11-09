@@ -88,9 +88,42 @@ def usual_move(reps, closes):
     return sum(abs(m["move"]) for m in moves) / len(moves) if len(moves) >= 4 else None
 
 
-def details(tickers, daily, analysts):
-    """{ticker: {...}} for the companies of the earnings list, from the cache of today or computed now."""
+def _et_date(ts):
+    return pd.Timestamp(ts, unit="s", tz="UTC").tz_convert("America/New_York").date() if isinstance(ts, (int, float)) \
+        else pd.Timestamp(ts).tz_convert("America/New_York").date()
+
+
+def _period(fund, report_date):
+    """Accounting quarter of a report from the statements: (end, revenue) when a quarter's results were announced on
+    that day (fundamentals.announced), otherwise the likely quarter end from the statements' cadence, without revenue."""
+    import fundamentals
+    if not fund:
+        return None, None, False
+    for q in fund.get("Q") or []:
+        a = fundamentals.announced(q["end"], fund.get("earnings"))
+        if a and abs((pd.Timestamp(a).date() - report_date).days) <= 1:
+            return q["end"], q.get("revenue"), True
+    qs = sorted(q["end"] for q in fund.get("Q") or [])
+    if qs:
+        nxt = pd.Timestamp(qs[-1]) + pd.DateOffset(months=3)
+        while nxt.date() < report_date - timedelta(days=100):
+            nxt += pd.DateOffset(months=3)
+        if nxt.date() < report_date:
+            return nxt.strftime("%Y-%m"), None, False                        # month only: an estimate
+    return None, None, False
+
+
+def details(tickers, daily, analysts, announce=None, infos=None, fund=None, fetched=None, analysts_date=None, now=None):
+    """{ticker: {...}} for the companies of the earnings list (phase 8B.1: also the ones of the last 7 days).
+
+    status: "pubblicata" when Yahoo already has the reported EPS of that announcement (same day ±1), "attesa dati" when
+    the date has passed but the source has no results yet, otherwise "da pubblicare". For a published report the
+    expected EPS is the estimate Yahoo recorded for THAT report, never the current quarter's ("0q" moves to the next
+    quarter after the report); the expected revenue is used only if the analysts' data were downloaded before the day
+    of the report. dateConfirmed: Yahoo's isEarningsDateEstimate (None when the source does not say)."""
     allrep = reports(tickers)
+    now_ts = (now or time.time())
+    announce, infos, fund = announce or {}, infos or {}, fund or {}
     out = {}
     for t in tickers:
         reps = allrep.get(t) or []
@@ -98,16 +131,38 @@ def details(tickers, daily, analysts):
         moves = reaction_moves(reps, closes)
         q = ((analysts.get(t) or {}).get("eps") or {}).get("0q") or {}
         rv = ((analysts.get(t) or {}).get("rev") or {}).get("0q") or {}
-        out[t] = {
-            "epsExpected": q.get("avg"), "epsAnalysts": q.get("numberOfAnalysts"),
-            "revExpected": rv.get("avg"), "revAnalysts": rv.get("numberOfAnalysts"),
-            "last": reps[0] if reps else None,
-            "moves": moves, "usualMove": sum(abs(m["move"]) for m in moves) / len(moves) if len(moves) >= 4 else None,
+        ts = announce.get(t)
+        day = _et_date(ts) if ts else None
+        last = reps[0] if reps else None
+        same = bool(last and day and abs((_et_date(last["ts"]) - day).days) <= 1)
+        status = "pubblicata" if same else ("attesa dati" if ts and ts <= now_ts else "da pubblicare")
+        est = (infos.get(t) or {}).get("isEarningsDateEstimate")
+        period, rev_actual, exact = _period(fund.get(t), day) if day else (None, None, False)
+        x = {
+            "status": status, "announceTs": ts, "dateConfirmed": None if est is None else not est,
+            "period": period, "periodExact": exact, "fetched": fetched, "analystsDate": analysts_date,
+            "website": (infos.get(t) or {}).get("website"),
+            "last": last, "moves": moves, "usualMove": sum(abs(m["move"]) for m in moves) / len(moves) if len(moves) >= 4 else None,
         }
+        if status == "pubblicata":
+            before = bool(analysts_date and day and analysts_date < day.isoformat())
+            x.update(epsExpected=last.get("eps"), epsActual=last.get("reported"), epsSurprise=last.get("surprise"),
+                     epsAnalysts=None, revExpected=rv.get("avg") if before else None,
+                     revAnalysts=rv.get("numberOfAnalysts") if before else None,
+                     revActual=rev_actual if exact else None,
+                     prev=reps[1] if len(reps) > 1 else None)
+        else:
+            x.update(epsExpected=q.get("avg"), epsAnalysts=q.get("numberOfAnalysts"), epsActual=None, epsSurprise=None,
+                     revExpected=rv.get("avg"), revAnalysts=rv.get("numberOfAnalysts"), revActual=None, prev=None)
+        if isinstance(x.get("revActual"), (int, float)) and isinstance(x.get("revExpected"), (int, float)) and x["revExpected"]:
+            x["revSurprise"] = (x["revActual"] / x["revExpected"] - 1) * 100
+        else:
+            x["revSurprise"] = None
+        out[t] = x
     return out
 
 
-def details_async(tickers, daily, analysts, done):
+def details_async(tickers, daily, analysts, done, **extra):
     """Compute in the background (one Yahoo request per company): done(result) when ready."""
     with _lock:
         if _state["running"]:
@@ -116,7 +171,7 @@ def details_async(tickers, daily, analysts, done):
 
     def job():
         try:
-            done(details(tickers, daily, analysts))
+            done(details(tickers, daily, analysts, **extra))
         except Exception:
             log.exception("earnings details failed")
         finally:

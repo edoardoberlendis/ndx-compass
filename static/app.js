@@ -152,6 +152,12 @@ document.addEventListener("click", e => {
   }
   if (infoPinned) { infoPinned = null; hideTip(); }
 }, true);
+// phase 8B.1: a pinned explanation never stays on screen on its own (anchor re-rendered away, page changed, scroll)
+const unpinTip = () => { if (infoPinned) { infoPinned = null; hideTip(); } };
+setInterval(() => { if (infoPinned && !infoPinned.isConnected) unpinTip(); }, 800);
+addEventListener("scroll", () => { if (infoPinned) unpinTip(); }, { passive: true });
+// phase 8B.1: the generic "exploratory, not advice" notices are one discreet line; the full text opens on request
+const scopeNote = (lead, body) => `<details class="scope-note"><summary><span class="sn-lead">${lead}</span> <span class="sn-more">Come funziona</span></summary><div class="sn-body">${body}</div></details>`;
 
 // ------------------------------------------------------------ sparkline (inline SVG)
 function spark(values, w = 80, h = 22, base = null, color = null) {
@@ -168,7 +174,7 @@ function spark(values, w = 80, h = 22, base = null, color = null) {
 
 // ------------------------------------------------------------ data
 // must equal DASHBOARD_VERSION in server.py: otherwise the server runs old code and the page says so
-const PAGE_VERSION = "2026-11-06c";
+const PAGE_VERSION = "2026-11-09a";
 async function load() {
   const r = await fetch("/api/snapshot", { cache: "no-store" });
   const sv = r.headers.get("X-Dashboard-Version");
@@ -284,6 +290,21 @@ document.addEventListener("click", e => {
 });
 
 // ------------------------------------------------------------ treemap
+// short sector names for narrow treemap headers (phase 8B.1)
+const SEC_SHORT = { "Telecomunicazioni": "Telecom.", "Beni di prima necessità": "Beni primari", "Materiali di base": "Materiali", "Consumi discrezionali": "Consumi discr.",
+  "Immobiliare": "Immobil.", "Industria": "Industria", "Energia": "Energia", "Utility": "Utility", "Sanità": "Sanità", "Finanza": "Finanza", "Tecnologia": "Tecnologia" };
+const SEC_TINY = { "Telecomunicazioni": "Tel.", "Beni di prima necessità": "Beni", "Materiali di base": "Mat.", "Consumi discrezionali": "Cons.", "Immobiliare": "Imm.",
+  "Industria": "Ind.", "Energia": "En.", "Utility": "Ut.", "Sanità": "San.", "Finanza": "Fin.", "Tecnologia": "Tec." };
+// list under the market map: every sector with its value and stocks, so small boxes stay readable (touch and keyboard)
+function mapListHTML(tf) {
+  const secs = sectors().slice().sort((a, b) => (b.mcap || 0) - (a.mcap || 0));
+  const by = d3.group(stocks(), s => s.sector);
+  return `<details class="map-list" ${innerWidth < 700 ? "open" : ""}><summary><span class="small">Elenco dei settori e dei titoli (${secs.length} settori) · utile per i riquadri piccoli</span></summary>
+    <div class="ml-grid">${secs.map(c => { const xs = (by.get(c.name) || []).slice().sort((a, b) => (b.mcap || 0) - (a.mcap || 0));
+      return `<details class="ml-sec"><summary><b>${esc(c.name)}</b> <span class="${tf === "RV" ? "" : sign(c[tf])}">${fMetric(tf, c[tf])}</span> <span class="muted small">${xs.length} titoli</span></summary>
+        <ul>${xs.map(x => `<li><button class="link-btn" data-open-map="${esc(x.ticker)}">${esc(x.ticker)}</button> <span class="muted small">${esc(x.name)}</span> <span class="${tf === "RV" ? "" : sign(val(x, tf))}">${fMetric(tf, val(x, tf))}</span></li>`).join("")}</ul></details>`; }).join("")}</div></details>`;
+}
+document.addEventListener("click", e => { const b = e.target.closest("[data-open-map]"); if (b) openDetail(b.dataset.openMap); });
 function renderTreemap(el, opts = {}) {
   const W = el.clientWidth, H = el.clientHeight;
   if (!W || !H) return;
@@ -307,8 +328,12 @@ function renderTreemap(el, opts = {}) {
   let html = "";
   for (const sec of root.children || []) {
     const w = sec.x1 - sec.x0, h = sec.y1 - sec.y0, agg = secAgg.get(sec.data.name);
+    // phase 8B.1: the full name when it fits, a short one otherwise, nothing cut in half (full name + value in the title)
+    const full = sec.data.name, val1 = agg ? fMetric(tf, agg[tf]) : "", fit = t => t.length * 6.3 + 12 <= w;
+    const label = fit(full) ? full : fit(SEC_SHORT[full] || full) ? (SEC_SHORT[full] || full) : fit(SEC_TINY[full] || "") ? SEC_TINY[full] : "";
+    const showV = agg && w > label.length * 6.3 + 60;
     html += `<div class="sector-box" style="left:${sec.x0}px;top:${sec.y0}px;width:${w}px;height:${h}px">
-      <div class="sector-h" data-sector="${esc(sec.data.name)}" title="Ingrandisci ${esc(sec.data.name)}">${esc(sec.data.name)}${agg && w > 110 ? `<span class="sv">${fMetric(tf, agg[tf])}</span>` : ""}</div></div>`;
+      <div class="sector-h" data-sector="${esc(full)}" title="${esc(full)}${val1 ? " " + esc(String(val1).replace(/<[^>]+>/g, "")) : ""} · clicca per ingrandire"><span class="sn">${esc(label)}</span>${showV ? `<span class="sv">${val1}</span>` : ""}</div></div>`;
   }
   for (const leaf of root.leaves()) {
     const s = leaf.data, w = leaf.x1 - leaf.x0, h = leaf.y1 - leaf.y0;
@@ -394,6 +419,11 @@ function volInfo(vix, vxn) {
 function renderOvMap() {
   $("#ovUnzoom").hidden = !state.zoom;
   renderTreemap($("#ovMap"), { zoomable: true });
+  const ml = $("#ovMapList"), keep = ml.querySelector(".map-list"), wasOpen = keep ? keep.open : null;
+  const openSecs = new Set([...ml.querySelectorAll(".ml-sec[open] > summary b")].map(b => b.textContent));
+  ml.innerHTML = mapListHTML(state.tf);
+  if (wasOpen !== null) ml.querySelector(".map-list").open = wasOpen;
+  ml.querySelectorAll(".ml-sec").forEach(d => { if (openSecs.has(d.querySelector("summary b").textContent)) d.open = true; });
 }
 $("#ovUnzoom").addEventListener("click", () => { state.zoom = null; renderOvMap(); });
 
@@ -585,7 +615,7 @@ const PRESETS = [
 // ⓘ text for every screener quick filter
 const PRESET_INFO = {
   all: "Tutti i titoli del Nasdaq-100, senza filtri.",
-  watch: "Solo i titoli che hai segnato con ★ (gli stessi di Ricerca → In osservazione).",
+  watch: "Solo i titoli che hai segnato con ★ (gli stessi di Azioni → Preferiti).",
   gainers: "Titoli saliti più del 2% oggi rispetto alla chiusura precedente.",
   losers: "Titoli scesi più del 2% oggi rispetto alla chiusura precedente.",
   gapup: "Il titolo ha aperto oltre l'1,5% sopra la chiusura di ieri: di solito dopo una notizia uscita a mercato chiuso.",
@@ -643,12 +673,19 @@ function toggleWatch(t) {
   if (state.panel === "etf" && etfS.open) openEtf(etfS.open);
 }
 
-// earnings of the next 7 days; my stocks first
-// Earnings of the next 7 days: one compact line per company, details on click (estimates, last report, usual move).
-// Details come from /api/earnings (earnings.py); a missing figure is simply not shown.
+// ------------------------------------------------------------ earnings (phase 8B.1: last 7 days + next 7, grouped by day)
+// Details from /api/earnings (earnings.py). Missing figures are written "Non disponibile", never guessed. Three dates are
+// kept apart: the day of the announcement, the accounting quarter, and the day the dashboard downloaded the data.
 const earn = { data: {}, at: 0, open: new Set() };
 const EARN_MOVE_INFO = `Quanto si è mosso in media il titolo, in più o in meno, nel giorno di reazione alle ultime trimestrali (la seduta stessa se i conti escono prima dell'apertura,
   quella dopo se escono dopo la chiusura), calcolato dai prezzi giornalieri. <b>Indica quanto si rischia tenendo il titolo durante i conti</b>, non in che direzione andrà.`;
+const EARN_DATE_INFO = `<b>Data confermata</b>: Yahoo Finance indica che la data viene dalla società. <b>Data stimata</b>: Yahoo la stima dal calendario degli anni passati,
+  la società non l'ha ancora annunciata: può cambiare. <b>Conferma non indicata</b>: la fonte non dice se è confermata; trattala come non verificata finché non la trovi
+  sul sito della società (sezione «Investor relations»).`;
+const EARN_SRC_INFO = `Stime degli analisti, utile per azione effettivo e sorpresa vengono da Yahoo Finance; i ricavi effettivi dai bilanci trimestrali scaricati
+  da Yahoo, solo quando il trimestre risulta annunciato in quella data. La <b>guidance</b> (le previsioni della società) non è in nessuna fonte gratuita leggibile
+  dalla dashboard: leggila nel comunicato della società. Un dato riscaricato oggi non vuol dire pubblicato oggi: conta la data dell'annuncio.`;
+const NA = `<span class="na">Non disponibile</span>`;
 async function loadEarnDetails() {
   if (Date.now() - earn.at < 60_000) return;
   earn.at = Date.now();
@@ -657,36 +694,85 @@ async function loadEarnDetails() {
     earn.data = d.data || {};
     if (d.loading) { earn.at = 0; setTimeout(loadEarnDetails, 4000); }
   } catch { return; }
-  if (state.view === "overview") renderEarnings();
+  if (state.view === "overview") { renderEarnings(); renderAgenda(); }
 }
 function earnWhen(ts) {          // Yahoo gives a time only when the company announced it
   const h = +new Date(ts * 1000).toLocaleString("en-US", { timeZone: tz, hour: "numeric", hour12: false });
-  return h > 0 && h < 12 ? "prima dell'apertura" : h >= 16 ? "dopo la chiusura" : "";
+  return h > 0 && h < 12 ? "prima dell'apertura" : h >= 16 ? "dopo la chiusura" : "orario non indicato";
+}
+const nyDay = ts => new Date(ts * 1000).toLocaleDateString("en-CA", { timeZone: tz });
+const dayLong = iso => new Date(iso + "T12:00:00").toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long" });
+const monthOf = ym => ym ? new Date(ym.slice(0, 7) + "-15T12:00:00").toLocaleDateString("it-IT", { month: "short", year: "numeric" }) : "";
+// companies with an earnings date between 7 days ago and 7 days ahead (same window as /api/earnings)
+function earnList() {
+  const now = Date.now() / 1000;
+  return stocks().filter(s => isNum(s.earningsTs) && s.earningsTs - now >= -7 * 86400 && s.earningsTs - now <= 7.5 * 86400);
+}
+function earnStatus(s) {
+  const E = earn.data[s.ticker];
+  if (E?.status) return E.status;
+  return s.earningsTs * 1000 <= Date.now() ? "attesa dati" : "da pubblicare";
+}
+const EARN_ST = { "pubblicata": ["Pubblicata", "pub"], "attesa dati": ["Data passata · risultati non ancora nella fonte", "wait"], "da pubblicare": ["Da pubblicare", "next"] };
+function earnConfirm(E) {
+  if (!E || E.dateConfirmed == null) return `<span class="ec-tag warn">conferma non indicata dalla fonte</span>`;
+  return E.dateConfirmed ? `<span class="ec-tag ok">data confermata (secondo Yahoo)</span>` : `<span class="ec-tag warn">data stimata da Yahoo, non confermata dalla società</span>`;
+}
+const usd = v => isNum(v) ? fNum(v, 2) + " $" : NA;
+const big = v => isNum(v) ? "$" + fBig(v) : NA;
+const surp = v => isNum(v) ? `<span class="${sign(v)}">${fPct(v, 1)}</span>` : NA;
+function earnSummary(E, st) {
+  if (!E) return "Dettagli in caricamento.";
+  if (st === "pubblicata") {
+    if (!isNum(E.epsActual) || !isNum(E.epsExpected)) return "Risultati pubblicati: confronto con le attese non disponibile.";
+    const d = E.epsSurprise;
+    const w = !isNum(d) ? "rispetto alle attese" : Math.abs(d) < 1 ? "in linea con le attese" : d > 0 ? "sopra le attese" : "sotto le attese";
+    return `Utile per azione ${w} (${fNum(E.epsActual, 2)} $ contro ${fNum(E.epsExpected, 2)} $ attesi${isNum(d) ? `, sorpresa ${fPct(d, 1)}` : ""}).`
+      + (isNum(E.revSurprise) ? ` Ricavi ${E.revSurprise >= 0 ? "sopra" : "sotto"} le attese (${fPct(E.revSurprise, 1)}).` : " Ricavi effettivi non ancora nella fonte.");
+  }
+  if (st === "attesa dati") return "La data è passata ma Yahoo non ha ancora i risultati: controlla il comunicato della società.";
+  return isNum(E.epsExpected) ? `Attesi ${fNum(E.epsExpected, 2)} $ di utile per azione${E.epsAnalysts ? ` (media di ${E.epsAnalysts} analisti)` : ""}${isNum(E.revExpected) ? ` e ricavi per $${fBig(E.revExpected)}` : ""}.` : "Stime degli analisti non disponibili.";
+}
+function earnRow(s) {
+  const E = earn.data[s.ticker], st = earnStatus(s), [stL, stC] = EARN_ST[st];
+  const fav = state.watch.has(s.ticker), open = earn.open.has(s.ticker);
+  const period = E?.period ? `trimestre chiuso a ${esc(monthOf(E.period))}${E.periodExact ? " (dai bilanci)" : " (stima dalla cadenza dei bilanci)"}` : "trimestre non disponibile";
+  const yahoo = `https://finance.yahoo.com/quote/${encodeURIComponent(s.ticker)}/`;
+  const site = E?.website && /^https?:\/\//.test(E.website) ? E.website : null;
+  const pub = st === "pubblicata";
+  const moves = E?.moves?.length ? `<div class="ed-row"><span>Movimenti dopo le ultime trimestrali</span><b>${E.moves.map(m => `<span class="${sign(m.move)}">${fPct(m.move, 1)}</span>`).join(" ")}</b>${isNum(E.usualMove) ? ` <span class="muted">di solito ±${fNum(E.usualMove, 0)}% ${info(EARN_MOVE_INFO)}</span>` : ""}</div>` : "";
+  return `<div class="er ${open ? "open" : ""}">
+    <div class="er-h"><button class="er-tk" data-open="${esc(s.ticker)}" title="Apri la scheda">${fav ? '<span class="mine" title="Nei tuoi Preferiti">★</span> ' : ""}${esc(s.ticker)}</button>
+      <span class="er-n">${esc(s.name)}</span><span class="er-st ${stC}">${stL}</span></div>
+    <div class="er-meta">${esc(earnWhen(s.earningsTs))} · ${period}${pub ? "" : " · " + earnConfirm(E) + " " + info(EARN_DATE_INFO)}</div>
+    ${st === "attesa dati" ? "" : `<div class="er-grid">
+      <div><span>Utile per azione atteso</span><b>${usd(E?.epsExpected)}</b></div>
+      <div><span>Utile per azione effettivo</span><b>${pub ? usd(E?.epsActual) : `<span class="muted">non ancora pubblicato</span>`}</b></div>
+      <div><span>Sorpresa utile</span><b>${pub ? surp(E?.epsSurprise) : "—"}</b></div>
+      <div><span>Ricavi attesi</span><b>${big(E?.revExpected)}</b></div>
+      <div><span>Ricavi effettivi</span><b>${pub ? big(E?.revActual) : `<span class="muted">non ancora pubblicati</span>`}</b></div>
+      <div><span>Sorpresa ricavi</span><b>${pub ? surp(E?.revSurprise) : "—"}</b></div>
+    </div>`}
+    <p class="er-sum">${esc(earnSummary(E, st))} <span class="muted">Guidance: non disponibile nella fonte.</span></p>
+    <div class="er-src small"><a href="${yahoo}" target="_blank" rel="noopener">Yahoo Finance ↗</a>${site ? ` · <a href="${esc(site)}" target="_blank" rel="noopener">sito della società ↗</a>` : ""}
+      · <span class="muted">annuncio ${esc(fDate(s.earningsTs, { day: "numeric", month: "short" }))}${E?.fetched ? ` · dati scaricati il ${esc(dayIT(E.fetched))}` : ""}${E?.analystsDate ? ` · stime del ${esc(dayIT(E.analystsDate))}` : ""}</span> ${info(EARN_SRC_INFO)}
+      ${moves || E?.prev ? `<button class="link-btn" data-earn="${esc(s.ticker)}">${open ? "Meno dettagli" : "Storico reazioni"}</button>` : ""}</div>
+    ${open ? `<div class="er-more">${moves}${E?.prev ? `<div class="ed-row"><span>Trimestrale precedente (${esc(dayShort(E.prev.ts.slice(0, 10)))})</span><b>attesi ${usd(E.prev.eps)}, effettivi ${usd(E.prev.reported)}</b> ${surp(E.prev.surprise)}</div>` : ""}</div>` : ""}
+  </div>`;
 }
 function renderEarnings() {
   loadEarnDetails();
-  const mine = s => state.watch.has(s.ticker) ? 1 : 0;
-  const list = stocks().filter(s => { const d = daysTo(s.earningsTs); return d != null && d <= 7; })
-    .sort((a, b) => mine(b) - mine(a) || a.earningsTs - b.earningsTs);
   const el = $("#earnings");
-  if (!list.length) { el.innerHTML = `<div class="empty">Nessuna trimestrale nei prossimi 7 giorni</div>`; return; }
-  const num = (v, d = 2) => isNum(v) ? fNum(v, d) : null;
-  el.innerHTML = list.map(s => {
-    const d = Math.round(daysTo(s.earningsTs)), E = earn.data[s.ticker] || {}, L = E.last, when = earnWhen(s.earningsTs);
-    const det = [
-      isNum(E.epsExpected) ? `<div><span>Utile per azione atteso</span><b>${num(E.epsExpected)} $</b>${E.epsAnalysts ? ` <span class="muted">(${E.epsAnalysts} analisti)</span>` : ""}</div>` : "",
-      isNum(E.revExpected) ? `<div><span>Ricavi attesi</span><b>$${fBig(E.revExpected)}</b>${E.revAnalysts ? ` <span class="muted">(${E.revAnalysts} analisti)</span>` : ""}</div>` : "",
-      L && isNum(L.reported) ? `<div><span>Ultima trimestrale (${dayShort(L.ts.slice(0, 10))})</span><b>${isNum(L.eps) ? `attesi ${num(L.eps)} $, ` : ""}effettivi ${num(L.reported)} $</b>${isNum(L.surprise) ? ` <span class="${sign(L.surprise)}">sorpresa ${fPct(L.surprise, 1)}</span>` : ""}</div>` : "",
-      E.moves?.length ? `<div><span>Movimenti dopo le ultime trimestrali</span><b>${E.moves.map(m => `<span class="${sign(m.move)}">${fPct(m.move, 1)}</span>`).join(" ")}</b></div>` : "",
-    ].filter(Boolean).join("");
-    const open = earn.open.has(s.ticker) && det;
-    return `<div class="earn-it ${open ? "open" : ""}"><button class="earn-row" data-earn="${esc(s.ticker)}" ${det ? "" : "disabled"}>
-        <span class="t">${mine(s) ? '<span class="mine" title="Tra i miei titoli">★</span> ' : ""}${esc(s.ticker)}</span><span class="n">${esc(s.name)}</span>
-        <span class="r num">${fDate(s.earningsTs, { weekday: "short", month: "short", day: "numeric" })}${when ? ` · <span class="muted">${when}</span>` : ""}</span>
-        <span class="r muted num">${d <= 0 ? "oggi" : "tra " + d + " g"}</span>
-        <span class="r num">${isNum(E.usualMove) ? `di solito ±${fNum(E.usualMove, 0)}%` : ""}</span></button>
-      ${open ? `<div class="earn-det">${det}<p class="muted small">«Di solito ±${fNum(E.usualMove ?? 0, 0)}%» ${info(EARN_MOVE_INFO)} · dati Yahoo Finance</p></div>` : ""}</div>`;
-  }).join("");
+  const list = earnList().sort((a, b) => a.earningsTs - b.earningsTs);
+  if (!list.length) { el.innerHTML = `<div class="empty">Nessuna trimestrale negli ultimi 7 giorni né nei prossimi 7</div>`; earnBar(0, null); return; }
+  const past = list.filter(s => earnStatus(s) !== "da pubblicare").reverse(), next = list.filter(s => earnStatus(s) === "da pubblicare");
+  earnBar(list.length, next[0], next.length, past.length);
+  const byDay = arr => { const g = new Map(); arr.forEach(s => { const d = nyDay(s.earningsTs); g.has(d) || g.set(d, []); g.get(d).push(s); }); return [...g]; };
+  const mine = (a, b) => (state.watch.has(b.ticker) ? 1 : 0) - (state.watch.has(a.ticker) ? 1 : 0);
+  const block = (title, arr, note) => `<section class="eg"><h3 class="eg-h">${title} <span class="muted small">${arr.length}</span></h3>${note ? `<p class="muted small">${note}</p>` : ""}
+    ${arr.length ? byDay(arr).map(([d, xs]) => `<div class="eg-day"><h4>${esc(dayLong(d))}</h4><div class="eg-rows">${xs.sort(mine).map(earnRow).join("")}</div></div>`).join("") : `<p class="small muted">Nessuna.</p>`}</section>`;
+  el.innerHTML = block("Da pubblicare · prossimi 7 giorni", next, "Le date senza conferma della società sono segnate come stimate o non verificate.")
+    + block("Pubblicate · ultimi 7 giorni", past, "Risultati come li riporta Yahoo Finance; «data passata» = la fonte non ha ancora i numeri.");
 }
 document.addEventListener("click", e => {
   const b = e.target.closest("[data-earn]");
@@ -695,6 +781,57 @@ document.addEventListener("click", e => {
   earn.open.has(t) ? earn.open.delete(t) : earn.open.add(t);
   renderEarnings();
 });
+$("#earnings").addEventListener("click", e => { const b = e.target.closest("[data-open]"); if (b) openDetail(b.dataset.open); });
+
+// short agenda next to the map: the next macro events and earnings, at most 6 lines (the full tables are below)
+let macroNext = null;
+function renderAgenda() {
+  const el = $("#agenda");
+  if (!el) return;
+  const now = Date.now() / 1000;
+  const items = [
+    ...(macroNext?.events || []).filter(e => e.ts > now - 3600).map(e => ({ ts: e.ts, html: `<b>${esc(MACRO[e.kind].title.split(" (")[0])}</b>`, kind: "macro" })),
+    ...earnList().filter(s => s.earningsTs > now - 3600 && earnStatus(s) === "da pubblicare").map(s => ({ ts: s.earningsTs, html: `<b>${esc(s.ticker)}</b> <span class="muted">trimestrale${state.watch.has(s.ticker) ? " ★" : ""}</span>`, kind: "earn", t: s.ticker })),
+  ].sort((a, b) => a.ts - b.ts);
+  macroBar();
+  if (!items.length) { el.innerHTML = `<div class="empty">Nessun appuntamento nei prossimi 7 giorni</div>`; return; }
+  const shown = items.slice(0, 6);
+  el.innerHTML = `<ul class="ag-list">${shown.map(x => `<li><span class="ag-d">${esc(fDate(x.ts, { weekday: "short", day: "numeric", month: "short" }))}${x.kind === "macro" ? " · " + esc(new Date(x.ts * 1000).toLocaleTimeString("it-IT", { timeZone: tz, hour: "2-digit", minute: "2-digit" })) + " NY" : ""}</span><span class="ag-t">${x.html}</span></li>`).join("")}</ul>
+    <p class="small"><a href="#macroCard" class="link-btn" data-fold-open="macroCard">Tutti gli eventi macro ↓</a> · <a href="#earnCard" class="link-btn" data-fold-open="earnCard">tutte le trimestrali (${items.filter(x => x.kind === "earn").length}) ↓</a></p>`;
+}
+// the agenda links open the accordion and scroll to it (data-fold-open, not data-goto: data-goto changes page)
+document.addEventListener("click", e => {
+  const g = e.target.closest("[data-fold-open]"); if (!g) return;
+  e.preventDefault();
+  const card = document.getElementById(g.dataset.foldOpen); if (!card) return;
+  setFold(card, true);
+  card.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+});
+
+// ---- Eventi macro USA and Trimestrali as accordions: presentation only, the data and the tables are unchanged.
+// Closed when Mercato opens; the button carries aria-expanded, the closed body is inert (no focus inside it).
+function setFold(card, open) {
+  card.classList.toggle("open", open);
+  card.querySelector(".fold-btn").setAttribute("aria-expanded", String(open));
+  card.querySelector(".fold-body").inert = !open;
+  if (!open) card.classList.remove("shown");
+  else setTimeout(() => card.classList.contains("open") && card.classList.add("shown"), 220);   // after the opening: tooltips not clipped
+}
+const closeFolds = () => $$(".mfold").forEach(c => setFold(c, false));   // "fold" alone is taken by other <details>
+
+document.addEventListener("click", e => { const b = e.target.closest("[data-fold]"); if (!b) return; const c = document.getElementById(b.dataset.fold); setFold(c, !c.classList.contains("open")); });
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const agWhen = ts => esc(fDate(ts, { weekday: "short", day: "numeric", month: "short" }));
+function earnBar(n, first, nNext, nPast) {
+  $("#earnCount").textContent = n ? `${plural(n, "società", "società")} · ${nNext} da pubblicare, ${plural(nPast, "pubblicata", "pubblicate")}` : "nessuna nel periodo";
+  $("#earnNextLine").innerHTML = first ? `Prossima: <b>${esc(first.ticker)}</b>${state.watch.has(first.ticker) ? " ★" : ""} · ${agWhen(first.earningsTs)}, ${esc(earnWhen(first.earningsTs))}` : "";
+}
+function macroBar() {
+  const P = MACRO_PERIODS.find(p => p[0] === macroPeriod) || MACRO_PERIODS[0];
+  $("#macroCount").textContent = macroData ? `${plural(macroData.events.length, "evento", "eventi")} · ${P[1].toLowerCase()}` : "";
+  const now = Date.now() / 1000, e = (macroNext?.events || []).find(x => x.ts > now - 3600);
+  $("#macroNextLine").innerHTML = e ? `Prossimo: <b>${esc(MACRO[e.kind].title.split(" (")[0])}</b> · ${agWhen(e.ts)}, ${esc(new Date(e.ts * 1000).toLocaleTimeString("it-IT", { timeZone: tz, hour: "2-digit", minute: "2-digit" }))} NY` : "";
+}
 
 // ------------------------------------------------------------ news reliability labels (automatic, approximate)
 // Ufficiale = the company's own releases / SEC filings; Opinione / ipotesi = commentary sites or speculative headlines;
@@ -790,23 +927,78 @@ function macroWhen(e) {
   return { day, ny, local: fLocal(when) };
 }
 const macroTitle = e => MACRO[e.kind].title + (e.kind === "fomc" ? (e.sep ? " · con le previsioni economiche" : "") : ` (${monthIT(e.ref)})`);
-// the card stays short (title, date, time, value); everything else is in the side panel (openMacro)
-function macroItem(e, rate, k) {
-  const w = macroWhen(e);
-  return `<div class="mc-it">
-    <div class="mc-h"><button class="mc-open" data-macro="${k}"><b>${esc(macroTitle(e))}</b></button><button class="link-btn" data-macro="${k}">Dettagli →</button></div>
-    <div class="mc-when">${esc(w.day)} · ${w.ny} di New York (${w.local} ora locale)</div>
-    <div class="mc-val">${macroValues(e, rate)}</div></div>`;
+// ---- phase 8B.1: full table of the chosen period (no inner scrolling). The approved texts above are reused as they are;
+// MACRO_ASSETS (new, short) says which markets each event usually moves. Consensus is never invented: "Non disponibile".
+const MACRO_ASSETS = {
+  fomc: { azioni: "reagiscono alla decisione e al tono della conferenza stampa", tassi: "è la decisione sul tasso di riferimento",
+    obbligazioni: "i rendimenti dei titoli di Stato si adeguano alle attese sui tassi (i prezzi si muovono in senso opposto)", dollaro: "tassi più alti del previsto di solito lo rafforzano" },
+  cpi: { azioni: "inflazione sopra le attese di solito pesa, di più sulle azioni in crescita", tassi: "inflazione alta rende meno probabili i tagli della Fed",
+    obbligazioni: "con inflazione sopra le attese i rendimenti di solito salgono", dollaro: "di solito si rafforza se l'inflazione sorprende al rialzo" },
+  pce: { azioni: "come per il CPI, di solito con reazioni più piccole", tassi: "è la misura dell'inflazione su cui la Fed fissa l'obiettivo del 2%",
+    obbligazioni: "come per il CPI, di solito con movimenti più piccoli", dollaro: "come per il CPI, di solito con movimenti più piccoli" },
+  jobs: { azioni: "dipende dal momento: crescita dell'economia contro timori di tassi alti", tassi: "dati molto forti allontanano i tagli dei tassi",
+    obbligazioni: "dati forti di solito spingono su i rendimenti", dollaro: "dati forti di solito lo rafforzano" },
+};
+const MACRO_PERIODS = [["n7", "Prossimi 7 giorni", 0, 7], ["n30", "Prossimi 30 giorni", 0, 30], ["p7", "Ultimi 7 giorni", 7, 0], ["p30", "Ultimi 30 giorni", 30, 0]];
+let macroPeriod = LS.get("macro.period", "n7");
+const MACRO_ST = { atteso: ["Atteso", "next"], pubblicato: ["Pubblicato", "pub"], rinviato: ["Rinviato", "wait"] };
+const CONSENSUS_INFO = `<b>Consenso</b> = il valore che gli analisti si aspettano. Non esiste una fonte gratuita e affidabile leggibile dalla dashboard, quindi non viene
+  mostrato e la differenza dal consenso non si può calcolare: niente numeri inventati.${SURPRISE_NOTE}`;
+const cpiShort = v => `${fS1(v.mom)} sul mese · ${fS1(v.yoy)} sull'anno · core ${fS1(v.coreMom)} / ${fS1(v.coreYoy)}`;
+const jobsShort = v => `${isNum(v.payrolls) ? (v.payrolls > 0 ? "+" : "") + fNum(v.payrolls, 0) + " mila posti" : "posti n.d."} · disoccupazione ${isNum(v.unemp) ? fNum(v.unemp, 1) + "%" : "n.d."}`;
+const rateTxt = r => esc(r.replace("-", "–")) + "%";
+// previous and actual value of one row, from the official data already downloaded (BLS, Fed page)
+function macroPA(e) {
+  const v = e.values, pub = e.status === "pubblicato";
+  const fig = x => e.kind === "cpi" ? cpiShort(x) : jobsShort(x);
+  if (e.kind === "cpi" || e.kind === "jobs") {
+    if (!v) return { prev: NA, act: pub ? NA : `<span class="muted">non ancora pubblicato</span>` };
+    if (v.released) return { prev: v.prev ? `${fig(v.prev)} <span class="muted">(${esc(monthIT(v.prev.period))})</span>` : NA, act: `<b>${fig(v)}</b> <span class="muted">(${esc(monthIT(v.period))})</span>` };
+    return { prev: `${fig(v)} <span class="muted">(${esc(monthIT(v.period))})</span>`,
+      act: pub ? `<span class="na">Non ancora scaricato dalla fonte</span>` : `<span class="muted">non ancora pubblicato</span>` };
+  }
+  if (e.kind === "fomc") {
+    const R = e.rate || {};
+    return { prev: R.previous ? `${rateTxt(R.previous)} <span class="muted">(in vigore)</span>` : NA,
+      act: R.actual ? `<b>${rateTxt(R.actual)}</b> <span class="muted">(fascia del tasso Fed)</span>` : pub ? NA : `<span class="muted">non ancora deciso</span>` };
+  }
+  return { prev: `<span class="na">Non disponibile</span> <span class="muted small">(servirebbe una chiave BEA)</span>`, act: pub ? `<span class="na">Non disponibile</span>` : `<span class="muted">non ancora pubblicato</span>` };
 }
-let macroAt = 0, macroData = null;
-async function loadMacro() {
-  if (Date.now() - macroAt < 5 * 60_000) return;
-  macroAt = Date.now();
+function macroRow(e, k) {
+  const w = macroWhen(e), [stL, stC] = MACRO_ST[e.status] || ["—", ""], pa = macroPA(e), A = MACRO_ASSETS[e.kind];
+  const upd = e.updatedAt ? (e.updatedAt.length > 10 ? tsIT(e.updatedAt) : dayIT(e.updatedAt)) : null;
+  return `<tr class="mt-main"><td class="l mt-ev" data-label="Evento"><button class="mc-open" data-macro="${k}"><b>${esc(macroTitle(e))}</b></button></td>
+      <td class="l" data-label="Quando"><div class="mt-c">${esc(w.day)}<br><span class="small">${w.ny} New York · ${w.local} ora locale</span></div></td>
+      <td class="l" data-label="Stato"><div class="mt-c"><span class="er-st ${stC}">${stL}</span>${e.movedTo ? `<br><span class="small">nuova data ${esc(dayIT(e.movedTo))}</span>` : ""}</div></td>
+      <td class="l" data-label="Precedente"><div class="mt-c">${pa.prev}</div></td><td class="l" data-label="Consenso"><div class="mt-c">${NA} ${info(CONSENSUS_INFO)}</div></td>
+      <td class="l" data-label="Effettivo"><div class="mt-c">${pa.act}</div></td><td class="l" data-label="Diff. dal consenso"><div class="mt-c"><span class="na">Non calcolabile</span></div></td></tr>
+    <tr class="mt-sub"><td colspan="7"><div class="mt-why"><span><b>Azioni</b>: ${esc(A.azioni)}</span><span><b>Tassi</b>: ${esc(A.tassi)}</span><span><b>Obbligazioni</b>: ${esc(A.obbligazioni)}</span><span><b>Dollaro</b>: ${esc(A.dollaro)}</span></div>
+      <div class="small mt-src">Fonte: <a href="${esc(e.source?.url || "#")}" target="_blank" rel="noopener">${esc(e.source?.name || "n.d.")} ↗</a>
+        · ${upd ? `aggiornato dalla dashboard il ${esc(upd)}` : "aggiornamento non disponibile"}${e.kind === "pce" ? " (solo la data)" : ""}
+        · <button class="link-btn" data-macro="${k}">Spiegazione completa →</button></div></td></tr>`;
+}
+let macroAt = 0, macroData = null, macroKey = null;
+async function loadMacro(force) {
+  const P = MACRO_PERIODS.find(p => p[0] === macroPeriod) || MACRO_PERIODS[0];
+  if (!force && macroKey === P[0] && Date.now() - macroAt < 5 * 60_000) return;
+  macroAt = Date.now(); macroKey = P[0];
+  $("#macroSeg").innerHTML = MACRO_PERIODS.map(([id, l]) => `<button data-mperiod="${id}" class="${id === P[0] ? "on" : ""}" aria-pressed="${id === P[0]}">${l}</button>`).join("");
   let d;
-  try { d = await getJSON("/api/macro"); } catch { macroAt = 0; $("#macro").innerHTML = `<div class="empty">Eventi non disponibili</div>`; return; }
+  try {
+    d = await getJSON(`/api/macro?past=${P[2]}&days=${P[3]}`);
+    if (P[0] === "n7") macroNext = d; else if (!macroNext) getJSON("/api/macro").then(x => { macroNext = x; renderAgenda(); }).catch(() => {});
+  } catch { macroAt = 0; $("#macro").innerHTML = `<div class="empty">Eventi non disponibili</div>`; $("#macroCount").textContent = "non disponibili"; return; }
   macroData = d;
-  $("#macro").innerHTML = d.events.length ? d.events.map((e, k) => macroItem(e, d.rate, k)).join("") : `<div class="empty">Nessun evento nei prossimi 7 giorni</div>`;
+  renderAgenda();             // also refreshes the closed bar (macroBar)
+  $("#macroMeta").textContent = `${d.events.length} ${d.events.length === 1 ? "evento" : "eventi"} · orari di New York e ora locale${d.blsAt ? ` · valori BLS aggiornati il ${tsIT(d.blsAt)}` : ""}`;
+  $("#macroWarn").innerHTML = d.warnings?.length ? `<p class="small data-note">${d.warnings.map(w => "! " + esc(w)).join("<br>")}</p>` : "";
+  $("#macro").innerHTML = d.events.length ? `<div class="table-wrap mt-wrap"><table class="scr mt-tbl"><thead><tr><th class="l">Evento</th><th class="l">Quando</th><th class="l">Stato</th>
+      <th class="l">Precedente</th><th class="l">Consenso</th><th class="l">Effettivo</th><th class="l">Diff. dal consenso</th></tr></thead>
+      <tbody>${d.events.map((e, k) => macroRow(e, k)).join("")}</tbody></table></div>
+      <p class="muted small">«Rinviato» si riconosce solo per Fed e PCE, i cui calendari ufficiali vengono riletti ogni giorno; per CPI e occupazione le date sono scritte a mano dal calendario BLS.</p>`
+    : `<div class="empty">Nessun evento in questo periodo</div>`;
 }
+$("#macroSeg").addEventListener("click", e => { const b = e.target.closest("[data-mperiod]"); if (!b) return; macroPeriod = b.dataset.mperiod; LS.set("macro.period", macroPeriod); loadMacro(true); });
 $("#macro").addEventListener("click", e => { const b = e.target.closest("[data-macro]"); if (b && macroData) openMacro(macroData.events[+b.dataset.macro]); });
 // side panel of a macro event: same drawer as the stocks, texts from MACRO (unchanged), numbers from /api/macro
 function openMacro(e) {
@@ -844,12 +1036,23 @@ function openMacro(e) {
 }
 
 // ------------------------------------------------------------ why they move (rule-based, from /api/movers-why)
+// Phase 8B.1: every card says how solid the explanation is (server: move_evidence). CAUSA DOCUMENTATA only when an
+// article written to explain the move states the reason; a coincidence in time is EVENTO CORRELATO, never a cause.
 let whyLoadedAt = 0, whyData = null;
+const WHY_EV_CLS = { documented: "doc", related: "rel", unverified: "unv" };
+const WHY_LEGEND = `<b>CAUSA DOCUMENTATA</b>: un articolo scritto per spiegare il movimento indica il motivo (è la spiegazione della fonte, non una verifica della dashboard).<br>
+  <b>EVENTO CORRELATO</b>: nella stessa finestra di tempo c'è un evento o una notizia (trimestrale, comunicato, movimento del settore, dato macro), ma nessuna fonte dice che il movimento è dovuto a quello.<br>
+  <b>CAUSA NON VERIFICATA</b>: le fonti lette non spiegano il movimento.<br><br>Regole fisse sulle parole dei titoli, nessuna intelligenza artificiale: verifica sempre aprendo la fonte.`;
 function renderWhy() {
   if (!whyData) return;
+  const D = whyData, W = D.window || [];
+  const hm = x => x ? new Date(x).toLocaleString("it-IT", { timeZone: tz, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+  $("#whyMeta").innerHTML = `seduta del ${esc(dayIT(D.session))} · notizie: ${esc(D.newsSource || "Yahoo Finance")}${W.length ? ` · cercate da ${esc(hm(W[0]))} a ${esc(hm(W[1]))} (ora di New York)` : ""}`;
+  $("#whyLegend").innerHTML = `<p class="small muted why-leg">Ogni scheda dice quanto è solida la spiegazione: <span class="ev-tag doc">CAUSA DOCUMENTATA</span> <span class="ev-tag rel">EVENTO CORRELATO</span> <span class="ev-tag unv">CAUSA NON VERIFICATA</span> ${info(WHY_LEGEND)}
+    ${isNum(D.newsFound) && D.newsFound === 0 ? `<br><b class="warn">Nessuna notizia ricevuta dalla fonte in questo momento</b>: le schede mostrano solo eventi e settore.` : ""}</p>`;
   $("#whyNewsOpts").innerHTML = newsOpts();
-  $("#whyTop").innerHTML = whyData.top.map(whyItem).join("") || `<div class="empty">Nessun dato</div>`;
-  $("#whyFlop").innerHTML = whyData.flop.map(whyItem).join("") || `<div class="empty">Nessun dato</div>`;
+  $("#whyTop").innerHTML = D.top.map(x => whyItem(x, D)).join("") || `<div class="empty">Nessun dato</div>`;
+  $("#whyFlop").innerHTML = D.flop.map(x => whyItem(x, D)).join("") || `<div class="empty">Nessun dato</div>`;
 }
 async function loadWhy() {
   if (Date.now() - whyLoadedAt < 5 * 60_000) return;
@@ -862,21 +1065,26 @@ async function loadWhy() {
     $("#whyTop").innerHTML = $("#whyFlop").innerHTML = `<div class="empty">Notizie non disponibili</div>`;
   }
 }
-function whyItem(x) {
-  const toneCls = x.tone > 0 ? "pos" : x.tone < 0 ? "neg" : "";
-  const tags = x.reasons.map(r => `<span class="${toneCls}">${esc(r)}</span>`).join("")
-    + (isNum(x.sectorChg) ? `<span class="sec">${esc(x.sector)} ${fPct(x.sectorChg)}</span>` : "");
+function whyItem(x, D) {
+  const E = x.evidence || { key: "unverified", label: "CAUSA NON VERIFICATA", meaning: "", verify: "", facts: [] };
   const n = x.news;
-  // with opinions hidden the reason stays, but the article it came from is not shown
-  const news = !n ? "" : state.hideOpinion && newsKind(n) === "opinion"
-    ? `<div class="nm">Motivo ricavato da un articolo d'opinione (nascosto)</div>`
+  const topics = x.reasons.length ? `<div class="mv-tags">${x.reasons.map(r => `<span>${esc(r)}</span>`).join("")}${isNum(x.sectorChg) ? `<span class="sec">${esc(x.sector)} ${fPct(x.sectorChg)}</span>` : ""}</div>`
+    : isNum(x.sectorChg) ? `<div class="mv-tags"><span class="sec">${esc(x.sector)} ${fPct(x.sectorChg)}</span></div>` : "";
+  const what = E.key === "documented" && n?.clause ? `<div class="mv-sum">Secondo la fonte: «${esc(n.clause)}»</div>`
+    : E.facts.length ? `<div class="mv-sum">Nella stessa finestra: ${esc(E.facts.join("; "))}.</div>` : `<div class="mv-sum">Nessuna notizia, evento della società o movimento del settore trovato.</div>`;
+  const absT = t => { const ms = typeof t === "number" ? t * 1000 : Date.parse(t); return isFinite(ms) ? new Date(ms).toLocaleString("it-IT", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : ""; };
+  // with opinions hidden the label stays, but the article it came from is not shown
+  const src = !n ? "" : state.hideOpinion && newsKind(n) === "opinion"
+    ? `<div class="nm">Fonte: articolo d'opinione (nascosto)</div>`
     : `<a class="mv-news" href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)} ↗</a>
-      ${n.clause ? `<div class="mv-cl">“${esc(n.clause)}”</div>` : ""}
-      <div class="nm">${newsTag(n)} ${esc(n.publisher || "")} · ${esc(ago(n.time))}</div>`;
-  return `<div class="mv-it"><div class="mv-h"><b data-open="${esc(x.ticker)}">${esc(x.ticker)}</b><span class="n">${esc(x.name || "")}</span>${pill(x.chgPct)}</div>
-    ${tags ? `<div class="mv-tags">${tags}</div>` : ""}<div class="mv-sum">${esc(x.summary)}</div>${news}</div>`;
+      <div class="nm">${newsTag(n)} ${esc(n.publisher || "fonte non indicata")} · ${esc(absT(n.time))} ora locale (${esc(ago(n.time))})</div>`;
+  return `<div class="mv-it"><div class="mv-h"><b data-open="${esc(x.ticker)}" role="button" tabindex="0" title="Apri la scheda">${esc(x.ticker)}</b><span class="n">${esc(x.name || "")}</span>${pill(x.chgPct)}</div>
+    <div class="mv-when small muted">${isNum(x.chgPct) ? fPct(x.chgPct) : "—"} nella seduta del ${esc(dayIT(D.session))}, rispetto alla chiusura precedente</div>
+    <div><span class="ev-tag ${WHY_EV_CLS[E.key]}">${esc(E.label)}</span> ${info(esc(E.meaning) + (E.verify ? `<br><br><b>Come verificarlo.</b> ${esc(E.verify)}` : ""))}</div>
+    ${what}${topics}${src}</div>`;
 }
 $(".mv-cols").addEventListener("click", e => { const b = e.target.closest("[data-open]"); if (b) openDetail(b.dataset.open); });
+$(".mv-cols").addEventListener("keydown", e => { const b = e.target.closest("[data-open]"); if (b && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openDetail(b.dataset.open); } });
 
 function ago(t) {
   const ms = typeof t === "number" ? t * 1000 : Date.parse(t);
@@ -975,7 +1183,11 @@ const LEV_INFO = (n = 3) => `<b>Prodotto a leva ${n}x giornaliera.</b> Ogni gior
   <b>In un crollo forte</b> può perdere gran parte del valore in pochi giorni: un calo dell'indice di circa il 33% in un solo giorno
   lo azzererebbe. Costa anche più di un ETF normale. È pensato per periodi brevi e va controllato spesso.`;
 const pfAct = x => x.action ? `<button class="act-btn" data-pos="${esc(x.isin)}" title="${esc(x.action.reasons.join(" · ") || "Nessuna regola scattata")}">${actBadge(x.action)}</button>` : "—";
-const pfName = x => `<b>${esc(x.name)}</b>${x.leverage > 1 ? ` <span class="lev-badge">leva ${x.leverage}x</span> ${info(LEV_INFO(x.leverage))}` : ""}
+// phase 8B.1: no automatic leverage banner; the share of value and of effective exposure is in the ⓘ of the position itself
+const levShare = x => { const T = pf.data?.totals || {};
+  return isNum(T.value) && T.value && isNum(T.exposure) && T.exposure ? `<br><br><b>Questa posizione:</b> ${fNum(x.value / T.value * 100, 1)}% del valore del portafoglio,
+    ma ${fNum(x.exposure / T.exposure * 100, 1)}% dell'esposizione effettiva (valore × leva).` : ""; };
+const pfName = x => `<b>${esc(x.name)}</b>${x.leverage > 1 ? ` <span class="lev-badge">leva ${x.leverage}x</span> ${info(LEV_INFO(x.leverage) + levShare(x))}` : ""}
   <div class="muted small">${esc(x.ticker || x.symbol)} · ${esc(x.kind)} · ${esc(x.currency)}</div>${x.action ? `<div class="pf-act-in">${pfAct(x)}</div>` : ""}`;
 // Nasdaq-100 data the dashboard already has (same renderers as the Screener); "—" for the other positions
 const ndxCol = (k, l) => ({ k, l, i: COL_INFO[k], sort: x => { const s = state.bySym.get(x.ticker); return s ? C[k].sort(s) : null; },
@@ -1024,21 +1236,23 @@ function renderPortfolio() {
   const when = D.quotesAt ? new Date(D.quotesAt * 1000).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }) : null;
   $("#pfFileInfo").textContent = `file attuale: ${D.file}, del ${new Date(D.fileTime * 1000).toLocaleString("it-IT", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}`;
   $("#pfMeta").textContent = D.resolving ? "cerco i ticker su Yahoo…" : when ? `prezzi aggiornati alle ${when} ora locale` : "";
-  $("#pfWarn").hidden = !D.warnings.length;
-  $("#pfWarn").innerHTML = !D.warnings.length ? "" : `<details class="fold"><summary><span class="pf-warn-n">! ${D.warnings.length} ${D.warnings.length === 1 ? "avviso" : "avvisi"} sui dati del file</span></summary>`
-    + D.warnings.map(w => `<div>⚠ ${esc(w)}</div>`).join("")
-    + `<div class="muted small">Puoi indicare il ticker giusto in <code>portafoglio/ticker.json</code>, per esempio {"ISIN": "TICKER.MI"}.</div></details>`;
+  // phase 8B.1: instruments without a certain category are one small line with the list on request (no yellow box);
+  // the other warnings about the file (ticker not found…) stay as before
+  const UC = D.unclassified || [], other = D.warnings.filter(w => !/: non classificato \(aggiungilo/.test(w));
+  $("#pfWarn").hidden = !UC.length && !other.length;
+  $("#pfWarn").innerHTML = (UC.length ? `<details class="pf-uc"><summary><span class="small">Alcuni strumenti non sono stati associati con certezza a una categoria.
+      Le relative esposizioni potrebbero essere parziali.</span> <span class="sn-more">Quali e cosa manca (${UC.length})</span></summary>
+      <ul class="pf-uc-list">${UC.map(u => `<li><b>${esc(u.name)}</b> <span class="muted small">${esc(u.kind)} · ISIN ${esc(u.isin)}</span><br>
+        <span class="small">Manca: ${u.missing.map(esc).join("; ")}.${u.catalogIndex ? ` Il catalogo ETF pubblico conosce questo ISIN (indice: ${esc(u.catalogIndex)}): può aiutarti a compilarla.` : ""}</span></li>`).join("")}</ul>
+      <p class="muted small">Perché succede: per ETF ed ETC la dashboard non ha una fonte affidabile di settore, tema e paese, quindi li legge solo da
+        <code>portafoglio/classificazione.json</code>, che compili tu con l'ISIN. Finché manca, lo strumento finisce in «Non classificato» nelle concentrazioni
+        (è normale per ogni ETF nuovo). La dashboard non inventa la classificazione e non modifica il file.</p></details>` : "")
+    + (other.length ? `<details class="fold pf-warn-box"><summary><span class="pf-warn-n">! ${other.length} ${other.length === 1 ? "avviso" : "avvisi"} sui dati del file</span></summary>`
+    + other.map(w => `<div>⚠ ${esc(w)}</div>`).join("")
+    + `<div class="muted small">Puoi indicare il ticker giusto in <code>portafoglio/ticker.json</code>, per esempio {"ISIN": "TICKER.MI"}.</div></details>` : "");
   const COLS = pf.cols === "dash" ? PF_DASH() : PF_COLS;
   $$("#pfColSeg button").forEach(b => b.classList.toggle("on", b.dataset.cols === pf.cols));
   const col = COLS.find(c => c.k === pf.sort.key) || COLS.find(c => c.k === "value");
-  // leveraged products: how much of the value, and of the effective exposure, they are
-  const lev = D.positions.filter(x => x.leverage > 1);
-  $("#pfLev").hidden = !lev.length;
-  if (lev.length) {
-    const v = d3.sum(lev, x => x.value), e = d3.sum(lev, x => x.exposure);
-    $("#pfLev").innerHTML = `⚠ <b>${lev.length === 1 ? "1 prodotto a leva" : `${lev.length} prodotti a leva`}</b> (${lev.map(x => esc(x.ticker || x.symbol)).join(", ")}):
-      ${fNum(v / T.value * 100, 1)}% del valore, ma <b>${fNum(e / T.exposure * 100, 1)}% dell'esposizione effettiva</b>. ${info(LEV_INFO(lev[0].leverage))}`;
-  }
   const rows = [...D.positions].sort((a, b) => {
     const va = col.sort(a), vb = col.sort(b);
     if (va == null) return 1; if (vb == null) return -1;
@@ -1283,7 +1497,9 @@ function renderRisk() {
       <p class="muted small">Calcolato sul ${fNum(D.coverage, 0)}% del valore (${fEur(D.covered, 0)})${left}. Stime, non previsioni. Non è una consulenza finanziaria.</p></details>`;
 }
 const ruleLimit = v => fNum(v, v % 1 ? 1 : 0) + "%";
-// ---- zainetto fiscale (actions.py, portafoglio/fiscale.json): optional, used only by the indicative tax estimate
+// ---- zainetto fiscale (actions.py, portafoglio/fiscale.json): optional, used only by the indicative tax estimate.
+// Phase 8B.1: the box is no longer on the Portafoglio page (its element was removed from index.html); this function,
+// /api/fiscal and the saved data stay, and the tax estimate keeps using them.
 function renderTaxBox() {
   const el = $("#pfTax"), F = pf.data?.fiscal || {};
   if (!el || el.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;   // typing: do not redraw
@@ -1372,7 +1588,7 @@ $("#pfTbl").addEventListener("click", e => {
 
 // ------------------------------------------------------------ screener
 const C = {
-  star:   { l: "", cls: "l", sort: s => state.watch.has(s.ticker) ? 1 : 0, html: s => `<button class="star ${state.watch.has(s.ticker) ? "on" : ""}" data-star="${esc(s.ticker)}" aria-label="Preferito">${state.watch.has(s.ticker) ? "★" : "☆"}</button>` },
+  star:   { l: "", cls: "l", sort: s => state.watch.has(s.ticker) ? 1 : 0, html: s => `<button class="star ${state.watch.has(s.ticker) ? "on" : ""}" data-star="${esc(s.ticker)}" aria-label="${state.watch.has(s.ticker) ? "Togli dai Preferiti" : "Aggiungi ai Preferiti"}" title="${state.watch.has(s.ticker) ? "Togli dai Preferiti" : "Aggiungi ai Preferiti"}" aria-pressed="${state.watch.has(s.ticker)}">${state.watch.has(s.ticker) ? "★" : "☆"}</button>` },
   ticker: { l: "Ticker", cls: "l tk", sort: s => s.ticker, html: s => esc(s.ticker) },
   name:   { l: "Società", cls: "l nm", sort: s => s.name, html: s => esc(s.name) },
   sector: { l: "Settore", cls: "l", sort: s => s.sector, html: s => esc(s.sector) },
@@ -1630,7 +1846,7 @@ function renderDetailHeader() {
   const name = s?.name || s?.label || dInfo?.longName || t;
   top.innerHTML = `<div class="d-head"><div><div class="tt">${esc(t)}</div><div class="nm">${esc(dInfo?.longName || name)}</div>
       ${s?.sector ? `<div class="sec">${esc(s.sector)} › ${esc(s.industry)} · capitalizzazione $${fBig(s.mcap)} · ${fW(s)} dell'indice</div>` : ""}</div>
-      <div class="actions">${state.bySym.has(t) ? `<button class="icon-btn star ${state.watch.has(t) ? "on" : ""}" data-star="${esc(t)}" title="Preferiti">${state.watch.has(t) ? "★" : "☆"}</button>` : ""}
+      <div class="actions">${state.bySym.has(t) ? `<button class="icon-btn star ${state.watch.has(t) ? "on" : ""}" data-star="${esc(t)}" title="${state.watch.has(t) ? "Togli dai Preferiti" : "Aggiungi ai Preferiti"}" aria-label="${state.watch.has(t) ? "Togli dai Preferiti" : "Aggiungi ai Preferiti"}" aria-pressed="${state.watch.has(t)}">${state.watch.has(t) ? "★" : "☆"}</button>` : ""}
       <button class="icon-btn" id="dFull" title="${dFull ? "Torna al pannello laterale" : "Apri a schermo intero"}" aria-label="${dFull ? "Pannello laterale" : "Schermo intero"}">${dFull ? "⤡" : "⤢"}</button>
       <button class="icon-btn close-btn" id="dClose" aria-label="Chiudi">×</button></div></div>
     ${s ? `<div class="d-price"><span class="p num">${fPrice(s.price)}</span><span class="c ${sign(s.chg)}">${fChg(s.chg)} (${fPct(s.chgPct)})</span>
@@ -2046,7 +2262,8 @@ drawer.addEventListener("click", e => {
   const k = e.target.closest("[data-dec-macro]");        // a macro event listed in the context block
   if (k) {
     const [kind, day] = k.dataset.decMacro.split("|");
-    (macroData ? Promise.resolve() : getJSON("/api/macro").then(d => { macroData = d; })).then(() => openMacro(macroData.events.find(x => x.kind === kind && x.date === day))).catch(() => {});
+    const hit = D => (D?.events || []).find(x => x.kind === kind && x.date === day);
+    (hit(macroData) || hit(macroNext) ? Promise.resolve() : getJSON("/api/macro").then(d => { macroNext = d; })).then(() => openMacro(hit(macroData) || hit(macroNext))).catch(() => {});
     return;
   }
   const m = e.target.closest("[data-mopen]");          // a stock listed in a macro event's panel
@@ -2340,20 +2557,52 @@ function drawRRG(el, groups, tipFn, xLabel, opts = {}) {
   const pts = g.selectAll("g.pt").data(groups).join("g").attr("class", "pt").attr("transform", d => `translate(${x(d.rs1m)},${y(d.rs1w)})`);
   pts.append("circle").attr("r", 12).attr("fill", "transparent");
   pts.append("circle").attr("r", d => 4 + Math.sqrt(d.n) * 1.3).attr("fill", d => css(QCOL[d.quadrant])).attr("stroke", css("--surface")).attr("stroke-width", 2);
-  pts.filter(d => !opts.labels || opts.labels.has(d.name)).append("text").attr("class", "rrg-label").attr("x", d => x(d.rs1m) > iw - 120 ? -10 : 10).attr("text-anchor", d => x(d.rs1m) > iw - 120 ? "end" : "start").attr("y", 4).text(d => d.name);
-  // a name that would cover another one moves down or up by a line (first free place), so every name stays readable
-  const placed = [];
-  g.selectAll("text.rrg-label").each(function () {
-    const b0 = this.getBBox(), d = d3.select(this.parentNode).datum(), ox = x(d.rs1m), oy = y(d.rs1w);
-    for (const dy of [0, 13, -13, 26, -26, 39, -39]) {
-      const b = { x: ox + b0.x, y: oy + b0.y + dy, w: b0.width, h: b0.height };
-      if (!placed.some(p => b.x < p.x + p.w && p.x < b.x + b.w && b.y < p.y + p.h && p.y < b.y + b.h)) {
-        placed.push(b); if (dy) d3.select(this).attr("y", 4 + dy); return;
+  // phase 8B.1: labels never overlap each other or the dots and never leave the chart. Each point is numbered (1 = the most
+  // ahead on the horizontal axis); the full name is written where a free place exists, otherwise only its number.
+  // The numbered list under the chart has every name and value (reachable by touch and keyboard).
+  const order = groups.slice().sort((a, b) => b.rs1m - a.rs1m), num = new Map(order.map((d, i) => [d.name, i + 1]));
+  const placed = groups.map(d => { const r = 4 + Math.sqrt(d.n) * 1.3 + 1; return { x: x(d.rs1m) - r, y: y(d.rs1w) - r, w: 2 * r, h: 2 * r }; });
+  g.selectAll("text.rrg-q").each(function () { const b = this.getBBox(); placed.push({ x: b.x - 2, y: b.y - 1, w: b.width + 4, h: b.height + 2 }); });
+  const free = b => b.x >= 0 && b.y >= 0 && b.x + b.w <= iw && b.y + b.h <= ih && !placed.some(p => b.x < p.x + p.w && p.x < b.x + b.w && b.y < p.y + p.h && p.y < b.y + b.h);
+  const layer = g.append("g").attr("class", "rrg-labels");
+  const narrow = W < 560;
+  const byRoom = groups.slice().sort((a, b) => b.n - a.n);
+  for (const d of byRoom) {
+    const ox = x(d.rs1m), oy = y(d.rs1w), r = 4 + Math.sqrt(d.n) * 1.3;
+    const want = !narrow && (!opts.labels || opts.labels.has(d.name));
+    const tries = (txt, far) => {
+      const t = layer.append("text").attr("class", "rrg-label").text(txt);
+      const bb = t.node().getBBox(), w = bb.width, h = Math.ceil(bb.height) + 1, top = -bb.y;   // real text box (font metrics)
+      const cand = [[r + 4, 4], [-r - 4 - w, 4], [r + 2, -r - 2], [r + 2, r + 12], [-r - 2 - w, -r - 2], [-r - 2 - w, r + 12], [-w / 2, -r - 4], [-w / 2, r + 13]];
+      for (const dy of far ? [0, 12, -12, 24, -24, 36, -36, 48, -48, 60, -60] : [0, 12, -12, 24, -24]) for (const [cx, cy] of cand) {
+        const b = { x: ox + cx, y: oy + cy + dy - top - 0.5, w, h };
+        if (free(b)) { t.attr("x", ox + cx).attr("y", oy + cy + dy); placed.push(b); return true; }
       }
+      t.remove(); return false;
+    };
+    if (want && tries(d.name)) continue;
+    if (!tries(String(num.get(d.name)), true)) {   // last resort: the number right on the dot, in white
+      layer.append("text").attr("class", "rrg-num-in").attr("x", ox).attr("y", oy + 3.5).attr("text-anchor", "middle").text(num.get(d.name));
     }
-    placed.push({ x: ox + b0.x, y: oy + b0.y, w: b0.width, h: b0.height });
-  });
-  pts.on("mousemove", (ev, d) => showTip(tipFn(d), ev)).on("mouseleave", hideTip);
+  }
+  pts.attr("tabindex", 0).attr("data-rrg", d => d.name).attr("role", "button").attr("aria-label", d => `${num.get(d.name)}. ${d.name}`);
+  svg.on("click", ev => { if (!ev.target.closest("g.pt")) hideTip(); });
+  pts.on("mousemove", (ev, d) => showTip(tipFn(d), ev)).on("mouseleave", hideTip)
+    .on("click", (ev, d) => { ev.stopPropagation(); showTip(tipFn(d), ev); })
+    .on("focus", function (ev, d) { const b = this.getBoundingClientRect(); showTip(tipFn(d), { clientX: b.right, clientY: b.bottom }); }).on("blur", hideTip);
+  const listOpen = innerWidth < 700 ? "open" : "";
+  const qn = q => QLAB[q] || q;
+  const list = document.createElement("details");
+  list.className = "rrg-list"; if (listOpen) list.open = true;
+  list.innerHTML = `<summary><span class="small">Elenco numerato con nomi e valori (${groups.length})</span></summary>
+    <div class="table-wrap"><table class="scr mini rrg-tbl"><thead><tr><th>#</th><th class="l">Nome</th><th class="l">Zona</th><th title="valore sull'asse orizzontale, in punti">→ x</th><th title="valore sull'asse verticale, in punti">↑ y</th></tr></thead><tbody>
+    ${order.map(d => `<tr tabindex="0" data-rrgrow="${esc(d.name)}"><td>${num.get(d.name)}</td><td class="l">${esc(d.name)}</td><td class="l"><span class="q ${d.quadrant}">${esc(qn(d.quadrant))}</span></td><td class="${sign(d.rs1m)}">${fChg(d.rs1m)}</td><td class="${sign(d.rs1w)}">${fChg(d.rs1w)}</td></tr>`).join("")}</tbody></table></div>`;
+  el.appendChild(list);
+  const hl = (name, on) => pts.filter(d => d.name === name).classed("hl", on);
+  list.addEventListener("mouseover", e => { const r = e.target.closest("[data-rrgrow]"); if (r) hl(r.dataset.rrgrow, true); });
+  list.addEventListener("mouseout", e => { const r = e.target.closest("[data-rrgrow]"); if (r) hl(r.dataset.rrgrow, false); });
+  list.addEventListener("focusin", e => { const r = e.target.closest("[data-rrgrow]"); if (r) hl(r.dataset.rrgrow, true); });
+  list.addEventListener("focusout", e => { const r = e.target.closest("[data-rrgrow]"); if (r) hl(r.dataset.rrgrow, false); });
   svg.append("text").attr("class", "ref-label").attr("x", m.l + iw).attr("y", H - 2).attr("text-anchor", "end").text(xLabel);
 }
 function groupTip(d) {
@@ -2381,9 +2630,21 @@ const etfS = { data: null, at: 0, grp: LS.get("etfGrp", "Tutti"), sort: { key: L
 const ETF_PER = [["r1w", "1 settimana"], ["r2w", "2 settimane"], ["r1m", "1 mese"], ["r3m", "3 mesi"], ["r6m", "6 mesi"], ["r1y", "1 anno"], ["r3y", "3 anni"]];
 const ETF_PER_Y = { r1w: "2 giorni", r2w: "1 settimana", r1m: "1 settimana", r3m: "1 mese", r6m: "1 mese", r1y: "3 mesi", r3y: "6 mesi" };
 const TREND_CLS = { "Rialzista": "up", "Laterale": "flat", "Ribassista": "down" };
-const ETF_TREND_INFO = `<b>Trend</b> (regola approvata): <b>Rialzista</b> se il prezzo è sopra la media 50 e la media 50 è sopra la media 200; <b>Ribassista</b> se il prezzo è
-  sotto la media 50 e la media 50 è sotto la media 200; <b>Laterale</b> negli altri casi. Il mini-grafico mostra gli ultimi 6 mesi con la linea della media 200 (tratteggiata).
-  Descrive l'andamento: stare sopra la media 200 <b>non ha superato il test</b> come regola di acquisto (M2).`;
+// phase 8B.1: fuller explanation, written from etf.trend_word / etf_opportunity.trend_word and the E2 conditions (rules unchanged)
+const ETF_TREND_INFO = `<b>Trend</b> (regola approvata, la stessa nella tabella ETF e nel modello delle opportunità ETF).<br><br>
+  <b>Cosa significa.</b> Descrive la direzione recente del prezzo dell'ETF rispetto alle sue medie.<br>
+  <b>Indicatori e periodo.</b> Il prezzo di chiusura dell'ultima seduta, la media semplice delle ultime <b>50</b> chiusure (circa 2 mesi e mezzo)
+  e quella delle ultime <b>200</b> (circa 10 mesi), con i prezzi in euro.<br>
+  <b>Condizioni.</b> <b>Rialzista</b>: prezzo sopra la media 50 <b>e</b> media 50 sopra la media 200. <b>Ribassista</b>: prezzo sotto la media 50 <b>e</b>
+  media 50 sotto la media 200. <b>Laterale</b>: tutti gli altri casi (per esempio prezzo sopra la media 50 ma media 50 ancora sotto la 200).
+  «—» quando mancano 200 sedute di prezzi.<br>
+  <b>Cosa NON significa.</b> Non è una previsione né un segnale di acquisto o vendita: stare sopra la media 200 <b>non ha superato il test</b> come regola di acquisto (M2).<br><br>
+  <b>Da non confondere con:</b><br>
+  · <b>trend assoluto</b> (questo): l'ETF confrontato solo con le proprie medie;<br>
+  · <b>forza relativa</b>: rendimento dell'ETF meno quello del suo benchmark, in punti, a 1, 6 o 12 mesi; un ETF può essere Rialzista ma più debole del benchmark;<br>
+  · <b>cambio di trend recente</b>: nel modello delle opportunità ETF, la forza relativa a 6 mesi salita di almeno 1 punto in 21 sedute (L4) o quella a 1 mese salita di almeno 0,5 punti in 5 sedute (S4);<br>
+  · <b>rischio e volatilità</b>: quanto oscilla il prezzo e quanto è sceso dal massimo; un trend Rialzista può avere volatilità alta.<br><br>
+  Il mini-grafico mostra gli ultimi 6 mesi con la media 200 tratteggiata.`;
 const trendWord = r => r.trend ? `<span class="trend-w ${TREND_CLS[r.trend]}">${r.trend}</span>` : `<span class="muted small">—</span>`;
 // 6-month mini chart: closes and the 200-day average (dashed)
 function sparkSVG(sp, w = 90, h = 26) {
@@ -2510,8 +2771,10 @@ function renderEtf() {
     ? `<tr data-etf="${esc(r.isin)}">${nameCell(r)}<td colspan="${RET.length + 1}" class="l"><span class="down small"><b>prezzi non disponibili oggi</b> (Yahoo non li ha dati)</span></td>${terCell(r)}${buyCell(r)}${fitCell(r)}</tr>`
     : `<tr data-etf="${esc(r.isin)}">${nameCell(r)}${RET.map(k => `<td class="${pr(k)}">${pcs(r, k)}</td>`).join("")}<td class="l trend-c p4">${trendWord(r)}${sparkSVG(r.spark, 64, 20)}</td>${terCell(r)}${buyCell(r)}${fitCell(r)}</tr>`;
   const P = RET.includes(key) || ["r2w", "r6m"].includes(key) ? key : "r3m", PL = ETF_PER.find(x => x[0] === P)[1];
-  el.innerHTML = `<p class="warn-box"><b>I verdetti «Ha senso comprare?» seguono regole esplicite ma non verificate</b> ${info(ETF_TEST_INFO)}: le regole di momentum e trend non hanno superato
-      il test sulle categorie, e i verdetti vengono salvati ogni giorno nel diario degli ETF per misurarli dal vivo. Rendimenti in euro, quello che guadagni tu. Non è una consulenza finanziaria.${stale ? ` <b>${stale} ETF hanno dati di justETF con più di 6 mesi</b>: rilancia etf_universe.py.` : ""}</p>
+  el.innerHTML = `${scopeNote("Verdetti esplorativi: regole esplicite ma non validate · rendimenti in euro · non è una consulenza finanziaria.",
+      `I verdetti «Ha senso comprare?» seguono regole esplicite ma non verificate ${info(ETF_TEST_INFO)}: le regole di momentum e trend non hanno superato
+      il test sulle categorie, e i verdetti vengono salvati ogni giorno nel diario degli ETF per misurarli dal vivo. Rendimenti in euro, quello che guadagni tu.`)}
+    ${stale ? `<p class="small data-note">! <b>${stale} ETF hanno dati di justETF con più di 6 mesi</b>: rilancia etf_universe.py.</p>` : ""}
     ${etfNotice(D)}
     ${diversifyHTML(D)}
     <div class="card"><div class="card-h"><h2>Tutti gli ETF</h2><span class="card-meta">${rows.length} ETF · clicca un'intestazione per ordinare, una riga per i dettagli · dati del ${dayIT(D.generated.slice(0, 10))}</span></div>
@@ -2605,8 +2868,9 @@ function renderEtfCat() {
   const S = D.summary, F = D.facets || {};
   const opt = (k, label, values, lab = x => x) => `<label class="cat-f"><span>${label}</span><select data-catf="${k}"><option value="">tutti</option>
       ${values.filter(v => v != null && v !== "null").map(v => `<option value="${esc(v)}" ${String(etfC.f[k] ?? "") === String(v) ? "selected" : ""}>${esc(lab(v))}</option>`).join("")}</select></label>`;
-  el.innerHTML = `<p class="warn-box"><b>Catalogo informativo, non una classifica.</b> Serve a identificare e confrontare ETF UCITS con dati verificabili:
-      nessun segnale di acquisto o vendita, nessun punteggio, nessun «vincitore». Un costo più basso non rende un ETF migliore da solo. Non è una consulenza finanziaria. ${info(ETF_CAT_INFO)}</p>
+  el.innerHTML = `${scopeNote("Catalogo informativo, non una classifica · non è una consulenza finanziaria.",
+      `Serve a identificare e confrontare ETF UCITS con dati verificabili: nessun segnale di acquisto o vendita, nessun punteggio, nessun «vincitore».
+      Un costo più basso non rende un ETF migliore da solo. ${info(ETF_CAT_INFO)}`)}
     <div class="card"><div class="card-h"><h2>Catalogo ETF UCITS</h2><span class="card-meta">${S.etfs} ETF · ${S.listings} quotazioni · completezza media ${fNum(S.completenessAvg * 100, 0)}% ·
       aggiornato il ${esc(dayIT(S.builtAt.slice(0, 10)))} (a mano, con etf_catalog_build.py)</span></div>
       <div class="cat-bar"><input type="search" id="etfCatQ" placeholder="Cerca per nome, ticker, ISIN, emittente, indice…" value="${esc(etfC.q)}" aria-label="Cerca nel catalogo">
@@ -2744,7 +3008,7 @@ const EO_MODES = { lungo: "Medio-lungo periodo", breve: "Breve periodo" };
 const EO_INS = "Da approfondire — evidenza insufficiente per un giudizio favorevole";      // model E2, bonds only
 const EO_ST = { "Esposizione da approfondire": "ok", "Trend favorevole da monitorare": "mon", [EO_INS]: "ins", "Condizioni contrastanti": "mix",
   "Rischio elevato": "risk", "Dati insufficienti": "na", "Nessuna opportunità convincente": "none", "Riferimento di mercato": "ref" };
-const eoSt = s => `<span class="eo-st eo-${EO_ST[s] || "none"}">${esc(s)}</span>`;
+const eoSt = s => `<span class="eo-st eo-${EO_ST[s] || "none"}">${esc(s)}</span>${s === "Trend favorevole da monitorare" ? " " + info(E2_MON_HELP) : ""}`;
 const eoPts = v => isNum(v) ? `<span class="${v > 0 ? "pos" : v < 0 ? "neg" : ""}">${(v > 0 ? "+" : "") + fNum(v, 1)}</span>` : "n.d.";
 const eoPct = v => isNum(v) ? fPct(v, 1) : "n.d.";
 const eoCk = c => `<li class="${c.ok === true ? "ck-ok" : c.ok === false ? "ck-ko" : "ck-na"}">${esc(c.text)}${c.value != null ? ` — <b>${esc(String(c.value))}</b>` : ""}${c.why ? ` <span class="muted">(${esc(c.why)})</span>` : ""}</li>`;
@@ -2890,10 +3154,10 @@ function oppEtfHTML() {
   const O = D.overview, sel = D.selectedRows;
   const kpi = (l, v, s) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s || ""}</div></div>`;
   const chg = (arr, cls) => arr.length ? arr.map(x => `<button class="cat-chip" data-eoopen="${esc(x.key)}">${esc(x.label)} <b class="${cls}">${(x.change > 0 ? "+" : "") + fNum(x.change, 1)}</b></button>`).join(" ") : `<span class="muted small">nessuna oltre la soglia</span>`;
-  return `<p class="warn-box"><b>Screening esplorativo, non consulenza finanziaria.</b> Parte dalle esposizioni (mercati, settori, obbligazioni) e mostra
-      quali condizioni sono soddisfatte e quali mancano: nessun «Compra» o «Vendi», nessuna probabilità. Le regole non sono validate: il momentum sulle
-      categorie di ETF non ha superato il test (Fase 24).</p>${head}
-    <div class="kpis eo-kpis">${kpi("Esposizioni monitorate", O.exposures, `${O.products} ETF del catalogo`)}${kpi("Da approfondire", O.counts["Esposizione da approfondire"], `al massimo ${D.params.max_selected} mostrate`)}
+  return `${scopeNote("Screening esplorativo, non consulenza finanziaria · regole non validate.",
+      `Parte dalle esposizioni (mercati, settori, obbligazioni) e mostra quali condizioni sono soddisfatte e quali mancano: nessun «Compra» o «Vendi»,
+      nessuna probabilità. Le regole non sono validate: il momentum sulle categorie di ETF non ha superato il test (Fase 24).`)}${head}
+    <div class="kpis eo-kpis">${kpi(`Esposizioni monitorate ${info(EXPOSURES_HELP)}`, O.exposures, `${O.products} ETF del catalogo`)}${kpi("Da approfondire", O.counts["Esposizione da approfondire"], `al massimo ${D.params.max_selected} mostrate`)}
       ${kpi("Rischio elevato", O.counts["Rischio elevato"], "segnali favorevoli o contrari con rischio oltre soglia")}${kpi("Dati insufficienti", O.counts["Dati insufficienti"], "non giudicabili")}
       ${kpi("Ultima seduta", D.session ? esc(dayIT(D.session)) : "n.d.", D.pricesFetched ? "prezzi scaricati " + esc(D.pricesFetched.slice(0, 16).replace("T", " ")) : "")}</div>
     <div class="card"><h3>Panoramica</h3>
@@ -2985,7 +3249,7 @@ function openEtf(isin) {
   drawer.classList.remove("full");
   drawer.innerHTML = `<div class="d-top"><div class="d-head"><div><div class="tt">${esc(r.category)}</div><div class="nm">${esc(r.name || "")}</div>
         <div class="sec">${esc(r.isin)} · ${esc(r.yahoo || "")} · ${esc(r.provider || "")} · ${esc(r.group)}</div></div>
-      <div class="actions"><button class="icon-btn star ${state.watch.has(r.yahoo) ? "on" : ""}" data-star="${esc(r.yahoo)}" title="In osservazione">${state.watch.has(r.yahoo) ? "★" : "☆"}</button>
+      <div class="actions"><button class="icon-btn star ${state.watch.has(r.yahoo) ? "on" : ""}" data-star="${esc(r.yahoo)}" title="${state.watch.has(r.yahoo) ? "Togli dai Preferiti" : "Aggiungi ai Preferiti"}" aria-pressed="${state.watch.has(r.yahoo)}">${state.watch.has(r.yahoo) ? "★" : "☆"}</button>
         <button class="icon-btn close-btn" id="dClose" aria-label="Chiudi">×</button></div></div></div>
     <div class="d-rest etf-d">
       <div class="d-sec"><h3>Per il mio portafoglio ${info(ETF_FIT_INFO)}</h3>
@@ -3071,7 +3335,7 @@ function etfWatchHTML(D) {
   if (!mine.length) return "";
   const pc = v => `<span class="${sign(v)}">${isNum(v) ? fPct(v, 1) : "—"}</span>`;
   const v = r => D.fitComplete ? D.buy?.[r.isin]?.verdict : D.buy?.[r.isin]?.market.verdict;
-  return `<details class="card fold"><summary><span class="small"><b>ETF in osservazione</b> (${mine.length}): quelli con la ★</span></summary>
+  return `<details class="card fold"><summary><span class="small"><b>ETF preferiti</b> (${mine.length}): quelli con la ★</span></summary>
     <div class="table-wrap"><table class="scr"><thead><tr><th class="l">ETF</th><th class="p3">1 sett.</th><th class="p3">1 mese</th><th>3 mesi</th><th class="p3">1 anno</th><th class="l p4">Trend</th><th class="l">Ha senso comprare?</th></tr></thead>
     <tbody>${mine.map(r => `<tr data-etf="${esc(r.isin)}"><td class="l"><b>${esc(r.category)}</b> <span class="muted small">${esc(r.yahoo)}</span></td><td class="p3">${pc(r.r1w)}</td><td class="p3">${pc(r.r1m)}</td><td>${pc(r.r3m)}</td><td class="p3">${pc(r.r1y)}</td>
       <td class="l trend-c p4">${trendWord(r)}</td><td class="l">${buyBadge(v(r))}</td></tr>`).join("")}</tbody></table></div></details>`;
@@ -3625,7 +3889,21 @@ function valDetailHTML(X) {
 const DK = { h: LS.get("dk.h", "lungo"), k: LS.get("dk.k", "all"), data: null, at: 0, err: null, loading: false, open: null, det: {}, detErr: null };
 const DK_ST = { "Da approfondire": "ok", "Attendi condizioni migliori": "wait", "Monitora": "mon", "Monitora — trend esplorativo": "mon", "Condizioni contrastanti": "mix",
   "Rischio elevato": "risk", "Dati insufficienti": "na", "Nessuna opportunità convincente": "none" };
-const dkSt = s => `<span class="eo-st eo-${DK_ST[s] || "none"}">${esc(s)}</span>`;
+// phase 8B.1: what "Monitora" means, written from RULES of investment_decision_engine.py (rules unchanged)
+const MONITOR_HELP = `<b>«Monitora» è uno stato del Decision Desk</b>, ricalcolato a ogni analisi dai motori esistenti con regole fisse:<br>
+  · <b>Azioni, medio-lungo (A-M1)</b>: evidenze favorevoli senza contrarie, ma insufficienti per «Da approfondire» (DCF non calcolabile, dimensioni parziali).<br>
+  · <b>Azioni, breve (B-M1)</b>: almeno 4 condizioni Trading su 5 senza avvisi. È lo stato massimo nel breve: le regole T1–T5 non hanno mostrato vantaggi nei test.<br>
+  · <b>ETF, medio-lungo (E-M1, E-M2)</b>: stato del modello ETF «Trend favorevole da monitorare», oppure esposizione «da approfondire» con date non allineate o dati del fondo datati.<br>
+  · <b>ETF, breve (F-M1)</b>: stato del modello ETF nel breve favorevole; è lo stato massimo nel breve.<br>
+  · <b>«Monitora — trend esplorativo» (E-M3)</b>: i casi in cui l'esposizione soddisfa le condizioni di trend del modello ETF; il trend da solo non basta per «Da approfondire» perché non è validato come criterio predittivo.<br><br>
+  <b>Non è un suggerimento di acquisto</b>: nessuna regola è validata sul passato, non ci sono rendimenti attesi né probabilità. Vuol dire solo «situazione da ricontrollare più avanti».<br><br>
+  <b>Non sono i tuoi Preferiti</b>: i Preferiti (★) sono una lista che scegli tu; un titolo «Monitora» non viene aggiunto ai Preferiti e un Preferito non cambia stato.`;
+const E2_MON_HELP = `<b>«Trend favorevole da monitorare»</b> è uno stato del modello ETF: almeno 2 condizioni favorevoli soddisfatte e nessuna contraria,
+  ma non tutte le favorevoli (con tutte e nessuna contraria lo stato sarebbe «Esposizione da approfondire»). Una condizione non valutabile non conta mai come soddisfatta.<br><br>
+  <b>Non è un suggerimento di acquisto</b>: le regole di trend e momentum sulle categorie di ETF non hanno superato il test (Fase 24). Non riguarda i tuoi Preferiti.`;
+const EXPOSURES_HELP = `Quante esposizioni (mercati, settori, temi, obbligazioni) lo scanner ETF esamina a ogni analisi. «Monitorate» vuol dire «esaminate dallo scanner»:
+  non è una lista di acquisti, non dipende dal tuo portafoglio e non è la lista dei tuoi Preferiti.`;
+const dkSt = s => `<span class="eo-st eo-${DK_ST[s] || "none"}">${esc(s)}</span>${/^Monitora/.test(s) ? " " + info(MONITOR_HELP) : ""}`;
 const DK_Q = { completa: "completi", parziale: "parziali", insufficiente: "insufficienti" };
 async function loadDesk(force) {
   if (DK.loading || (DK.data && !force && Date.now() - DK.at < 5 * 60_000)) return;
@@ -3718,8 +3996,9 @@ function deskHTML() {
   const cv = D.coverage || {}, cvc = cv.catalog || {};
   const cvLine = (["lungo", "breve"].map(m => cv[m] ? `${m === "lungo" ? "medio-lungo" : "breve"}: ${cv[m].scanner} esposizioni dello scanner = ${cv[m].classified} classificate (di cui ${cv[m].insufficient} con dati insufficienti) + ${cv[m].references.length} riferimenti di mercato + ${cv[m].notAnalysable.length} non analizzabili in questo orizzonte${cv[m].balanced ? "" : " ⚠ conti non in pari"}` : "").filter(Boolean).join("; "))
     + (isNum(cvc.products) ? `. Catalogo: ${cvc.products} ETF nelle esposizioni${cvc.excluded?.length ? `; fuori dal catalogo ordinario ${cvc.excluded.map(x => `${esc(x.name)} (${esc(x.why || "escluso")})`).join(", ")}` : ""}` : "");
-  return `<p class="warn-box"><b>Screening esplorativo, non consulenza finanziaria.</b> Il Decision Desk riassume i motori già esistenti e dice dove concentrare
-      l'attenzione: nessuna indicazione di acquisto o vendita, nessuna probabilità, nessun prezzo di ingresso. Nessun giudizio è validato sul passato.</p>${head}
+  return `${scopeNote("Screening esplorativo, non consulenza finanziaria · nessun giudizio validato sul passato.",
+      `Il Decision Desk riassume i motori già esistenti e dice dove concentrare l'attenzione: nessuna indicazione di acquisto o vendita, nessuna
+      probabilità, nessun prezzo di ingresso. Nessun giudizio è validato sul passato.`)}${head}
     <div class="kpis eo-kpis">${kpi("Da approfondire", deep.length, "tutte le condizioni, nessuna contraria")}${kpi("Da monitorare", mon.length, "attendi condizioni migliori o monitora")}
       ${kpi("Contrastanti", by("Condizioni contrastanti").length, "evidenze a favore e contro")}${kpi("Rischio elevato", by("Rischio elevato").length, "rischio non compensato")}
       ${kpi("Analisi", esc(oppTime(D.asOf)), `azioni: seduta ${esc(dayIT(D.session || ""))}${e.session ? ` · ETF: ${esc(dayIT(e.session))}` : ""}`)}</div>
@@ -3799,9 +4078,9 @@ function renderOpps() {
   const params = D.model?.params || [];
   const S = opps.diary;
   const diarySum = !S ? "" : S.started ? `dal ${dayIT(S.first)} · ${S.days} ${S.days === 1 ? "giornata" : "giornate"} · ${fNum(Object.values(S.lists).reduce((a, L) => a + L.observations, 0), 0)} osservazioni` : "non ancora avviato";
-  el.innerHTML = `<p class="warn-box"><b>Classifica preliminare, non un segnale di acquisto.</b> Sono titoli da <b>osservare e approfondire</b>, scelti con condizioni semplici
-      scritte qui sotto e <b>non validate</b>: nessuna probabilità e nessun rendimento atteso. Prima di qualsiasi decisione apri la scheda
-      del titolo e leggi la sezione Decisione. Non è una consulenza finanziaria.</p>
+  el.innerHTML = `${scopeNote("Classifica preliminare, non un segnale di acquisto · non è una consulenza finanziaria.",
+      `Sono titoli da <b>osservare e approfondire</b>, scelti con condizioni semplici scritte qui sotto e <b>non validate</b>: nessuna probabilità e
+      nessun rendimento atteso. Prima di qualsiasi decisione apri la scheda del titolo e leggi la sezione Decisione.`)}
     <div class="card"><div class="card-h"><h2>${esc(OPP_MODES[mode])}</h2>
       <div class="seg">${Object.entries(OPP_MODES).map(([k, l]) => `<button data-opm="${k}" class="${k === mode ? "on" : ""}">${esc(l.split(" · ")[0])}</button>`).join("")}</div>
       <span class="card-meta">orizzonte ${esc(B.horizon)} · prezzi delle sedute chiuse fino al ${D.asOf ? esc(dayIT(D.asOf)) : "—"} · ${B.qualified} titoli con almeno ${B.min} condizioni su ${n}, mostrati i primi ${items.length}${B.complete ? "" : " · <b>classifica incompleta</b>"}</span></div>
@@ -3945,8 +4224,24 @@ function fitSimHTML(w) {
 }
 function fitPageHTML() {
   const D = FIT.data, A = D?.analysis;
+  // phase 8B.1: what the page is for, before any button (works without the portfolio); details in «Come funziona»
   const intro = `<div class="card"><div class="card-h"><h2>Compatibilità con il portafoglio</h2></div>
-    <p class="small">Come cambierebbe la composizione con un'azione o un ETF: concentrazione, sovrapposizioni dentro gli ETF, settori, paesi e valute. È un giudizio <b>separato</b> dal Decision Desk e non lo cambia; nessuna indicazione di acquisto o vendita, nessun ordine.</p>
+    <p class="fit-lead">Questa analisi ti aiuta a capire come un nuovo investimento cambierebbe il tuo portafoglio: concentrazione, sovrapposizioni fra azioni ed ETF, settori, paesi, valute e rischi.</p>
+    <p class="small fit-ex"><b>Esempio</b> (dati inventati): se possiedi già NVIDIA e un ETF Nasdaq-100 che contiene NVIDIA, comprare un altro ETF tecnologico potrebbe aumentare la tua esposizione complessiva alla stessa azienda.</p>
+    <details class="scope-note fit-how"><summary><span class="sn-lead">Compatibile non vuol dire buono o cattivo.</span> <span class="sn-more">Come funziona</span></summary><div class="sn-body">
+      <p><b>Cosa significa «compatibilità».</b> Quanto un nuovo strumento si somma a quello che hai già: se aggiunge esposizioni nuove (diversifica) oppure
+        rafforza quelle che hai (concentra). Non dice se lo strumento è un buon investimento: uno strumento «poco compatibile» può essere valido, uno
+        «compatibile» può essere rischioso.</p>
+      <p><b>Perché è utile.</b> Molti ETF contengono le stesse grandi società: comprandone più di uno, o comprando anche le azioni, si rischia di puntare
+        due o tre volte sulla stessa azienda senza accorgersene.</p>
+      <p><b>Cosa misura.</b> Peso delle prime posizioni e numero equivalente di posizioni; le società presenti in più strumenti (anche dentro gli ETF);
+        la ripartizione per classe, settore, paese e valuta economica; un rischio descrittivo dalle serie storiche e alcune ipotesi fisse su azioni, tassi e dollaro.</p>
+      <p><b>Cosa NON misura.</b> Non prevede rendimenti, non dà probabilità, non valuta prezzo o qualità dell'azienda, non considera tasse e costi di transazione,
+        non dice quando comprare o vendere.</p>
+      <p><b>Informazioni parziali.</b> Dentro gli ETF la dashboard conosce di solito solo i primi titoli pubblicati dall'emittente (con la loro data): il resto
+        resta «non dettagliato» e non viene ripartito per arrivare al 100%. Strumenti senza classificazione o senza prezzi recenti sono segnati come tali.</p>
+      <p><b>Cosa fa il simulatore.</b> Aggiunge in memoria un importo che scegli tu a uno strumento e confronta il prima e il dopo: nessun ordine, nessun
+        salvataggio, nessun diario. È un giudizio <b>separato</b> dal Decision Desk e non lo cambia.</p></div></details>
     <p class="small muted">I dati del portafoglio si usano solo dopo il tuo clic, in sola lettura e solo in memoria su questo Mac: niente copie, niente diari, niente servizi esterni.</p>
     <p class="eo-act"><button class="btn" data-fit="mio">Analizza compatibilità con il mio portafoglio</button> <button class="btn ghost" data-fit="esempio">Usa un portafoglio di esempio</button></p></div>`;
   if (FIT.loading) return intro + `<div class="card">Analisi di ${esc(FIT_SRC[FIT.source])} in corso…</div>`;
@@ -4252,7 +4547,7 @@ const GROUPS = [
   { id: "opportunita", label: "Opportunità", ask: "Quali titoli meritano di essere approfonditi?", views: [["opps", "Opportunità"]] },
   { id: "mercato", label: "Mercato", ask: "Cosa sta succedendo?", views: [["overview", "Oggi"], ["sectors", "Settori"]] },
   { id: "portafoglio", label: "Portafoglio", ask: "Cosa ho e come sta andando?", views: [["portfolio", "Posizioni"], ["pfperf", "Performance"], ["pfconc", "Concentrazione"], ["pfrisk", "Rischio"], ["pffit", "Compatibilità"]] },
-  { id: "azioni", label: "Azioni", ask: "Quali azioni del Nasdaq-100 potrei comprare?", views: [["screener", "Screener"], ["watch", "In osservazione"], ["diary", "Diario dei segnali"]] },
+  { id: "azioni", label: "Azioni", ask: "Quali azioni del Nasdaq-100 potrei comprare?", views: [["screener", "Screener"], ["watch", "Preferiti"], ["diary", "Diario dei segnali"]] },
   { id: "etf", label: "ETF", ask: "Quali ETF potrei comprare?", views: [["etf", "ETF"]] },
   { id: "alert", label: "Alert", ask: "Cosa è cambiato dall'ultima osservazione?", views: [["brief", "Riepilogo del giorno"], ["alerts", "Alert e cambiamenti"]] },
 ];
@@ -4281,7 +4576,9 @@ function lastSub(g) { const v = LS.get("sub." + g.id, g.views[0][0]); return sho
 function setView(v) {
   if (!VIEWS.includes(v) || (v === "diary" && !diaryReady())) v = viewFromHash(v) || "opps";
   const g = groupOf(v);
+  if (v === "overview" && state.view !== "overview") closeFolds();      // Mercato always opens with both accordions closed
   state.view = v; LS.set("view", v); LS.set("sub." + g.id, v);
+  unpinTip();
   if (location.hash.slice(1) !== v) history.replaceState(null, "", "#" + v);
   $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.main === g.id));
   keepTabVisible();

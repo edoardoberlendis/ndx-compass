@@ -312,6 +312,36 @@ def classify(p, cls, themes, ndx_rows, ndx_sectors, infos):
     return 1, {"sector": {sector: 1}, "theme": {x: 1 / len(tl) for x in tl}, "country": {country: 1}}, True
 
 
+def missing_fields(p, cls, dims, lev, known):
+    """What is missing for one position's breakdown (phase 8B.1), in words for the page: [] when complete.
+    Funds: the dashboard has no reliable source of their sector / theme / country / leverage, so they come only from
+    portafoglio/classificazione.json, written by the user. Stocks: sector and country come from Yahoo or the index."""
+    out = []
+    if is_fund(p["kind"]):
+        if not known:
+            return ["nessuna classificazione in portafoglio/classificazione.json (settore, tema, paese)"] + (
+                [f"leva dedotta dal nome ({lev}x), non confermata"] if lev != 1 else [])
+        c = cls.get(p["isin"]) or {}
+        out += [f"{w} non indicato" for k, w in (("settore", "settore"), ("paese", "paese")) if not c.get(k)]
+        return out
+    if "Non disponibile" in dims["sector"]:
+        out.append("settore non disponibile dalla fonte")
+    if "Non disponibile" in dims["country"]:
+        out.append("paese non disponibile dalla fonte")
+    return out
+
+
+def _catalog_index(isin):
+    """Index name the public ETF catalogue knows for this ISIN (a hint for the user, never applied automatically)."""
+    try:
+        import etf_catalog
+        e = ((etf_catalog.load() or {}).get("items") or {}).get(isin) or {}
+        v = ((e.get("identity") or {}).get("index") or {})
+        return v.get("v") if isinstance(v, dict) else None
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------- refresh (called by the server's worker)
 
 def refresh():
@@ -395,6 +425,7 @@ def snapshot(ndx_snapshot=None, infos=None):
     ndx_sectors = {k: v / tot_w for k, v in ndx_sectors.items()} if tot_w else {}
     cls, themes = _load_json(CLASS_FILE), _themes_by_ticker()
     agg = {"sector": {}, "theme": {}, "country": {}}
+    unclassified = []                       # phase 8B.1: which instruments are not fully classified, and what is missing
     for p in st["positions"]:
         q = st["quotes"].get(p.get("ticker")) if p.get("ticker") else None
         usd = p["currency"].upper() != "EUR"
@@ -426,6 +457,10 @@ def snapshot(ndx_snapshot=None, infos=None):
                 a[1] += x["exposure"] * share
         if not known:
             warnings.append(f"{p['name']}: non classificato (aggiungilo in portafoglio/classificazione.json con il suo ISIN {p['isin']})")
+        miss = missing_fields(p, cls, dims, lev, known)
+        if miss:
+            unclassified.append({"name": p["name"], "isin": p["isin"], "kind": p["kind"], "missing": miss,
+                                 "catalogIndex": _catalog_index(p["isin"]) if is_fund(p["kind"]) else None})
         if not p.get("ticker") and not st["resolving"]:
             warnings.append(f"{p['name']} ({p['symbol']}): ticker non trovato su Yahoo, uso il prezzo del file")
     total = sum(x["value"] for x in out)
@@ -441,7 +476,7 @@ def snapshot(ndx_snapshot=None, infos=None):
     return {
         "file": os.path.basename(st["path"]), "fileTime": st["mtime"], "error": st["error"],
         "resolving": st["resolving"], "quotesAt": st["quotesAt"], "fx": fx_now,
-        "positions": out, "warnings": warnings, "concentration": concentration,
+        "positions": out, "warnings": warnings, "concentration": concentration, "unclassified": unclassified,
         "totals": {"value": total, "cost": cost, "pnl": total - cost, "pnlPct": (total - cost) / cost * 100 if cost else None,
                    "fxEffect": sum(x["fxEffect"] for x in out), "today": sum(todays) if todays else None,
                    "exposure": exposure,

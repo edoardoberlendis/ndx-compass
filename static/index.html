@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Nasdaq-100 Monitor</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='1' y='1' width='8' height='9' fill='%231f9d55'/><rect x='10' y='1' width='5' height='5' fill='%23d6393b'/><rect x='10' y='7' width='5' height='3' fill='%231f9d55'/><rect x='1' y='11' width='14' height='4' fill='%23555'/></svg>">
+<!-- favicon: the same mark as the header logo; ?v= forces the browser to load the new file instead of its cached icon -->
+<link rel="icon" type="image/svg+xml" href="/static/icon.svg?v=2026-11-09a">
 <link rel="preload" href="/static/fonts/source-sans-3.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/static/fonts/source-serif-4.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/tokens.css">
@@ -13,7 +14,13 @@
 </head>
 <body>
 <header class="top">
-  <div class="brand"><span class="logo" aria-hidden="true"><i></i><i></i><i></i><i></i></span><b>NDX</b><span class="brand-sub">Monitor</span></div>
+  <div class="brand">
+    <!-- logo: the same blocks as the favicon (static/icon.svg): green, red, green and a dark grey base -->
+    <svg class="logo" viewBox="0 0 16 16" width="24" height="24" aria-hidden="true" focusable="false">
+      <rect class="lg-g" x="1" y="1" width="8" height="9"/><rect class="lg-r" x="10" y="1" width="5" height="5"/>
+      <rect class="lg-g" x="10" y="7" width="5" height="3"/><rect class="lg-b" x="1" y="11" width="14" height="4"/>
+    </svg>
+    <span class="brand-name"><b>Nasdaq-100</b><span class="brand-sub">Monitor</span></span></div>
   <div class="tape" id="tape" aria-label="Indici di riferimento"></div>
   <div class="top-right">
     <div class="search">
@@ -63,6 +70,7 @@
         </div>
         <div class="map" id="ovMap"></div>
         <div class="map-foot"><div class="legend" data-legend></div><span class="hint">Dimensione = capitalizzazione · clicca un riquadro per i dettagli · clicca il nome di un settore per ingrandirlo, di nuovo per tornare</span></div>
+        <div id="ovMapList"></div>
       </div>
 
       <div class="ov-side">
@@ -71,20 +79,41 @@
             <div class="card-h"><h2>Nasdaq-100 · oggi</h2><span class="card-meta" id="ndxHead"></span></div>
             <div id="ndxChart" class="chart"></div>
           </div>
-          <div class="card macro-card">
-            <div class="card-h"><h2>Eventi macro USA</h2><span class="card-meta">prossimi 7 giorni</span></div>
-            <div id="macro"><div class="empty">Caricamento…</div></div>
-          </div>
-          <div class="card earn-card">
-            <div class="card-h"><h2>Trimestrali</h2><span class="card-meta">prossimi 7 giorni · ★ i miei titoli in cima</span></div>
-            <div id="earnings" class="mini-table earn-list"></div>
+          <!-- phase 8B.1: short agenda next to the map; the full tables are below, without inner scrolling -->
+          <div class="card agenda-card">
+            <div class="card-h"><h2>Prossimi appuntamenti</h2><span class="card-meta">macro USA e trimestrali</span></div>
+            <div id="agenda"><div class="empty">Caricamento…</div></div>
           </div>
         </div>
       </div>
     </div>
 
+    <!-- Eventi macro USA and Trimestrali: accordions, closed when Mercato opens; the closed bar shows the count and the next date -->
+    <div class="card macro-card mfold" id="macroCard">
+      <h2 class="fold-h"><button type="button" class="fold-btn" id="macroFoldBtn" data-fold="macroCard" aria-expanded="false" aria-controls="macroBody">
+        <span class="fold-t">Eventi macro USA</span><span class="fold-n" id="macroCount"></span>
+        <span class="fold-next" id="macroNextLine"></span>
+        <svg class="fold-chev" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false"><path d="M4 6l4 4 4-4"/></svg></button></h2>
+      <div class="fold-body" id="macroBody" role="region" aria-labelledby="macroFoldBtn" inert><div class="fold-in">
+        <div class="card-h fold-tools"><div class="seg small" id="macroSeg" role="group" aria-label="Periodo"></div><span class="card-meta" id="macroMeta"></span></div>
+        <div id="macroWarn"></div>
+        <div id="macro"><div class="empty">Caricamento…</div></div>
+      </div></div>
+    </div>
+    <div class="card earn-card mfold" id="earnCard">
+      <h2 class="fold-h"><button type="button" class="fold-btn" id="earnFoldBtn" data-fold="earnCard" aria-expanded="false" aria-controls="earnBody">
+        <span class="fold-t">Trimestrali</span><span class="fold-n" id="earnCount"></span>
+        <span class="fold-next" id="earnNextLine"></span>
+        <svg class="fold-chev" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false"><path d="M4 6l4 4 4-4"/></svg></button></h2>
+      <div class="fold-body" id="earnBody" role="region" aria-labelledby="earnFoldBtn" inert><div class="fold-in">
+        <div class="card-h fold-tools"><span class="card-meta">ultimi 7 giorni e prossimi 7 · ★ = nei tuoi Preferiti</span></div>
+        <div id="earnings" class="earn-list"></div>
+      </div></div>
+    </div>
+
     <div class="card">
-      <div class="card-h"><h2>Chi si è mosso e perché</h2><span class="card-meta">motivi ricavati dalle notizie con regole automatiche · da verificare leggendo l'articolo</span></div>
+      <div class="card-h"><h2>Chi si è mosso e perché</h2><span class="card-meta" id="whyMeta">motivi ricavati dalle notizie con regole automatiche · da verificare leggendo l'articolo</span></div>
+      <div id="whyLegend"></div>
       <div id="whyNewsOpts"></div>
       <div class="mv-cols">
         <div><h4>Migliori del giorno</h4><div id="whyTop" class="mv-list"><div class="empty">Caricamento notizie…</div></div></div>
@@ -96,7 +125,7 @@
   <!-- MY STOCKS (watchlist.json) -->
   <section id="view-watch" class="view" hidden>
     <div class="card">
-      <div class="card-h"><h2>In osservazione</h2><span class="card-meta">clicca ★ su un titolo (Screener o scheda) per aggiungerlo · clicca un'intestazione per ordinare · salvati in watchlist.json</span><span class="count" id="myCount"></span></div>
+      <div class="card-h"><h2>Preferiti <span class="info" tabindex="0" role="button" aria-label="Spiegazione" data-info="&lt;b&gt;I Preferiti sono la tua lista personale&lt;/b&gt;: i titoli che hai segnato con ★ (nello Screener, nella scheda di un titolo o negli ETF). Sono salvati in watchlist.json nella cartella del progetto, non nel portafoglio. Li scegli solo tu: la dashboard non aggiunge mai da sola un titolo, nemmeno quando un modello lo mette in «Monitora», e un Preferito non è un giudizio né un suggerimento di acquisto. Per toglierlo tocca di nuovo ★.">ⓘ</span></h2><span class="card-meta">★ = nei Preferiti, ☆ = no · tocca la stella su un titolo (Screener o scheda) per aggiungerlo o toglierlo · clicca un'intestazione per ordinare · salvati in watchlist.json</span><span class="count" id="myCount"></span></div>
       <div id="myNewsOpts"></div>
       <div class="table-wrap"><table class="scr my" id="myTbl"></table></div>
     </div>
@@ -136,12 +165,10 @@
             <div class="seg small" id="pfColSeg"><button data-cols="values" class="on">Valori</button><button data-cols="dash">Dati della dashboard</button></div>
             <span class="card-meta" id="pfMeta"></span><span class="count" id="pfCount"></span></div>
           <div id="pfWarn" class="pf-warn" hidden></div>
-          <div id="pfLev" class="pf-lev" hidden></div>
           <div class="table-wrap"><table class="scr pf" id="pfTbl"></table></div>
           <p class="muted small">Valori in euro con le stesse formule di Fineco: quantità × prezzo ÷ cambio EUR/USD (1 per i titoli in euro).
             Il costo è il "Valore di carico" del file, al cambio dei giorni di acquisto.</p>
         </div>
-        <details class="card fold pf-tax" id="pfTax"></details>
       </div>
       <div data-pfsub="pfperf" hidden><div class="card" id="pfPerf" hidden></div></div>
       <div data-pfsub="pfconc" hidden>

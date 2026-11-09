@@ -12,6 +12,11 @@ The BLS site blocks programs, so CPI and jobs dates must be added here by hand w
 Values: BLS public API v1 (no key, max 25 requests a day: one request a day is used, a few more on release days).
 PCE values would need a free BEA key (not used; if added one day it must live in a file excluded from Git).
 There is no free, reliable source for the analysts' expected values (consensus), so no "surprise" is computed.
+
+Phase 8B.1: upcoming() also lists past events (period chosen on the page), with a status (atteso / pubblicato /
+rinviato), the official source of each kind and when the dashboard last updated the values. "Rinviato" is detected only
+for FOMC and PCE, whose official calendars are read every day: a written date that the official calendar moved to a
+later day of the same reference period. CPI and jobs dates cannot be checked automatically (BLS blocks programs).
 """
 from __future__ import annotations
 
@@ -74,7 +79,11 @@ KINDS = {"fomc": FOMC, "cpi": CPI, "pce": PCE, "jobs": JOBS}
 MANUAL = {"cpi", "jobs"}          # no automatic check possible (BLS blocks programs)
 
 _lock = threading.Lock()
-_auto = {"fomc": [], "pce": [], "rate": None, "checked": None, "errors": {}}
+_auto = {"fomc": [], "pce": [], "rate": None, "rateAt": None, "checked": None, "errors": {}}
+# official page of each kind: where to verify dates and values
+SOURCES = {"fomc": ("Federal Reserve (FOMC)", FED_URL), "cpi": ("U.S. Bureau of Labor Statistics", "https://www.bls.gov/cpi/"),
+           "jobs": ("U.S. Bureau of Labor Statistics", "https://www.bls.gov/ces/"),
+           "pce": ("U.S. Bureau of Economic Analysis", "https://www.bea.gov/data/personal-consumption-expenditures-price-index")}
 _bls = {"data": None, "at": 0}
 
 
@@ -157,6 +166,7 @@ def check_official():
         rate = None
     with _lock:
         _auto.update(fomc=fomc or _auto["fomc"], pce=pce or _auto["pce"], rate=rate or _auto["rate"],
+                     rateAt=datetime.now(ET).date().isoformat() if rate else _auto.get("rateAt"),
                      checked=datetime.now(ET).date().isoformat(), errors=errors)
         snap = dict(_auto)
     try:
@@ -292,19 +302,57 @@ def bls_values(kind, ref):
 
 # ---------------------------------------------------------------- for the page
 
-def upcoming(days=7, relevance=None):
-    """Events from today to today + days (New York dates), with values, impact and relevance for my stocks."""
-    today = datetime.now(ET).date()
-    last = today + timedelta(days=days)
+def _moved(e):
+    """Later official date of a FOMC / PCE event the official calendar moved (same reference period), or None."""
+    auto = [tuple(x) for x in _auto.get(e["kind"], [])] if e["kind"] in ("fomc", "pce") else []
+    if not auto or any(a[0] == e["date"] for a in auto):
+        return None
+    same = (lambda a: a[2] == e["ref"]) if e["kind"] == "pce" else (lambda a: a[0][:7] == e["date"][:7])
+    later = sorted(a[0] for a in auto if same(a) and a[0] > e["date"])
+    return later[0] if later else None
+
+
+def _fomc_rate(e, now_ts):
+    """Fed rate for a FOMC row: the decided one only if the Fed page was read after the decision day."""
+    rate, at = _auto.get("rate"), _auto.get("rateAt") or _auto.get("checked")
+    if not rate:
+        return {"previous": None, "actual": None, "at": None}
+    if e["ts"] > now_ts:
+        return {"previous": rate, "actual": None, "at": at}              # still in force before the meeting
+    later = [x["date"] for x in all_events() if x["kind"] == "fomc" and e["date"] < x["date"] <= (at or "")]
+    decided = bool(at and at > e["date"] and not later)
+    return {"previous": None, "actual": rate if decided else None, "at": at}
+
+
+def upcoming(days=7, relevance=None, past=0, now=None):
+    """Events from today - past to today + days (New York dates), with values, status, source and relevance."""
+    now = now or datetime.now(ET)
+    today = now.date()
+    first, last = today - timedelta(days=past), today + timedelta(days=days)
+    bls_at = datetime.fromtimestamp(_bls["at"], ET).isoformat(timespec="minutes") if _bls.get("at") else None
     out = []
     for e in all_events():
         d = date.fromisoformat(e["date"])
-        if today <= d <= last:
-            x = dict(e, ts=_ts(e["date"], e["time"]), impact=IMPACT[e["kind"]], values=bls_values(e["kind"], e["ref"]))
-            if relevance:
-                x["relevance"] = relevance(IMPACT[e["kind"]])
-            out.append(x)
+        if not first <= d <= last:
+            continue
+        x = dict(e, ts=_ts(e["date"], e["time"]), impact=IMPACT[e["kind"]], values=bls_values(e["kind"], e["ref"]))
+        moved = _moved(e)
+        x["movedTo"] = moved
+        x["status"] = "rinviato" if moved else "pubblicato" if x["ts"] <= now.timestamp() else "atteso"
+        name, url = SOURCES[e["kind"]]
+        x["source"] = {"name": name, "url": url}
+        x["consensus"] = None                                                 # no free reliable source: never invented
+        if e["kind"] == "fomc":
+            x["rate"] = _fomc_rate(x, now.timestamp())
+            x["updatedAt"] = x["rate"]["at"]
+        elif e["kind"] in ("cpi", "jobs"):
+            x["updatedAt"] = bls_at
+        else:
+            x["updatedAt"] = _auto.get("checked")                              # PCE: only the date is checked
+        if relevance:
+            x["relevance"] = relevance(IMPACT[e["kind"]])
+        out.append(x)
     errs = _auto.get("errors") or {}
     warnings = [f"Controllo automatico delle date non riuscito: {v}. Uso le date scritte nel codice." for v in errs.values()]
-    return {"events": out, "rate": _auto.get("rate"), "checked": _auto.get("checked"),
+    return {"events": out, "rate": _auto.get("rate"), "checked": _auto.get("checked"), "blsAt": bls_at,
             "warnings": warnings + coverage_warnings(today)}

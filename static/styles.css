@@ -43,13 +43,17 @@ h2 { font: 600 var(--fs-md)/1.25 var(--font-title); margin: 0; color: var(--ink)
   padding: 8px 16px; background: var(--surface); border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 30;
 }
-.brand { display: flex; align-items: center; gap: 8px; font: 500 var(--fs-md)/1 var(--font-title); white-space: nowrap; }
-.brand b { font-weight: 600; }
-.brand-sub { color: var(--ink-3); }
-.logo { display: grid; grid-template-columns: 9px 6px; grid-template-rows: 9px 6px; gap: 2px; }
-.logo i { display: block; border-radius: 1.5px; background: var(--ink); }
-.logo i:nth-child(2), .logo i:nth-child(3) { background: var(--ink-3); }
-.logo i:nth-child(4) { background: var(--line-strong); }
+.brand { display: flex; align-items: center; gap: 9px; white-space: nowrap; }
+.brand-name { display: flex; align-items: baseline; gap: 5px; font: 500 var(--fs-md)/1 var(--font-title); letter-spacing: .01em; }
+.brand-name b { font-weight: 700; color: var(--accent); letter-spacing: .01em; }
+.brand-sub { color: var(--ink-2); font-weight: 500; }
+/* logo: the same blocks and colors as the favicon (static/icon.svg); the grey base is lighter in dark mode to stay visible */
+.logo { display: block; flex: none; --lg-g: #1f9d55; --lg-r: #d6393b; --lg-b: #555; }
+.logo .lg-g { fill: var(--lg-g); }
+.logo .lg-r { fill: var(--lg-r); }
+.logo .lg-b { fill: var(--lg-b); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .logo { --lg-b: #8a9391; } }
+:root[data-theme="dark"] .logo { --lg-b: #8a9391; }
 /* whole items only: those that do not fit go to a hidden second line, never cut in half (phones scroll instead) */
 .tape { flex: 1; display: flex; flex-wrap: wrap; gap: 0 4px; height: 40px; overflow: hidden; min-width: 0; scrollbar-width: none; }
 .tape::-webkit-scrollbar { display: none; }
@@ -121,17 +125,15 @@ main { padding: 16px; max-width: 1800px; margin: 0 auto; }
 .card-meta { color: var(--ink-3); font-size: var(--fs-sm); }
 .ov-grid { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 16px; }
 .ov-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-/* wide screens: the right column never makes the row taller than the map; the earnings list scrolls inside its card */
+/* wide screens: the right column (index chart + short agenda) never makes the row taller than the map.
+   Phase 8B.1: macro events and earnings are full-width cards below, with every row visible (no inner scrolling). */
 @media (min-width: 1281px) {
   .ov-side { position: relative; }
   .ov-side-in { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 16px; }
-  .earn-card { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-  .earn-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  .agenda-card { flex: 1 1 auto; min-height: 0; overflow: hidden; }
 }
-/* narrower screens: the column goes under the map as before, the list scrolls after ~360px */
 @media (max-width: 1280px) {
   .ov-side-in { display: contents; }
-  .earn-list { max-height: 360px; overflow-y: auto; }
 }
 .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
 .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
@@ -606,7 +608,11 @@ table.my td.nw a:hover { text-decoration: underline; }
 table.pf td { white-space: nowrap; }
 table.pf td.l { white-space: normal; min-width: 200px; }
 table.pf tbody tr { cursor: pointer; }
-.pf-warn { color: var(--ink-2); margin: 0 0 8px; padding: 6px 12px; border-radius: var(--r-ctrl); background: var(--warn-soft); line-height: 1.5; }
+.pf-warn { color: var(--ink-2); margin: 0 0 8px; line-height: 1.5; }
+.pf-warn .pf-warn-box { padding: 6px 12px; border-radius: var(--r-ctrl); background: var(--warn-soft); margin-top: 6px; }
+.pf-uc > summary { cursor: pointer; color: var(--ink-2); }
+.pf-uc .sn-more { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; font-size: var(--fs-sm); }
+.pf-uc-list { margin: 6px 0; padding-left: 18px; line-height: 1.5; }
 .pf-warn details > summary { padding: 2px 0; }
 .pf-warn details[open] > summary { margin-bottom: 4px; }
 .pf-warn-n { color: var(--warn); font-weight: 600; }
@@ -640,11 +646,7 @@ table.pf tr.lev td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 .pf-up-err { color: var(--down); font-weight: 600; margin-bottom: 8px; }
 #view-portfolio.drop { outline: 2px dashed var(--accent); outline-offset: 6px; border-radius: var(--radius); }
 .mc-warn { color: var(--warn); font-size: 12px; margin-top: 6px; }
-@media (min-width: 1281px) {
-  .macro-card { flex: 0 1 auto; min-height: 0; max-height: 55%; display: flex; flex-direction: column; }
-  .macro-card #macro { overflow-y: auto; min-height: 0; }
-  .earn-card { min-height: 140px; }
-}
+
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-strong); }
 .btn.primary:hover { filter: brightness(1.08); background: var(--accent); }
 /* ------------------------------------------------ portfolio: my rules */
@@ -1120,3 +1122,134 @@ button.cat-chip { cursor: pointer; font: inherit; font-size: var(--fs-xs); }
 .br-stale { padding: 8px 10px; border-left: 3px solid var(--warn, #b26a00); }
 .br-list .br-card { padding: 8px 0; }
 .br-h { margin-bottom: 4px; }
+
+/* ------------------------------------------------ phase 8B.1: discreet scope notes (instead of the big yellow banners) */
+.scope-note { margin: 0 0 10px; font-size: var(--fs-sm); color: var(--ink-3); }
+.scope-note > summary { cursor: pointer; list-style: none; display: inline-flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+.scope-note > summary::-webkit-details-marker { display: none; }
+.scope-note > summary::before { content: "ⓘ"; color: var(--ink-3); }
+.scope-note .sn-more { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.scope-note[open] .sn-more { display: none; }
+.scope-note .sn-body { margin-top: 6px; padding: 8px 10px; border-left: 2px solid var(--line-strong); color: var(--ink-2); line-height: var(--lh-text); max-width: 900px; }
+.data-note { color: var(--warn); margin: 0 0 10px; }
+.fit-lead { font-size: var(--fs-md); line-height: var(--lh-text); margin: 0 0 6px; max-width: 900px; }
+.fit-ex { margin: 0 0 8px; padding: 6px 10px; background: var(--surface-2); border-radius: var(--r-ctrl); max-width: 900px; }
+.fit-how .sn-body p { margin: 0 0 8px; }
+/* ------------------------------------------------ phase 8B.1: Mercato — agenda, macro table, earnings, movers */
+.na { color: var(--ink-3); font-style: italic; }
+.ag-list { list-style: none; margin: 0 0 6px; padding: 0; }
+.ag-list li { display: flex; gap: 10px; padding: 6px 0; border-top: 1px solid var(--grid); font-size: var(--fs-sm); align-items: baseline; }
+.ag-list li:first-child { border-top: 0; }
+.ag-d { color: var(--ink-2); min-width: 128px; flex: none; font-variant-numeric: tabular-nums; }
+.ag-t { min-width: 0; overflow-wrap: anywhere; }
+.mt-tbl { width: 100%; }
+.mt-tbl td, .mt-tbl th { vertical-align: top; white-space: normal; }
+.mt-tbl tr.mt-main td { border-bottom: 0; padding-bottom: 4px; }
+.mt-tbl tr.mt-sub td { padding-top: 0; font-size: var(--fs-sm); color: var(--ink-2); }
+.mt-tbl td.mt-ev { min-width: 180px; }
+.mt-why { display: flex; flex-wrap: wrap; gap: 2px 16px; line-height: 1.45; }
+.mt-src { margin-top: 3px; color: var(--ink-3); }
+.mt-src a { color: var(--accent); }
+.mt-wrap { overflow: visible; }
+.er-st { display: inline-block; font-size: var(--fs-xs); font-weight: 650; padding: 1px 8px; border-radius: var(--r-tag); border: 1px solid var(--line-strong); color: var(--ink-2); white-space: nowrap; }
+.er-st.pub { color: var(--pos); border-color: currentColor; }
+.er-st.wait { color: var(--warn); border-color: currentColor; }
+.er-st.next { color: var(--accent); border-color: currentColor; }
+.eg + .eg { margin-top: 14px; }
+.eg-h { margin: 0 0 4px; font-size: var(--fs-md); }
+.eg-day h4 { margin: 10px 0 4px; font-size: var(--fs-sm); color: var(--ink-2); text-transform: capitalize; }
+.eg-rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 10px; }
+.er { border: 1px solid var(--line); border-radius: var(--r-ctrl); padding: 10px 12px; min-width: 0; background: var(--surface); }
+.er-h { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.er-tk { font: inherit; font-weight: 700; background: none; border: 0; padding: 0; color: var(--ink); cursor: pointer; }
+.er-tk:hover, .er-tk:focus-visible { color: var(--accent); text-decoration: underline; }
+.er-n { color: var(--ink-2); flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.er-meta { font-size: var(--fs-sm); color: var(--ink-2); margin: 3px 0 6px; }
+.ec-tag { font-size: var(--fs-xs); padding: 0 6px; border-radius: var(--r-tag); }
+.ec-tag.ok { color: var(--pos); background: var(--pos-soft); }
+.ec-tag.warn { color: var(--warn); background: var(--warn-soft); }
+.er-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 12px; font-size: var(--fs-sm); }
+.er-grid > div { display: flex; flex-direction: column; min-width: 0; }
+.er-grid span:first-child { color: var(--ink-3); font-size: var(--fs-xs); }
+.er-grid b { font-variant-numeric: tabular-nums; font-weight: 600; }
+.er-sum { margin: 6px 0 4px; font-size: var(--fs-sm); line-height: 1.45; }
+.er-src a { color: var(--accent); }
+.er-src .link-btn { margin-left: 6px; }
+.er-more { margin-top: 6px; font-size: var(--fs-sm); }
+.ed-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0; }
+.ed-row > span:first-child { color: var(--ink-2); }
+.ev-tag { display: inline-block; font-size: var(--fs-xs); font-weight: 700; letter-spacing: .02em; padding: 1px 7px; border-radius: var(--r-tag); }
+.ev-tag.doc { color: var(--pos); background: var(--pos-soft); }
+.ev-tag.rel { color: var(--warn); background: var(--warn-soft); }
+.ev-tag.unv { color: var(--ink-2); background: var(--surface-2); border: 1px solid var(--line); }
+.why-leg { margin: 0 0 8px; line-height: 1.8; }
+.mv-when { margin-top: -2px; }
+.mv-h b[data-open]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 760px) {
+  .er-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* macro table becomes one block per event on phones: every field keeps its label */
+  .mt-tbl thead { display: none; }
+  .mt-tbl, .mt-tbl tbody, .mt-tbl tr, .mt-tbl td { display: block; width: 100%; }
+  .mt-tbl tr.mt-main { border-top: 1px solid var(--line); padding-top: 8px; }
+  .mt-tbl tr.mt-main:first-child { border-top: 0; }
+  .mt-tbl tr.mt-main td { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 8px; padding: 2px 0; text-align: left; }
+  .mt-tbl tr.mt-main td::before { content: attr(data-label); color: var(--ink-3); font-size: var(--fs-xs); padding-top: 2px; }
+  .mt-tbl tr.mt-main td.mt-ev { display: block; }
+  .mt-tbl tr.mt-main td.mt-ev::before { content: none; }
+  .mt-tbl tr.mt-sub td { padding: 4px 0 10px; }
+  .mt-why { flex-direction: column; }
+}
+@media (max-width: 400px) { .er-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .ag-d { min-width: 104px; } }
+/* phase 8B.1: the movers card has its own order (label, what was found, topics, source): every part on its own line */
+.mv-it > .mv-sum, .mv-it > .mv-tags { grid-column: 1 / -1; }
+/* phase 8B.1: rotation maps — numbers when a name has no free place, numbered list under the chart */
+.rrg-num-in { fill: #fff; font-size: 9px; font-weight: 700; pointer-events: none; }
+g.pt { cursor: pointer; outline: none; }
+g.pt:focus-visible circle:last-of-type, g.pt.hl circle:last-of-type { stroke: var(--ink); stroke-width: 2.5; }
+.rrg-list { margin-top: 6px; }
+.rrg-list > summary { cursor: pointer; color: var(--accent); }
+.rrg-tbl tr[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.rrg-tbl td, .rrg-tbl th { white-space: normal; }
+/* phase 8B.1: market map — sector names never cut in half, list of sectors and stocks under the map */
+.sector-h .sn { overflow: hidden; text-overflow: clip; white-space: nowrap; min-width: 0; }
+.map-list { margin-top: 8px; }
+.map-list > summary { cursor: pointer; color: var(--accent); }
+.ml-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 4px 16px; margin-top: 6px; }
+.ml-sec > summary { cursor: pointer; padding: 4px 0; font-size: var(--fs-sm); border-bottom: 1px solid var(--grid); }
+.ml-sec ul { list-style: none; margin: 4px 0 8px; padding: 0; font-size: var(--fs-sm); line-height: 1.7; }
+.ml-sec li { display: flex; gap: 6px; align-items: baseline; }
+.ml-sec li .muted { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 480px) { .rrg-tbl th, .rrg-tbl td { padding-left: 3px; padding-right: 3px; } .rrg-tbl .q { white-space: normal; } }
+.mt-tbl tr.mt-sub td, .mt-tbl td { text-align: left; }
+
+/* ------------------------------------------------ Mercato: Eventi macro USA and Trimestrali as accordions
+   closed bar = title, count and next date; open = every row of the period, no inner scrolling (no max-height) */
+.fold-h { margin: 0; font: inherit; }
+.fold-btn {
+  display: grid; grid-template-columns: auto auto 1fr auto; align-items: baseline; gap: 2px 10px;
+  width: 100%; text-align: left; border: 0; background: none; color: var(--ink); padding: 2px 0; cursor: pointer; border-radius: 6px;
+}
+.fold-t { font: 600 var(--fs-md)/1.25 var(--font-title); }
+.fold-n { color: var(--ink-3); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.fold-next { color: var(--ink-2); font-size: var(--fs-sm); min-width: 0; overflow-wrap: anywhere; }
+.fold-next b { color: var(--ink); font-weight: 600; }
+.fold-chev { grid-column: -2 / -1; grid-row: 1; justify-self: end; align-self: center; fill: none; stroke: var(--ink-2); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: transform .2s ease; }
+@media (hover: hover) { .fold-btn:hover .fold-t, .fold-btn:hover .fold-chev { color: var(--accent); stroke: var(--accent); } }
+.mfold.open .fold-chev { transform: rotate(180deg); }
+.fold-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .2s ease; }
+.mfold.open .fold-body { grid-template-rows: 1fr; }
+.fold-in { min-height: 0; overflow: hidden; }
+.mfold.shown .fold-in { overflow: visible; }
+.fold-tools { margin-top: var(--sp-3); }
+.mfold.open .fold-next { display: none; }
+@media (max-width: 560px) {
+  .fold-btn { grid-template-columns: 1fr auto; }
+  .fold-n { grid-column: 1 / -1; grid-row: 2; }
+  .fold-next { grid-column: 1 / -1; grid-row: 3; }
+}
+/* narrow phones: the full name stays; the search box takes the remaining width of its own line */
+@media (max-width: 420px) {
+  .top-right { flex: 1 1 100%; }
+  .search { flex: 1; }
+  .search input { width: 100%; }
+}

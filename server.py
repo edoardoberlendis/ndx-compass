@@ -285,7 +285,8 @@ INFO_FIELDS = ["longName", "shortName", "sharesOutstanding", "marketCap", "trail
                "targetHighPrice", "targetLowPrice", "recommendationKey", "recommendationMean",
                "numberOfAnalystOpinions", "averageVolume", "averageVolume10days", "fiftyTwoWeekHigh",
                "fiftyTwoWeekLow", "shortPercentOfFloat", "heldPercentInstitutions", "website", "city",
-               "state", "country", "longBusinessSummary", "earningsTimestamp", "exDividendDate"]
+               "state", "country", "longBusinessSummary", "earningsTimestamp", "exDividendDate",
+               "isEarningsDateEstimate"]          # phase 8B.1: Yahoo says whether the earnings date is only estimated
 
 
 def fetch_info(ticker):
@@ -1079,6 +1080,111 @@ def news(ticker, count=12):
     return [o for o in out if o["title"]]
 
 
+# ---------------------------------------------------------------- headlines for "Chi si è mosso e perché" (phase 8B.1)
+# yfinance get_news can fail for hours ("Yahoo! Finance is currently down"); for this card only, Yahoo's public RSS
+# headline feed is used instead (one light request per stock, cached 10 minutes like before). The other users of
+# news() (signals, stock details) are not changed.
+NEWS_RSS = "https://feeds.finance.yahoo.com/rss/2.0/headline?s={}&region=US&lang=en-US"
+RSS_PUBLISHERS = {"finance.yahoo.com": "Yahoo Finance", "fool.com": "Motley Fool", "marketbeat.com": "MarketBeat",
+                  "247wallst.com": "24/7 Wall St", "investing.com": "Investing.com", "zacks.com": "Zacks",
+                  "businesswire.com": "Business Wire", "prnewswire.com": "PR Newswire", "globenewswire.com": "GlobeNewswire",
+                  "seekingalpha.com": "Seeking Alpha", "reuters.com": "Reuters", "cnbc.com": "CNBC", "tikr.com": "TIKR",
+                  "benzinga.com": "Benzinga", "barrons.com": "Barron's", "wsj.com": "WSJ", "investors.com": "Investor's Business Daily"}
+_news_down = {"until": 0.0}
+
+
+def rss_publisher(url):
+    host = re.sub(r"^www\.", "", (re.match(r"https?://([^/]+)", url or "") or [None, ""])[1].lower())
+    return next((v for k, v in RSS_PUBLISHERS.items() if host == k or host.endswith("." + k)), host or None)
+
+
+def parse_rss(text):
+    """Yahoo RSS feed -> [{"title", "publisher", "time" (ISO), "url", "summary", "via": "rss"}]."""
+    import xml.etree.ElementTree as XT
+    from email.utils import parsedate_to_datetime
+    try:
+        root = XT.fromstring(text)
+    except XT.ParseError:
+        return []
+    out = []
+    for it in root.iter("item"):
+        g = lambda k: (it.findtext(k) or "").strip()
+        try:
+            t = parsedate_to_datetime(g("pubDate")).isoformat()
+        except (TypeError, ValueError):
+            t = None
+        url = re.sub(r"[?&]\.tsrc=rss.*$", "", g("link"))
+        if g("title"):
+            out.append({"title": g("title"), "publisher": rss_publisher(url), "time": t, "url": url,
+                        "summary": g("description"), "via": "rss"})
+    return out
+
+
+def news_moves(ticker, count=40):
+    """Headlines for the movers card: yfinance first, Yahoo's RSS feed when yfinance gives nothing."""
+    items = news(ticker, count) if time.time() >= _news_down["until"] else []
+    if items:
+        return items
+    _news_down["until"] = time.time() + 1800                      # do not ask yfinance again for 30 minutes
+    try:
+        r = requests.get(NEWS_RSS.format(ticker), headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        r.raise_for_status()
+        return parse_rss(r.content)[:count]
+    except Exception:
+        return []
+
+
+# evidence behind a move (phase 8B.1): never a cause the sources do not state
+NEWS_OFFICIAL_RX = r"business ?wire|pr ?newswire|globe ?newswire|accesswire|\bsec\b|edgar"
+NEWS_OPINION_SRC_RX = r"motley fool|\bfool\b|zacks|seeking alpha|investorplace|simply wall|insider monkey|24/7 wall|gurufocus|stocktwits|tipranks"
+NEWS_OPINION_TITLE_RX = r"\bcould\b|\bmay\b(?!\s+\d)|\bmight\b|should you (buy|sell)|\?|reportedly|sources? (say|said)|\brumou?rs?\b"
+EVIDENCE = {
+    "documented": ("CAUSA DOCUMENTATA", "Un articolo scritto per spiegare il movimento indica esplicitamente il motivo. È la "
+                   "spiegazione della fonte: la dashboard non la verifica in modo indipendente.",
+                   "Apri l'articolo; se cita un comunicato o un documento ufficiale, controllalo sul sito della società."),
+    "related": ("EVENTO CORRELATO", "Nella stessa finestra di tempo c'è un evento o una notizia sul titolo, ma nessuna fonte "
+                "dice che il movimento è dovuto a quello: è una coincidenza di tempo, non una causa dimostrata.",
+                "Leggi la notizia e controlla se attribuisce il movimento a quell'evento."),
+    "unverified": ("CAUSA NON VERIFICATA", "Nessuna notizia, evento della società o movimento del settore spiega il movimento "
+                   "nelle fonti lette dalla dashboard.",
+                   "Cerca notizie della seduta sul sito della società o su un sito di notizie finanziarie."),
+}
+
+
+def news_kind(n):
+    src, url, title = (n.get("publisher") or ""), (n.get("url") or ""), (n.get("title") or "")
+    if re.search(NEWS_OFFICIAL_RX, src, re.I) or re.search(r"sec\.gov", url, re.I):
+        return "official"
+    if re.search(NEWS_OPINION_SRC_RX, src, re.I) or re.search(NEWS_OPINION_TITLE_RX, title, re.I):
+        return "opinion"
+    return "news"
+
+
+def move_evidence(x, macro_day=None):
+    """Label + the facts behind it, from what explain_move already found (no new download, no AI)."""
+    n = x.get("news")
+    kind = news_kind(n) if n else None
+    facts = []
+    if "Conti trimestrali" in x["reasons"] and not (n and re.search(NEWS_CATS[0][2], (n.get("title") or "").lower())):
+        facts.append("trimestrale della società in calendario")
+    if n:
+        topic = f" (argomento: {', '.join(r.lower() for r in x['reasons'])})" if x["reasons"] else ""
+        facts.append(("comunicato ufficiale" if kind == "official" else "articolo d'opinione" if kind == "opinion" else "notizia")
+                     + " sul titolo" + topic)
+    if x.get("withSector") and isinstance(x.get("sectorChg"), (int, float)):
+        facts.append(f"il settore {x['sector']} si è mosso nella stessa direzione ({x['sectorChg']:+.1f}%)".replace(".", ","))
+    if macro_day:
+        facts.append("dato macro USA nello stesso giorno: " + ", ".join(macro_day))
+    if n and n.get("explainer") and n.get("clause") and kind != "opinion":
+        key = "documented"
+    elif facts:
+        key = "related"
+    else:
+        key = "unverified"
+    label, meaning, verify = EVIDENCE[key]
+    return {"key": key, "label": label, "meaning": meaning, "verify": verify, "facts": facts, "newsKind": kind}
+
+
 # ---------------------------------------------------------------- why did it move? (rule-based)
 # Headlines are English, so the keywords are English; labels shown in the UI are Italian.
 # Order = priority when a headline matches several categories.
@@ -1232,10 +1338,21 @@ def movers_why(n=8):
     tickers = [r["ticker"] for r in top + flop]
     with ThreadPoolExecutor(4) as ex:
         # 40 headlines: with only the latest 10, weekend articles push out the ones about Friday's session
-        items = dict(zip(tickers, ex.map(lambda t: cached(("n40", t), 600, lambda: news(t, 40)), tickers)))
+        items = dict(zip(tickers, ex.map(lambda t: cached(("nm", t), 600, lambda: news_moves(t, 40)), tickers)))
+    macro_names = {"fomc": "decisione della Fed", "cpi": "inflazione CPI", "pce": "inflazione PCE", "jobs": "rapporto sull'occupazione"}
+    macro_day = [macro_names[e["kind"]] for e in macro_calendar.all_events() if e["date"] == snap["session"]]
+    start, end = news_window(snap["session"])
+
+    def one(r):
+        x = explain_move(r, items[r["ticker"]], sector_ctx)
+        x["evidence"] = move_evidence(x, macro_day)
+        return x
+    via = "rss" if any(n.get("via") == "rss" for v in items.values() for n in v) else "yfinance"
     return {"session": snap["session"], "asOf": datetime.now(ET).isoformat(timespec="seconds"),
-            "top": [explain_move(r, items[r["ticker"]], sector_ctx) for r in top],
-            "flop": [explain_move(r, items[r["ticker"]], sector_ctx) for r in flop]}
+            "window": [start.isoformat(timespec="minutes"), end.isoformat(timespec="minutes")],
+            "newsSource": {"rss": "feed RSS pubblico di Yahoo Finance", "yfinance": "Yahoo Finance (yfinance)"}[via],
+            "newsFound": sum(1 for v in items.values() if v),
+            "top": [one(r) for r in top], "flop": [one(r) for r in flop]}
 
 
 # ---------------------------------------------------------------- web
@@ -1243,7 +1360,7 @@ def movers_why(n=8):
 app = Flask(__name__, static_folder=None)
 # version of the code that serves the page: change it together with PAGE_VERSION in static/app.js whenever the data
 # sent to the page changes, so that a server left running with old code is noticed (the page asks to restart it)
-DASHBOARD_VERSION = "2026-11-06c"
+DASHBOARD_VERSION = "2026-11-09a"
 
 
 @app.route("/")
@@ -1582,16 +1699,24 @@ def api_portfolio():
 
 @app.route("/api/earnings")
 def api_earnings():
-    """Details of the earnings of the next 7 days (earnings.py): estimates, last report, usual move on the reaction day."""
+    """Earnings of the last 7 days and of the next 7 (earnings.py): estimates, results when Yahoo has them, accounting
+    quarter from the statements, usual move on the reaction day. Phase 8B.1: the past week is included too."""
+    import analysts  # local imports: these modules import server
     import earnings
+    import fundamentals
     with store.lock:
-        snap, daily, anl = store.snapshot, store.daily, store.analysts
+        snap, daily, anl, infos = store.snapshot, store.daily, store.analysts, dict(store.infos)
     now = time.time()
-    tickers = sorted(r["ticker"] for r in (snap or {}).get("stocks", []) if r.get("earningsTs") and 0 <= r["earningsTs"] - now + 86400 <= 8 * 86400)
+    tickers = sorted(r["ticker"] for r in (snap or {}).get("stocks", []) if r.get("earningsTs") and -7 * 86400 <= r["earningsTs"] - now <= 8 * 86400)
     key = (today_et(), tuple(tickers))
     if _earn["key"] == key:
         return jsonify(loading=False, data=_earn["data"])
-    earnings.details_async(tickers, daily, anl, lambda d: _earn.update(data=d, key=key))
+    rows = {r["ticker"]: r for r in (snap or {}).get("stocks", [])}
+    fund = fundamentals.read().get("data") or {}
+    extra = {"announce": {t: rows[t]["earningsTs"] for t in tickers}, "infos": {t: infos.get(t) or {} for t in tickers},
+             "fund": {t: fund.get(t) for t in tickers}, "fetched": today_et(),
+             "analysts_date": (analysts.read_cache() or {}).get("date")}
+    earnings.details_async(tickers, daily, anl, lambda d: _earn.update(data=d, key=key), **extra)
     return jsonify(loading=True, data=_earn["data"])
 
 
@@ -2218,7 +2343,8 @@ def api_portfolio_upload_step(step):
 
 @app.route("/api/macro")
 def api_macro():
-    """US macro events of the next 7 days, with how much of my portfolio and favourites each one touches."""
+    """US macro events of the chosen period (?past=N days back, ?days=N days ahead, at most 31 each; default the next 7),
+    with how much of my portfolio and favourites each one touches."""
     with store.lock:
         snap, infos = store.snapshot, dict(store.infos)
     pf = portfolio.snapshot(snap, infos)
@@ -2238,7 +2364,13 @@ def api_macro():
         w = [t for t in watch if hit((rows.get(t) or {}).get("sector"), themes.get(t, []))]
         return {"pfShare": sum(x["value"] for x in pos) / total * 100 if total else None,
                 "pfItems": [x["ticker"] or x["symbol"] for x in pos], "watchItems": w, "watchTotal": len(watch)}
-    return app.response_class(json.dumps(macro_calendar.upcoming(7, relevance), default=clean), mimetype="application/json")
+    def days_arg(name, default):
+        try:
+            return max(0, min(31, int(request.args.get(name, default))))
+        except ValueError:
+            return default
+    out = macro_calendar.upcoming(days_arg("days", 7), relevance, past=days_arg("past", 0))
+    return app.response_class(json.dumps(out, default=clean), mimetype="application/json")
 
 
 @app.route("/api/movers-why")

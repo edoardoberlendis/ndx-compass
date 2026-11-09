@@ -1237,6 +1237,60 @@ Scheda **Alert** → «Riepilogo del giorno» (prima sotto-pagina) e job serale 
   completo solo con tutti e cinque i diari.
 - Test in `tests/test_market_only.py` (cartelle sentinella, filesystem temporanei, nessuna rete, nessun launchctl).
 
+## Grafica, leggibilità e informazioni di mercato (Fase 8B.1)
+
+Solo interfaccia e informazioni; motori, regole, soglie, diari e job **invariati**.
+
+- **Logo** «NDX Monitor» a colori: piccolo SVG nell'intestazione (tre candele verde/rossa/verde) disegnato con i colori del
+  tema, leggibile in chiaro, scuro e sul telefono. Nessuna immagine esterna.
+- **Avvertenze**: i grandi riquadri gialli generici in cima a Opportunità, Decision Desk, ETF, opportunità ETF e catalogo
+  sono una riga discreta «ⓘ … · Come funziona» (il testo completo si apre a richiesta). Una finestra modale con il testo
+  «Screening operativo e non consulenza» non esisteva nel codice. Restano le note specifiche (dati mancanti o datati,
+  copertura insufficiente, stop dentro l'oscillazione…). Un ⓘ fissato con un clic si chiude da solo quando cambia pagina,
+  quando si scorre o quando il suo elemento sparisce.
+- **Mercato → Oggi**: accanto alla mappa il grafico Nasdaq-100 e «Prossimi appuntamenti» (al massimo 6 righe); sotto, a
+  tutta larghezza e **senza scorrimento interno**:
+  - **Eventi macro USA** (`GET /api/macro?past=N&days=N`, al massimo 31 giorni per lato): periodo a scelta (prossimi 7 / 30,
+    ultimi 7 / 30), stato **atteso / pubblicato / rinviato** («rinviato» solo per Fed e PCE, i cui calendari ufficiali sono
+    riletti ogni giorno), precedente ed effettivo dai dati ufficiali già scaricati (BLS per CPI e occupazione, pagina della
+    Fed per il tasso: «effettivo» solo se la pagina è stata riletta dopo la decisione), **consenso «Non disponibile»** (nessuna
+    fonte gratuita affidabile) e quindi differenza «Non calcolabile», cosa muove di solito (azioni, tassi, obbligazioni,
+    dollaro), fonte ufficiale con link e data di aggiornamento. PCE: solo la data (i valori richiederebbero una chiave BEA).
+  - **Trimestrali** degli ultimi 7 giorni e dei prossimi 7, divise in «Da pubblicare» e «Pubblicate» e raggruppate per
+    giorno: prima/dopo la chiusura, conferma della data secondo Yahoo (`isEarningsDateEstimate`: confermata / stimata /
+    non indicata), trimestre contabile (dai bilanci se annunciato quel giorno, altrimenti stimato dalla cadenza), utile per
+    azione e ricavi attesi ed effettivi con sorpresa, guidance «non disponibile nella fonte», link a Yahoo e al sito della
+    società, data dell'annuncio separata dalla data di download. Per una trimestrale pubblicata l'utile atteso è la stima di
+    **quella** trimestrale (prima si mostrava per errore la stima del trimestre successivo); i ricavi attesi solo se le stime
+    erano state scaricate prima del giorno dell'annuncio.
+  - **Chi si è mosso e perché**: ogni scheda ha un'etichetta (`server.move_evidence`, regole fisse, nessuna AI):
+    **CAUSA DOCUMENTATA** solo se un articolo scritto per spiegare il movimento indica il motivo (e non è un sito
+    d'opinione); **EVENTO CORRELATO** se nella stessa finestra c'è una trimestrale, una notizia o un comunicato sul titolo,
+    un movimento del settore o un dato macro, senza che una fonte dica che è la causa; **CAUSA NON VERIFICATA** altrimenti.
+    Mostra variazione e seduta, fonte, ora, link e come verificarlo. Poiché `yfinance get_news` può non rispondere per ore
+    («Yahoo! Finance is currently down», successo il 6 novembre 2026), **solo per questa scheda** c'è il ripiego sul feed RSS
+    pubblico di Yahoo (`server.news_moves`, una richiesta leggera per titolo, cache 10 minuti). Segnali e schede dei titoli
+    usano ancora `news()` come prima.
+- **Mappe**: mappa del mercato con nomi dei settori interi, abbreviati o omessi (mai tagliati a metà; nome intero nel
+  tooltip) ed **elenco dei settori e dei titoli** sotto la mappa (aperto sul telefono); mappe di rotazione con etichette che
+  non si sovrappongono mai fra loro, ai punti o ai nomi dei quadranti e non escono dal grafico (altrimenti un numero) ed
+  **elenco numerato** con nomi e valori; punti raggiungibili con tastiera e tocco.
+- **Portafoglio**: tolto il riquadro automatico sui prodotti a leva (la quota di valore e di esposizione è nell'ⓘ della
+  posizione); «ETF non classificati» = strumenti il cui ISIN non è in `portafoglio/classificazione.json` (per ETF ed ETC la
+  dashboard non ha una fonte affidabile di settore/tema/paese, è normale per ogni ETF nuovo): una riga «Alcuni strumenti
+  non sono stati associati con certezza a una categoria…» con l'elenco di cosa manca (`snapshot()["unclassified"]`), mai
+  una classificazione inventata, nessun file modificato. Il riquadro **Zainetto fiscale** non è più nella pagina: file,
+  `/api/fiscal` e stima fiscale restano.
+- **Compatibilità**: introduzione che spiega cosa misura e cosa no, con un esempio inventato; consenso invariato.
+- **Preferiti** (prima «In osservazione»): la stessa `watchlist.json`, stella ★/☆ con stato chiaro; un titolo «Monitora» non
+  viene mai aggiunto da solo. Spiegazioni ⓘ di «Monitora» (regole A-M1, B-M1, E-M1, E-M2, F-M1, E-M3), «Trend favorevole da
+  monitorare» ed «Esposizioni monitorate», con la differenza dai Preferiti.
+- **Trend ETF**: ⓘ completo (medie 50 e 200 delle chiusure in euro, condizioni esatte, cosa non significa, differenza da
+  forza relativa, cambio di trend recente e volatilità).
+- **Anteprima**: `.venv/bin/python preview.py --portafoglio-finto` mostra un portafoglio **inventato**, solo in memoria;
+  eventi macro e trimestrali vengono letti dai file già in `cache/` in sola lettura.
+- Test in `tests/test_ui_8b1.py` (27 test, dati sintetici, nessuna rete; controlla anche che i motori siano identici al commit).
+
 ## Da verificare quando il diario avrà almeno 3 mesi di dati
 
 - **"Entra ora"**: togliendo la regola D3 (Fase 21) i titoli con "Entra ora" sono passati da 18 a 33 su 101. Controllare
