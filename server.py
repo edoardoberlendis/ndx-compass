@@ -679,8 +679,10 @@ class Store:
             sig = sigs[t] = score.for_stock(r, self.tech.get(t), v, news_all.get(t) if news_all is not None else None)
             r["sigScore"], r["signal"] = (sig["score"], sig["signal"]) if sig else (None, None)
             r["trend"] = sig["trend"]["score"] if sig and sig["trend"] else None   # technical score, shown apart as "Trend"
-            # Rialzista / Laterale / Ribassista with the SAME rule of the ETF tab (etf.trend_word): Screener filter
-            r["trendWord"] = etf_trend_word(r.get("price"), r.get("sma50"), r.get("sma200"))
+            # Screener filter «Tendenza»: the SAME arrows of the stock's Analisi box (technical.trends on closed sessions:
+            # 1 week ±1%, 1 month ±2%, 3 months ±4%), not the ETF rule
+            an = (self.ta.get(t) or {}).get("analysis") or {}
+            r["trends"] = [{"days": x["days"], "arrow": x["arrow"], "pct": x["pct"]} for x in an.get("trends") or []] or None
 
         # index + benchmarks
         idx = {}
@@ -1536,12 +1538,19 @@ def static_files(p):
     return send_from_directory(STATIC_DIR, p)
 
 
-def etf_trend_word(price, sma50, sma200):
-    import etf  # local import: etf imports this module
-    return etf.trend_word(price, sma50, sma200)
-
-
 _buy = {"key": None, "data": None, "lock": threading.Lock()}
+# Screener filter: the buy verdict of the Decisione sheet grouped by the rule that decided it (decision.decide), with the
+# words of the sheet («Attendi: trimestrale il 20/11» -> «Attendi: trimestrale in arrivo»)
+BUY_GROUPS = {"tutte": "Entra ora", "D5": "Entra su ritracciamento", "D7": "Entra su ritracciamento",
+              "D2": "Attendi: trimestrale in arrivo", "D4": "Attendi: sotto la media 200", "D6": "Attendi: a ridosso del massimo",
+              "dati": "Attendi: dati insufficienti", "D1": "Evita"}
+
+
+def buy_group(v):
+    """Filter group of one buyVerdict of decision.decide (None if unknown)."""
+    if not v:
+        return None
+    return BUY_GROUPS.get(v.get("decidedBy")) or v.get("category")
 
 
 def buy_verdicts():
@@ -1558,7 +1567,8 @@ def buy_verdicts():
             out = {}
             for r in snap["stocks"]:
                 d = stock_decision(r["ticker"], pf={}, details=False)
-                out[r["ticker"]] = d["buyVerdict"]["category"] if d and d.get("buyVerdict") else None
+                b = (d or {}).get("buyVerdict")
+                out[r["ticker"]] = {"group": buy_group(b), "label": b["label"], "by": b.get("decidedBy")} if b else None
             _buy.update(key=key, data={"asOf": snap.get("asOf"), "verdicts": out})
         return _buy["data"]
 

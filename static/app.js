@@ -135,9 +135,9 @@ const state = {
   cols: LS.get("cols", "overview"),
   preset: "all",
   sector: "",
-  ft: LS.get("scrTrend", ""),     // Screener: Trend filter (Rialzista / Laterale / Ribassista, rule of the ETF tab)
-  fb: LS.get("scrBuy", ""),       // Screener: «Ha senso comprare?» filter (market verdict of the Decisione sheet)
-  buyV: null,                     // {asOf, verdicts: {ticker: verdict}} from /api/stocks/buy
+  ft: LS.get("scrTrend2", ""),    // Screener: «Tendenza» filter, "days:arrow" (arrows of the stock's Analisi box)
+  fb: LS.get("scrBuy2", ""),      // Screener: «Ha senso comprare?» filter (market verdict of the Decisione sheet, by rule)
+  buyV: null,                     // {asOf, verdicts: {ticker: {group, label, by}}} from /api/stocks/buy
   sort: { key: "mcap", dir: -1 },
   watch: new Set(),              // loaded from watchlist.json at boot (loadWatch)
   watchNews: {},                 // ticker -> newest headlines naming the stock (newest first)
@@ -1859,10 +1859,17 @@ const COL_PRIO = {
     valLabel: "p3", upside: "p15", trend: "p2", earnings: "p2", news: "p3" },
 };
 // two filters that add up (with each other, the sector, the quick filters and the search): Trend and «Ha senso comprare?»
-const SCR_NONE = "non calcolabile", SCR_TRENDS = ["Rialzista", "Laterale", "Ribassista"], SCR_BUY = ["Entra ora", "Entra su ritracciamento", "Attendi", "Evita"];
-const scrTrend = s => s.trendWord || SCR_NONE;
-const scrBuy = s => !state.buyV ? null : state.buyV.verdicts[s.ticker] || SCR_NONE;
-const scrOkT = (s, v = state.ft) => !v || scrTrend(s) === v;
+// Tendenza: the arrows of the stock's Analisi box (technical.trends, closed sessions): ▲ above +1% / +2% / +4% over 1 week /
+// 1 month / 3 months, ▼ below the same thresholds in negative, = in between. One period at a time, as in the box.
+const SCR_NONE = "non calcolabile";
+const SCR_PERIODS = [[5, "1 settimana"], [21, "1 mese"], [63, "3 mesi"]], SCR_ARROWS = [["▲", "in salita"], ["=", "laterale"], ["▼", "in discesa"]];
+const SCR_TRENDS = SCR_PERIODS.flatMap(([d]) => SCR_ARROWS.map(([a]) => `${d}:${a}`));
+const scrHasTrend = (s, v) => { const [d, a] = v.split(":"); return (s.trends || []).some(t => String(t.days) === d && t.arrow === a); };
+// «Ha senso comprare?»: the buy verdict of the Decisione sheet grouped by the rule that decided it (server.BUY_GROUPS)
+const SCR_BUY = ["Entra ora", "Entra su ritracciamento", "Attendi: trimestrale in arrivo", "Attendi: sotto la media 200",
+  "Attendi: a ridosso del massimo", "Attendi: dati insufficienti", "Evita"];
+const scrBuy = s => !state.buyV ? null : state.buyV.verdicts[s.ticker]?.group || SCR_NONE;
+const scrOkT = (s, v = state.ft) => !v || scrHasTrend(s, v);
 const scrOkB = (s, v = state.fb) => !v || !state.buyV || scrBuy(s) === v;     // verdicts still loading: nothing hidden
 let scrBuyAsked = null;                                          // asOf of the snapshot whose verdicts were asked (one request each)
 async function loadBuyVerdicts() {
@@ -1898,16 +1905,14 @@ function renderScreener() {
   sel.value = state.sector;
   loadBuyVerdicts();
   const base = stocks().filter(s => !state.sector || s.sector === state.sector);            // counts: same sector, the other filter
-  const fSel = (id, k, label, order, of, ok) => {
-    const known = k === "ft" || !!state.buyV;                                                  // verdicts not arrived yet: no counts
-    const vals = [...new Set(order.filter(v => v === state[k] || base.some(s => of(s) === v)).concat(base.some(s => of(s) && !order.includes(of(s))) ? [SCR_NONE] : []))];
-    const n = v => base.filter(s => of(s) === v && ok(s)).length;
-    return `<label class="cat-f"><span>${label}</span><select id="${id}" data-scrf="${k}"><option value="">tutti</option>
-      ${(known ? vals : order).map(v => `<option value="${esc(v)}" ${state[k] === v ? "selected" : ""}>${esc(v)}${known ? ` (${n(v)})` : ""}</option>`).join("")}</select></label>`;
-  };
-  $("#scrFilters").innerHTML = `${fSel("scrTrendSel", "ft", `Trend ${info(SCR_TREND_INFO)}`, SCR_TRENDS, scrTrend, s => scrOkB(s))}
-    ${fSel("scrBuySel", "fb", `Ha senso comprare? <span class="muted">${state.buyV ? "(solo mercato)" : "(in calcolo…)"}</span> ${info(SCR_BUY_INFO)}`, SCR_BUY, scrBuy, s => scrOkT(s))}
-    ${state.ft || state.fb ? `<button class="link-btn" data-scrclear>Togli i filtri</button>` : ""}`;
+  const nT = v => base.filter(s => scrHasTrend(s, v) && scrOkB(s)).length;
+  const trendSel = `<label class="cat-f"><span>Tendenza ${info(SCR_TREND_INFO)}</span><select id="scrTrendSel" data-scrf="ft"><option value="">tutte</option>
+    ${SCR_PERIODS.map(([d, pl]) => `<optgroup label="${pl}">${SCR_ARROWS.map(([a, al]) => `<option value="${d}:${a}" ${state.ft === `${d}:${a}` ? "selected" : ""}>${pl}: ${a} ${al} (${nT(`${d}:${a}`)})</option>`).join("")}</optgroup>`).join("")}</select></label>`;
+  const known = !!state.buyV, nB = v => base.filter(s => scrBuy(s) === v && scrOkT(s)).length;
+  const buyVals = SCR_BUY.concat(known && base.some(s => !SCR_BUY.includes(scrBuy(s))) ? [SCR_NONE] : []);
+  const buySel = `<label class="cat-f"><span>Ha senso comprare? <span class="muted">${known ? "(solo mercato)" : "(in calcolo…)"}</span> ${info(SCR_BUY_INFO)}</span><select id="scrBuySel" data-scrf="fb"><option value="">tutti</option>
+    ${buyVals.map(v => `<option value="${esc(v)}" ${state.fb === v ? "selected" : ""}>${esc(v)}${known ? ` (${nB(v)})` : ""}</option>`).join("")}</select></label>`;
+  $("#scrFilters").innerHTML = `${trendSel}${buySel}${state.ft || state.fb ? `<button class="link-btn" data-scrclear>Togli i filtri</button>` : ""}`;
   const chip = p => `<button data-p="${p.id}" class="${p.id === state.preset ? "on" : ""}">${esc(p.label)}<span>${S.filter(p.f).length}</span>${info(PRESET_INFO[p.id])}</button>`;
   $("#presets").innerHTML = PRESET_GROUPS.map(g => `<div class="chip-row"><span class="chip-g">${esc(g.label)}</span>${g.ids.map(id => chip(PRESETS.find(p => p.id === id))).join("")}</div>`).join("");
   const rows = screenerRows();
@@ -1917,18 +1922,20 @@ function renderScreener() {
     <tbody>${rows.map(s => `<tr data-t="${esc(s.ticker)}">${cols.map(k => `<td class="${C[k].cls || ""} ${pr[k] || ""}">${C[k].html(s)}</td>`).join("")}</tr>`).join("")}</tbody>`;
   if (!rows.length) $("#scr").insertAdjacentHTML("beforeend", `<tbody><tr><td colspan="${cols.length}" class="empty">Nessun titolo corrisponde ai filtri${state.ft || state.fb ? ` <button class="link-btn" data-scrclear>Togli i filtri</button>` : ""}</td></tr></tbody>`);
 }
-const SCR_TREND_INFO = `<b>Trend in parole</b>, con la stessa regola della scheda ETF: <b>Rialzista</b> se il prezzo è sopra la media 50 e la media 50 è sopra la
-  media 200; <b>Ribassista</b> se il prezzo è sotto la media 50 e la media 50 sotto la 200; <b>Laterale</b> negli altri casi. Descrive l'andamento, non è un voto.
-  La colonna «Trend» della tabella è un'altra cosa: il punteggio da −100 a +100.`;
-const SCR_BUY_INFO = `<b>Ha senso comprare?</b> È il verdetto di acquisto della sezione Decisione di ogni titolo (regole D1–D7: azienda e valutazione, trimestrale,
-  media 200, titolo tirato, massimo a 52 settimane), calcolato <b>solo sul mercato</b>, senza il tuo portafoglio: per un titolo che possiedi la scheda mostra
-  invece il livello della posizione. Regole esplicite ma <b>non verificate</b> da un backtest; non è una consulenza finanziaria.`;
+const SCR_TREND_INFO = `<b>Tendenza</b>: le stesse frecce del riquadro Analisi di ogni titolo, sulle sedute chiuse. <b>▲ in salita</b> se il prezzo è salito più
+  dell'1% in 1 settimana, del 2% in 1 mese o del 4% in 3 mesi; <b>▼ in discesa</b> se è sceso oltre le stesse soglie; <b>= laterale</b> in mezzo. Scegli un periodo alla volta.
+  Descrive l'andamento, non è un voto. La colonna «Trend» della tabella è un'altra cosa: il punteggio da −100 a +100.`;
+const SCR_BUY_INFO = `<b>Ha senso comprare?</b> È il verdetto di acquisto della sezione Decisione di ogni titolo, con le stesse regole e la stessa
+  parola: decide la prima regola non soddisfatta. D1 azienda e valutazione deboli → <b>Evita</b>; D2 trimestrale entro 5 giorni → <b>Attendi: trimestrale in arrivo</b>;
+  D4 prezzo sotto la media 200 → <b>Attendi: sotto la media 200</b>; D5 titolo tirato o D7 azienda nella media → <b>Entra su ritracciamento</b>;
+  D6 a meno del 3% dal massimo a 52 settimane → <b>Attendi: a ridosso del massimo</b>; tutte soddisfatte → <b>Entra ora</b>. Calcolato <b>solo sul mercato</b>,
+  senza il tuo portafoglio: per un titolo che possiedi la scheda mostra invece il livello della posizione. Regole esplicite ma <b>non verificate</b>; non è una consulenza finanziaria.`;
 document.addEventListener("change", e => {
   const f = e.target.closest("[data-scrf]");
-  if (f) { const k = f.dataset.scrf; state[k] = f.value; LS.set(k === "ft" ? "scrTrend" : "scrBuy", f.value); renderScreener(); }
+  if (f) { const k = f.dataset.scrf; state[k] = f.value; LS.set(k === "ft" ? "scrTrend2" : "scrBuy2", f.value); renderScreener(); }
 });
 document.addEventListener("click", e => {
-  if (e.target.closest("[data-scrclear]")) { state.ft = state.fb = ""; LS.set("scrTrend", ""); LS.set("scrBuy", ""); renderScreener(); }
+  if (e.target.closest("[data-scrclear]")) { state.ft = state.fb = ""; LS.set("scrTrend2", ""); LS.set("scrBuy2", ""); renderScreener(); }
 });
 $("#colSeg").addEventListener("click", e => { const b = e.target.closest("[data-cols]"); if (b) { state.cols = b.dataset.cols; LS.set("cols", state.cols); renderScreener(); } });
 // clicking the active filter again switches it off (back to "Tutti")
