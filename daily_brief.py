@@ -185,6 +185,9 @@ def fundamentals_date(path=None):
     return v
 
 
+OPEN_FILES_NA = "metrica di macOS/Linux, non disponibile su questo sistema (su Windows non esiste quel limite)"
+
+
 def open_files():
     """(open, soft limit) of this process: the "Too many open files" errors of the past came from the default 256."""
     try:
@@ -249,5 +252,6 @@ def health(now, alerts, diaries, runs, feeds, chain=None):
         "alertCheck": {"lastRun": run.get("at") if run else None, "server": chk.get("at"), "serverMsg": chk.get("msg")},
         "errors": errors[-12:], "missing": missing, "excluded": excluded,
         "openFiles": {"open": n_open, "limit": limit,
-                      "note": "limite alzato a 4096 all'avvio del server (prima 256: causa dei vecchi «Too many open files»)"},
+                      "note": "limite alzato a 4096 all'avvio del server (prima 256: causa dei vecchi «Too many open files»)"
+                      if limit is not None else OPEN_FILES_NA},
     }

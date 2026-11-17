@@ -60,9 +60,11 @@ if [ "$(cat "$DIR/.venv/.requirements.sha" 2>/dev/null)" != "$REQ_SHA" ] || ! $P
 fi
 
 cd "$DIR"
+# server.py itself stops an old dashboard server that holds the port without answering (server_health.free_port):
+# that can take ~20 s, so wait up to 60 s here
 nohup $PYRUN server.py >>"$LOG" 2>&1 &
 disown
-for i in $(seq 1 40); do up && break; sleep 0.5; done
+for i in $(seq 1 120); do up && break; sleep 0.5; done
 if up; then
   /usr/bin/osascript -e 'display notification "Carico i dati di mercato… (circa 10 secondi)" with title "Nasdaq-100 Monitor"'
   open "$PAGE_URL"

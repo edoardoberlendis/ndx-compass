@@ -319,7 +319,19 @@ def test_25_financial_engines_identical_to_git_head():
     try:
         subprocess.run(["git", "-C", ROOT, "rev-parse", "HEAD"], check=True, capture_output=True)
     except (OSError, subprocess.CalledProcessError):
-        pytest.skip("git not available")
+        # Phase 9B.1: no git (the build kit on Windows): the engines must be byte-identical to the files that
+        # packaging/crea_kit.py found identical to git HEAD on the Mac. Missing fingerprints = FAIL, never a skip.
+        import hashlib
+        import json
+        rec = os.path.join(ROOT, "packaging", "motori_verificati.json")
+        assert os.path.isfile(rec), "git non disponibile e packaging/motori_verificati.json assente: kit non valido"
+        with open(rec, encoding="utf-8") as fh:
+            want = json.load(fh)["files"]
+        assert sorted(want) == sorted(ENGINES), "elenco dei motori diverso da quello verificato sul Mac"
+        for f in ENGINES:
+            with open(os.path.join(ROOT, f), "rb") as fh:
+                assert hashlib.sha256(fh.read()).hexdigest() == want[f], f"{f} changed"
+        return
     for f in ENGINES:
         head = subprocess.run(["git", "-C", ROOT, "show", f"HEAD:{f}"], capture_output=True).stdout
         with open(os.path.join(ROOT, f), "rb") as fh:

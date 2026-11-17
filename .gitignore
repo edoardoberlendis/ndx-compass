@@ -16,3 +16,9 @@ fonti/
 
 # diario delle opportunità (Fase O2, SQLite con dati pubblici di mercato): resta sul Mac, fuori dai commit
 data/
+
+# build dell'app Windows (Fase 9B): file generati, mai nel repository
+build/
+.venv-win/
+packaging/js_verificato.json
+packaging/motori_verificati.json

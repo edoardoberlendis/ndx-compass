@@ -14,7 +14,10 @@ import logging
 import math
 import os
 import re
-import resource
+try:
+    import resource       # Unix only (macOS/Linux): used once below, for the open-files limit
+except ImportError:      # Windows (phase 9B, portable app): the module does not exist
+    resource = None
 import threading
 import time
 import warnings
@@ -25,12 +28,18 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 import yfinance as yf
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, redirect, request, send_from_directory
+from flask import g as rctx          # per-request context (phase 9A: the session of a separate instance)
 
 import app_env
 import macro_calendar
 import market_calendar
 import portfolio
+import server_health
+
+# 17 Nov 2026: yfinance's SQLite caches opened one connection per download thread and never closed them ("Too many open
+# files" after a few days). In memory instead: same answers, no files (details in server_health.py).
+server_health.install_yf_memory_caches()
 
 warnings.filterwarnings("ignore")
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
@@ -41,7 +50,10 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(ROOT, "cache")
 STATIC_DIR = os.path.join(ROOT, "static")
 WATCHLIST = os.path.join(ROOT, "watchlist.json")   # "I miei titoli", saved by the page
-os.makedirs(CACHE_DIR, exist_ok=True)
+try:
+    os.makedirs(CACHE_DIR, exist_ok=True)
+except OSError:                  # portable app (phase 9B): the program folder is read only, the cache is moved elsewhere
+    pass
 
 ET = ZoneInfo("America/New_York")
 INDEX = "^NDX"
@@ -87,11 +99,14 @@ UA = {"User-Agent": "Mozilla/5.0 (Nasdaq100 dashboard; personal use)"}
 
 # macOS gives each process only 256 open files by default; ~110 parallel downloads plus
 # yfinance's caches can exhaust that ("Too many open files"). Raise the soft limit.
-try:
-    _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    resource.setrlimit(resource.RLIMIT_NOFILE, (min(4096, _hard), _hard))
-except (ValueError, OSError):
-    pass
+# Windows has no such per-process soft limit to raise (Python's files use the C runtime's
+# low-level handles, up to 8192; sockets are not counted there): nothing to do there.
+if resource is not None:
+    try:
+        _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (min(4096, _hard), _hard))
+    except (ValueError, OSError):
+        pass
 
 
 # ---------------------------------------------------------------- helpers
@@ -153,10 +168,23 @@ def write_daily_cache(name, data):
 
 
 def open_fds():
-    try:
-        return len(os.listdir("/dev/fd"))
-    except OSError:
-        return -1
+    return server_health.open_files()
+
+
+# Health of the server started with `python server.py` (run.sh and the Mac app); off when server.py is only imported
+# (tests, preview, daily job, separate instance, Windows app): restart above the open-files limit and weekly log.
+HEALTH = {"restart": False, "log": None}
+
+
+def health_check():
+    """Between two refreshes of the loop (a safe point): weekly log rotation, then the open-files safety net."""
+    if HEALTH["log"]:
+        try:
+            server_health.rotate_log(HEALTH["log"])
+        except OSError as e:
+            log.warning("rotazione del log non riuscita: %s", e)
+    if HEALTH["restart"]:
+        server_health.check_open_files(log, busy=lambda: store.news_running or store.analysts_running)
 
 
 def market_status(now=None):
@@ -214,7 +242,7 @@ def calendar_warnings(now):
                 no_rep = [d for d in sessions_between(first, last) if d not in have]
                 if no_rep:
                     out.append(f"Report della sera: {'manca' if len(no_rep) == 1 else 'mancano'} {len(no_rep)} {'seduta' if len(no_rep) == 1 else 'sedute'} dal {first[8:]}/{first[5:7]} "
-                               "(il job serale si installa con ./schedule.sh install).")
+                               f"{JOB_HINT}.")
     except Exception:
         log.exception("calendar warnings")
     return out
@@ -340,6 +368,7 @@ def download(tickers, **kw):
     for attempt in range(3):
         try:
             df = yf.download(tickers, group_by="ticker", progress=False, threads=DL_THREADS, auto_adjust=True, **kw)
+            server_health.prune_finished_tasks()                 # multitasking keeps every finished thread otherwise
             return split_download(df, tickers)
         except Exception as e:
             log.warning("download failed (%s), retry %d", e, attempt + 1)
@@ -809,6 +838,7 @@ def diary_days():
 
 
 _earn = {"data": {}, "key": None}
+JOB_HINT = "(il job serale si installa con ./schedule.sh install)"   # the portable app (desktop.py) says its own way
 
 
 def run_daily_job(market_only=False):
@@ -1037,6 +1067,108 @@ def worker():
             macro_calendar.refresh()                             # does real work at most once a day (more on release days)
         except Exception:
             log.exception("refresh failed")
+        health_check()                                           # weekly log; restart above FD_RESTART_LIMIT open files
+
+
+# ---------------------------------------------------------------- separate instance: public data only READ (phase 9A)
+# A separate instance (instance.py, e.g. the dashboard of another user) does not download the heavy public data again:
+# it reads the files that the personal server and the 23:00 MARKET-ONLY job already write in cache/ (2-year history,
+# Yahoo info, analysts, QQQ weights, constituents, macro calendar), again whenever one of them changes. It never writes
+# them (the app_env guard blocks any write in the project folder) and it never records a public diary or an alert. It
+# downloads only what lives in memory: intraday quotes, headlines, the ETF tab and the prices of the user's own positions.
+
+_shared = {"mtimes": {}}
+
+
+def _mtime(path):
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
+
+
+def load_public():
+    """Reload the shared public files that changed since the last call (read only, never a download). Returns the names
+    of the files reloaded."""
+    import analysts
+    import technical  # local imports: these modules import this one
+    files = {"constituents": os.path.join(CACHE_DIR, "constituents.json"), "infos": os.path.join(CACHE_DIR, "infos.json"),
+             "analysts": analysts.CACHE, "top": os.path.join(CACHE_DIR, QQQ_TOP_CACHE), "daily": DAILY_CACHE,
+             "macro_auto": macro_calendar.AUTO_CACHE, "macro_bls": macro_calendar.BLS_CACHE}
+    now = {k: _mtime(p) for k, p in files.items()}
+    changed = [k for k in files if now[k] is not None and now[k] != _shared["mtimes"].get(k)]
+    forever = 10 ** 9                                     # the age is shown by the page itself: never a reason to download
+    if "constituents" in changed:
+        rows = read_cache("constituents.json", forever)
+        if rows:
+            store.constituents = [{**r, "sector": SECTOR_IT.get(r["sector"], r["sector"]),
+                                   "industry": INDUSTRY_IT.get(r["industry"], r["industry"])} for r in rows]
+    if "infos" in changed:
+        c = read_cache("infos.json", forever)
+        store.infos = (c.get("data") or {}) if isinstance(c, dict) else {}
+    if "analysts" in changed:
+        store.analysts = analysts.cached_data()
+    if "top" in changed:
+        c = read_cache(QQQ_TOP_CACHE, forever)
+        store.top_weights = c.get("data") if isinstance(c, dict) else None
+    if "daily" in changed or ("constituents" in changed and store.daily):
+        cached = load_daily_cache()
+        if cached:
+            d, saved = cached
+            tech = store.technicals(d)
+            try:
+                ta = technical.build(d, store.constituents, tech)
+            except Exception:
+                log.exception("technical analysis failed")
+                ta = {}
+            with store.lock:
+                store.daily, store.tech, store.ta, store.last_daily = d, tech, ta, saved
+    for key, path, target in (("macro_auto", macro_calendar.AUTO_CACHE, macro_calendar._auto),
+                              ("macro_bls", macro_calendar.BLS_CACHE, macro_calendar._bls)):
+        if key in changed:
+            try:
+                with open(path) as f:
+                    target.update(json.load(f))
+            except (OSError, ValueError):
+                pass
+    _shared["mtimes"].update({k: now[k] for k in changed})
+    return changed
+
+
+def follower_worker():
+    """Worker of a separate instance (instance.py). Public part: shared files read only (load_public), intraday quotes and
+    headlines downloaded into memory. Personal part: the user's own portfolio, picture, signal/ETF/positions diaries, all
+    in the instance's folder (app_env.isolate). Never: the five public diaries, the alerts, cache/ or any other write in
+    the project folder (blocked anyway by the guard)."""
+    first = True
+    while True:
+        try:
+            load_public()
+            if first:
+                if not store.constituents or not store.daily:
+                    raise RuntimeError("dati pubblici non ancora disponibili: serve almeno un aggiornamento della dashboard "
+                                       "personale o del job serale delle 23:00")
+                store.refresh_intraday()
+                store.build()
+                store.error = None
+                store.ready.set()
+                portfolio.on_quotes = save_portfolio_history     # the user's daily picture, in the user's folder
+                portfolio.refresh()
+                first = False
+            else:
+                store.refresh_intraday()
+                store.build()
+                portfolio.refresh()
+                save_signal_diary()
+                save_etf_diary()
+                save_pos_diary()
+            store.refresh_news_all([c["ticker"] for c in store.constituents])
+        except Exception as e:
+            if first:
+                store.error = str(e)
+                store.ready.set()
+            log.exception("instance refresh failed")
+        time.sleep(QUOTE_REFRESH_S if market_status() in ("open", "pre", "post") else 5 * 60)
 
 
 # ---------------------------------------------------------------- per-stock detail
@@ -1363,8 +1495,37 @@ app = Flask(__name__, static_folder=None)
 DASHBOARD_VERSION = "2026-11-09a"
 
 
+# Phase 9A: a separate instance for another user (instance.py) sets INSTANCE; the personal dashboard leaves it None and
+# behaves exactly as before. {"label", "port", "hosts": [public names], "origins": [allowed Origins],
+# "tailscale_logins": [accounts allowed through Tailscale Serve], "password_file"}
+INSTANCE = None
+SESSIONS = None                      # instance_auth.Sessions, created by instance.py
+INSTANCE_PUBLIC = ("/accesso", "/static/")        # the only addresses reachable without a session
+
+
+def _instance_page():
+    """index.html with the session's CSRF token and the instance's label (meta tags read by app.js)."""
+    import html
+    with open(os.path.join(STATIC_DIR, "index.html"), encoding="utf-8") as f:
+        page = f.read()
+    meta = (f'<meta name="ndx-csrf" content="{html.escape(rctx.ndx_session["csrf"])}">\n'
+            f'<meta name="ndx-istanza" content="{html.escape(INSTANCE.get("label") or "")}">\n')
+    if INSTANCE.get("desktop"):                      # phase 9B, portable app: no CDN (d3 shipped with the app), "PC"
+        meta += '<meta name="ndx-desktop" content="1">\n'
+        page = page.replace(D3_CDN, '<script src="/static/vendor/d3.min.js"></script>').replace("questo Mac", "questo PC")
+    return page.replace("<head>\n", "<head>\n" + meta, 1)
+
+
+D3_CDN = '<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>'
+
+
+
 @app.route("/")
 def index():
+    if INSTANCE:
+        resp = app.response_class(_instance_page(), mimetype="text/html")
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
     return send_from_directory(STATIC_DIR, "index.html")
 
 
@@ -1487,7 +1648,12 @@ def recent_news(ticker, name, k=5):
 @app.route("/api/watchlist", methods=["GET", "POST"])
 def api_watchlist():
     if request.method == "POST":
-        raw = (request.get_json(silent=True) or {}).get("tickers") or []
+        # phase 9A: only JSON (the page always sends it). A cross-site form can post text/plain without a preflight:
+        # before, its unreadable body counted as an empty list and erased the Preferiti.
+        body = request.get_json(silent=True) if request.is_json else None
+        if not isinstance(body, dict) or not isinstance(body.get("tickers"), list):
+            return jsonify(error="richiesta non valida"), 400
+        raw = body["tickers"]
         tickers = list(dict.fromkeys(t.upper() for t in raw if isinstance(t, str) and re.fullmatch(r"[A-Za-z0-9.^=-]{1,12}", t)))
         with open(WATCHLIST + ".tmp", "w") as f:
             json.dump({"tickers": tickers}, f, indent=1)
@@ -1728,8 +1894,151 @@ def only_local_host():
     """Phase 7C: every answer only to a request addressed to localhost / 127.0.0.1. Against DNS rebinding: a site whose
     name is made to point to 127.0.0.1 would otherwise read the GET answers (e.g. /api/portfolio) as its own; its
     requests carry its own name in the Host header and are refused here."""
-    if (request.host or "").rsplit(":", 1)[0] not in LOCAL_HOSTS:
+    allowed = LOCAL_HOSTS + tuple(INSTANCE.get("hosts") or ()) if INSTANCE else LOCAL_HOSTS
+    if (request.host or "").rsplit(":", 1)[0] not in allowed:
         return jsonify(error="solo da http://localhost o http://127.0.0.1 su questo Mac"), 403
+
+
+@app.before_request
+def instance_guard():
+    """Phase 9A, separate instance only (INSTANCE set by instance.py): every address except the login page and the static
+    files needs a live session; every POST needs the session's CSRF token AND an allowed Origin; a request that comes
+    through Tailscale Serve must carry an authorized Tailscale account. Enforced here, never by the page."""
+    if not INSTANCE:
+        return None
+    import instance_auth as ia
+    rctx.instance_ok = False
+    who = request.headers.get("Tailscale-User-Login")
+    logins = [x.lower() for x in INSTANCE.get("tailscale_logins") or []]
+    if who is not None and who.lower() not in logins:
+        return jsonify(error="account non autorizzato per questa dashboard"), 403
+    if request.method not in ("GET", "HEAD", "POST"):
+        return jsonify(error="metodo non ammesso"), 405
+    if request.path.startswith(INSTANCE_PUBLIC[1]) or request.path in (INSTANCE_PUBLIC[0], "/avvio", "/api/app/ping"):
+        return None                                  # static files hold no personal data; the others check by themselves
+    session = SESSIONS.get(request.cookies.get(ia.COOKIE))
+    if session is None:
+        if request.path.startswith("/api/"):
+            return jsonify(error="accesso richiesto"), 401
+        return redirect("/accesso", code=303)
+    rctx.ndx_session = session
+    if request.method == "POST" and not (ia.origin_ok(request.headers.get("Origin"), INSTANCE["origins"])
+                                         and ia.csrf_ok(session, request.headers.get("X-CSRF-Token"))):
+        return jsonify(error="richiesta rifiutata: protezione CSRF (ricarica la pagina)"), 403
+    rctx.instance_ok = True
+    return None
+
+
+LOGIN_PAGE = """<!doctype html><html lang="it"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Nasdaq-100 Monitor · accesso</title>
+<link rel="icon" type="image/svg+xml" href="/static/icon.svg?v=2026-11-09a"><link rel="stylesheet" href="/static/tokens.css">
+<style>body{{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--ink);font:16px/1.5 var(--font-body,system-ui)}}
+form{{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px;width:min(360px,calc(100vw - 32px));box-sizing:border-box}}
+h1{{font:600 20px/1.3 var(--font-title,serif);margin:0 0 4px}}p{{margin:0 0 16px;color:var(--ink-2);font-size:14px}}
+input{{width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--ink);font-size:16px}}
+button{{margin-top:14px;width:100%;padding:10px;border:0;border-radius:8px;background:var(--accent);color:#fff;font-weight:600;font-size:16px;cursor:pointer}}
+.err{{color:var(--neg);font-size:14px;margin:12px 0 0}}</style></head><body>
+<form method="post" action="/accesso"><h1>Nasdaq-100 Monitor</h1><p>{label}</p>
+<label for="pw" class="sr">Password</label><input id="pw" name="password" type="password" autocomplete="current-password" required autofocus>
+<button type="submit">Entra</button>{error}</form></body></html>"""
+
+
+def _login_page(error="", status=200):
+    import html
+    body = LOGIN_PAGE.format(label=html.escape(INSTANCE.get("label") or ""),
+                             error=f'<p class="err" role="alert">{html.escape(error)}</p>' if error else "")
+    return app.response_class(body, status=status, mimetype="text/html")
+
+
+@app.route("/accesso", methods=["GET", "POST"])
+def login():
+    """Login of a separate instance (password only; the account is the instance itself). Not found on the personal one."""
+    import instance_auth as ia
+    if not INSTANCE:
+        return jsonify(error="not found"), 404
+    if INSTANCE.get("desktop"):                      # portable app: no password, the program opens the page itself
+        if request.method == "GET" and SESSIONS.get(request.cookies.get(ia.COOKIE)):
+            return redirect("/", code=303)
+        return _desktop_page("Per aprire la dashboard usa il pulsante «Apri la dashboard» nella finestra di "
+                             "Nasdaq-100 Monitor (oppure chiudi e riapri il programma).", 200 if request.method == "GET" else 404)
+    if request.method == "GET":
+        if SESSIONS.get(request.cookies.get(ia.COOKIE)):
+            return redirect("/", code=303)
+        return _login_page()
+    if not ia.origin_ok(request.headers.get("Origin"), INSTANCE["origins"]):
+        return _login_page("Richiesta rifiutata: apri la dashboard dal suo indirizzo.", 403)
+    if SESSIONS.locked():
+        return _login_page(f"Troppi tentativi sbagliati: riprova tra {SESSIONS.lock_remaining() // 60 + 1} minuti.", 429)
+    record = ia.load_password(INSTANCE["password_file"])
+    if not record or not ia.verify_password(request.form.get("password") or "", record):
+        SESSIONS.failed()
+        log.warning("istanza: accesso rifiutato")          # only the outcome: never the password or the account
+        return _login_page("Password non corretta.", 401)
+    sid = SESSIONS.create()
+    resp = redirect("/", code=303)
+    resp.set_cookie(ia.COOKIE, sid, max_age=ia.MAX_S, httponly=True, secure=True, samesite="Strict", path="/")
+    log.info("istanza: accesso riuscito")
+    return resp
+
+
+DESKTOP_PAGE = """<!doctype html><html lang="it"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Nasdaq-100 Monitor</title>
+<link rel="icon" type="image/svg+xml" href="/static/icon.svg?v=2026-11-09a"><link rel="stylesheet" href="/static/tokens.css">
+<style>body{{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--ink);font:16px/1.5 var(--font-body,system-ui)}}
+div{{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px;width:min(420px,calc(100vw - 32px));box-sizing:border-box}}
+h1{{font:600 20px/1.3 var(--font-title,serif);margin:0 0 8px}}p{{margin:0;color:var(--ink-2)}}</style></head><body>
+<div><h1>Nasdaq-100 Monitor</h1><p>{text}</p></div></body></html>"""
+
+
+def _desktop_page(text, status=200):
+    import html
+    return app.response_class(DESKTOP_PAGE.format(text=html.escape(text)), status=status, mimetype="text/html")
+
+
+@app.route("/avvio")
+def desktop_open():
+    """Portable app (phase 9B): the program opens the browser on /avvio?k=<one-time key>; a valid key (single use, valid
+    for 2 minutes) starts a session and goes to the dashboard. Without the program's key nothing personal opens."""
+    import instance_auth as ia
+    if not INSTANCE or not INSTANCE.get("desktop"):
+        return jsonify(error="not found"), 404
+    if not INSTANCE["open_keys"].use(request.args.get("k") or ""):
+        if SESSIONS.get(request.cookies.get(ia.COOKIE)):
+            return redirect("/", code=303)
+        return _desktop_page("Questo collegamento non è più valido. Usa «Apri la dashboard» nella finestra di "
+                             "Nasdaq-100 Monitor.", 403)
+    sid = SESSIONS.create()
+    resp = redirect("/", code=303)
+    resp.set_cookie(ia.COOKIE, sid, max_age=ia.MAX_S, httponly=True, secure=False, samesite="Strict", path="/")
+    return resp
+
+
+DESKTOP_API = None                                    # set by desktop.configure (portable Windows app, phase 9B)
+
+
+@app.route("/api/app/<action>", methods=["GET", "POST"])
+def desktop_api(action):
+    """Portable app only: update, state, settings, backup, restore, close (desktop.App.handle). 404 everywhere else."""
+    if not INSTANCE or not INSTANCE.get("desktop") or DESKTOP_API is None:
+        return jsonify(error="not found"), 404
+    return DESKTOP_API(action)
+
+
+@app.route("/esci", methods=["POST"])
+def logout():
+    """Ends the session of a separate instance (POST with the CSRF token, checked by instance_guard)."""
+    import instance_auth as ia
+    if not INSTANCE:
+        return jsonify(error="not found"), 404
+    SESSIONS.end(request.cookies.get(ia.COOKIE))
+    resp = jsonify(ok=True)
+    resp.delete_cookie(ia.COOKIE, path="/", secure=not INSTANCE.get("desktop"), httponly=True, samesite="Strict")
+    return resp
+
+
+INSTANCE_CSP = ("default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; "
+                "form-action 'self'; frame-ancestors 'none'")
 
 
 @app.after_request
@@ -1737,6 +2046,14 @@ def version_header(resp):
     """Every answer says which version of the code the server runs: the page compares it with its own and asks to
     restart the server when they differ (a server left running with old code: 10 Oct 2026)."""
     resp.headers["X-Dashboard-Version"] = DASHBOARD_VERSION
+    if INSTANCE:                                         # phase 9A: personal data never cached, never framed
+        if request.path == "/" or request.path.startswith(("/api/", "/accesso", "/esci")):
+            resp.headers["Cache-Control"] = "no-store"
+        resp.headers["Content-Security-Policy"] = (INSTANCE_CSP.replace(" https://cdn.jsdelivr.net", "")
+                                                   if INSTANCE.get("desktop") else INSTANCE_CSP)
+        resp.headers["X-Frame-Options"] = "DENY"
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["Referrer-Policy"] = "same-origin"   # not no-referrer: Chrome then sends Origin: null on form posts
     return resp
 
 
@@ -2273,7 +2590,11 @@ def local_request():
     """True only for a request made on this Mac by the dashboard's own page. The server already listens on 127.0.0.1
     only; the Host/Origin check and the custom header also stop another site open in the browser from posting here
     (the custom header forces a CORS preflight that this server never approves). Phase 7C: the Origin, when the
-    browser sends it, must be exactly the dashboard's own (same host and port), not any local port."""
+    browser sends it, must be exactly the dashboard's own (same host and port), not any local port.
+    Phase 9A: in a separate instance the same endpoints are allowed only to a request that passed instance_guard (live
+    session, CSRF token, allowed Origin) and that still carries the page's own header."""
+    if INSTANCE:
+        return bool(getattr(rctx, "instance_ok", False)) and request.headers.get("X-Requested-With") == "ndx-dashboard"
     host = (request.host or "").rsplit(":", 1)[0]
     origin = request.headers.get("Origin")
     return (request.remote_addr in ("127.0.0.1", "::1") and host in LOCAL_HOSTS
@@ -2323,6 +2644,37 @@ def api_portfolio_upload():
         return jsonify(portfolio.preview_upload(request.get_data(cache=False), name))
     except ValueError as e:
         return jsonify(error=str(e)), 400
+
+
+@app.route("/api/portfolio/classification", methods=["POST"])
+def api_portfolio_classification():
+    """Phase 9A: write (or remove) the classification of one ETF/ETC typed by the user (classificazione.json)."""
+    if not local_request():
+        return jsonify(error="Si modifica solo dalla dashboard."), 403
+    body = request.get_json(silent=True) if request.is_json else None
+    if not isinstance(body, dict):
+        return jsonify(error="richiesta non valida"), 400
+    try:
+        saved = portfolio.save_classification(body.get("isin"), body.get("fields"), remove=body.get("remove") is True)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(ok=True, saved=saved)
+
+
+@app.route("/api/portfolio/ticker", methods=["POST"])
+def api_portfolio_ticker():
+    """Phase 9A: write (or remove) the Yahoo ticker of one position typed by the user (ticker.json)."""
+    if not local_request():
+        return jsonify(error="Si modifica solo dalla dashboard."), 403
+    body = request.get_json(silent=True) if request.is_json else None
+    if not isinstance(body, dict):
+        return jsonify(error="richiesta non valida"), 400
+    try:
+        saved = portfolio.save_ticker(body.get("isin"), body.get("ticker"))
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    portfolio.refresh()
+    return jsonify(ok=True, saved=saved)
 
 
 @app.route("/api/portfolio/upload/<step>", methods=["POST"])
@@ -3081,8 +3433,20 @@ def authorize_writer(who):
 
 
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8100))
+    _log_file = os.path.join(CACHE_DIR, "server.log")
+    if server_health._same_file(2, _log_file):                   # started by the app with `>> cache/server.log`
+        HEALTH["log"] = _log_file
+        server_health.rotate_log(_log_file)
+    _port = server_health.free_port(port, log)                   # a blocked old server is stopped, a working one kept
+    if _port == "running":
+        log.info("la dashboard è già accesa su http://localhost:%d: non ne avvio una seconda", port)
+        raise SystemExit(0)
+    if _port == "other":
+        log.error("porta %d occupata e non liberabile: chiudi il programma che la usa e riprova", port)
+        raise SystemExit(1)
+    HEALTH["restart"] = os.name == "posix"
     authorize_writer("server")
     threading.Thread(target=worker, daemon=True).start()
-    port = int(os.environ.get("PORT", 8100))
     log.info("Nasdaq-100 dashboard on http://localhost:%d  (first load takes ~30s)", port)
     app.run(host="127.0.0.1", port=port, debug=False, threaded=True)

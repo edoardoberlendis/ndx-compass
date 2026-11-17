@@ -355,6 +355,7 @@ def test_17_schedule_market_only_has_its_own_label_and_never_touches_the_persona
     assert "MARKET_H=23; MARKET_M=0" in src
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="schedule.sh e launchd esistono solo sul Mac (Fase 9B: test su Windows)")
 def test_18_install_market_writes_a_valid_plist_with_a_fake_launchctl(tmp_path):
     """A copy of schedule.sh where every launchctl is replaced by echo: nothing can be installed on this Mac."""
     src = open(os.path.join(ROOT, "schedule.sh")).read().replace("launchctl ", "echo FAKE-LAUNCHCTL ")

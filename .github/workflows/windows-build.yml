@@ -1,0 +1,42 @@
+# Fase 9B - build e prova dell'app Windows su un computer Windows di GitHub (gratis nei limiti del piano Free).
+# NON parte da sola: solo a mano (Actions > "Build Windows" > Run workflow), e solo dopo che il codice è stato messo
+# in un repository PRIVATO su GitHub (decisione e autorizzazione dell'utente: niente è stato caricato).
+# Il repository non contiene dati personali (portafoglio/, watchlist.json, cache/ e data/ sono in .gitignore).
+name: Build Windows
+on:
+  workflow_dispatch:
+    inputs:
+      con_internet:
+        description: "Prova anche «Aggiorna dati» con i dati pubblici di mercato (5-15 minuti)"
+        type: boolean
+        default: true
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - name: Fine riga come nel repository (niente CRLF)
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+      - name: Build, test, controllo e prova dell'eseguibile
+        shell: pwsh
+        run: |
+          $extra = @()
+          if ("${{ inputs.con_internet }}" -eq "true") { $extra += "-ConInternet" }
+          ./packaging/build_windows.ps1 @extra
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Nasdaq-100-Monitor-Windows
+          path: |
+            build/Nasdaq-100-Monitor-Windows.zip
+            build/Nasdaq-100-Monitor-Windows.zip.sha256.txt
+          retention-days: 3
+          if-no-files-found: error

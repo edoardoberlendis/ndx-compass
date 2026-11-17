@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -68,11 +69,10 @@ def last(mode=None, completed=None, path=None):
 
 def _write(run):
     """Read-modify-write under an exclusive lock (dashboard and job may write at the same time), then atomic replace."""
-    import fcntl
     import threading
     os.makedirs(os.path.dirname(FILE), exist_ok=True)
     with open(FILE + ".lock", "a") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
+        _lock_file(lk)
         try:
             runs = read()
             runs = [r for r in runs if r.get("id") != run["id"]]
@@ -87,7 +87,48 @@ def _write(run):
                 if os.path.exists(tmp):
                     os.remove(tmp)
         finally:
-            fcntl.flock(lk, fcntl.LOCK_UN)
+            _unlock_file(lk)
+
+
+def _lock_file(f):
+    """Exclusive lock of the lock file: fcntl on macOS (unchanged), msvcrt on Windows (phase 9B, the portable app)."""
+    try:
+        import fcntl
+    except ImportError:                                      # Windows: lock the first byte, waiting until it is free
+        _lock_windows(f)
+        return
+    fcntl.flock(f, fcntl.LOCK_EX)
+
+
+LOCK_WAIT_S = 120           # Windows only: longest wait for the lock before a clear error (never skipped)
+
+
+def _lock_windows(f, wait_s=None, pause_s=0.02):
+    """msvcrt.LK_LOCK gives up after 10 tries one second apart (OSError 36 "Resource deadlock avoided"): with several
+    writers one of them can wait longer than that (the first Windows test, 12 writers). Here: non-blocking tries every
+    20 ms until the lock is free, up to LOCK_WAIT_S; then TimeoutError. The lock is the same: one writer at a time."""
+    import msvcrt
+    deadline = time.monotonic() + (LOCK_WAIT_S if wait_s is None else wait_s)
+    while True:
+        f.seek(0)
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            return
+        except OSError:
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"registro dei giri occupato da più di {LOCK_WAIT_S if wait_s is None else wait_s} s")
+            time.sleep(pause_s)
+
+
+def _unlock_file(f):
+    try:
+        import fcntl
+    except ImportError:
+        import msvcrt
+        f.seek(0)
+        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def stale(run, now):

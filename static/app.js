@@ -2,6 +2,122 @@
 (() => {
 "use strict";
 
+// ------------------------------------------------------------ separate instance (phase 9A)
+// Only when the server is a separate instance (instance.py): it writes the session's CSRF token and the label in two meta
+// tags. Every request that changes something then carries the token; an expired session goes back to the login page.
+// The protection is enforced by the server: this only lets the page's own requests through it. The personal dashboard
+// has no such meta tags and nothing changes for it.
+const INSTANCE = (() => {
+  const csrf = document.querySelector('meta[name="ndx-csrf"]')?.content;
+  return csrf ? { csrf, label: document.querySelector('meta[name="ndx-istanza"]')?.content || "" } : null;
+})();
+if (INSTANCE) {
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = async (url, opts = {}) => {
+    const method = (opts.method || "GET").toUpperCase();
+    const o = method === "GET" || method === "HEAD" ? opts : { ...opts, headers: { ...(opts.headers || {}), "X-CSRF-Token": INSTANCE.csrf } };
+    const r = await nativeFetch(url, o);
+    if (r.status === 401) location.assign("/accesso");
+    return r;
+  };
+  const brand = document.querySelector(".brand");
+  if (brand && INSTANCE.label) {
+    const tag = document.createElement("span");
+    tag.className = "env-tag";
+    tag.textContent = INSTANCE.label;
+    const out = document.createElement("button");
+    out.type = "button"; out.className = "env-out link-btn"; out.textContent = "Esci";
+    out.addEventListener("click", async () => { await fetch("/esci", { method: "POST" }).catch(() => {}); location.assign("/accesso"); });
+    brand.append(tag, out);
+  }
+}
+
+// ------------------------------------------------------------ portable Windows app (phase 9B)
+// Only in the Windows app (desktop.py writes the ndx-desktop meta tag): a bar under the header with «Aggiorna dati»
+// (the only heavy download), the date of the last update, the evening option, backup/restore of this PC's data and
+// «Chiudi l'app». The Mac dashboard has no such tag and nothing here runs for it.
+const DESKTOP = !!document.querySelector('meta[name="ndx-desktop"]');
+if (DESKTOP) {
+  const bar = document.createElement("div");
+  bar.className = "desk-bar";
+  bar.innerHTML = `<button class="btn primary" id="deskUpd" type="button">Aggiorna dati</button>
+    <span class="small desk-info" id="deskInfo" role="status" aria-live="polite">…</span>
+    <details class="desk-more"><summary class="small">Altro</summary><div class="desk-menu">
+      <label class="small"><input type="checkbox" id="deskAuto"> Aggiorna da solo la sera, dopo la chiusura di Wall Street, se l'app è aperta</label>
+      <div class="desk-row"><button class="btn" id="deskBackup" type="button">Backup dei miei dati</button>
+        <button class="btn" id="deskRestoreBtn" type="button">Ripristina un backup…</button>
+        <input type="file" id="deskRestore" accept=".zip" hidden></div>
+      <p class="muted small" id="deskWhere"></p>
+      <p class="muted small">Servono Internet e le fonti pubbliche (Yahoo Finance, Wikipedia, emittenti degli ETF, calendari ufficiali): ricevono solo ticker e ISIN, mai quantità, prezzi di carico o valori. Il portafoglio resta su questo PC.</p>
+    </div></details>
+    <button class="btn" id="deskClose" type="button">Chiudi l'app</button>`;
+  document.querySelector("header.top")?.after(bar);
+  const info = bar.querySelector("#deskInfo");
+  const when = iso => iso ? new Date(iso).toLocaleString("it-IT", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+  const post = (url, body, headers = {}) => fetch(url, { method: "POST", body, headers: { "X-Requested-With": "ndx-dashboard", ...headers } });
+  let last = null, timer = 0;
+  async function deskState() {
+    clearTimeout(timer);
+    let S = null;
+    try { S = await (await fetch("/api/app/stato", { cache: "no-store" })).json(); } catch { /* app closed */ }
+    if (!S) { info.textContent = "L'app non risponde: forse è stata chiusa."; return; }
+    bar.querySelector("#deskUpd").disabled = S.running;
+    bar.querySelector("#deskAuto").checked = !!S.settings?.auto_sera;
+    bar.querySelector("#deskWhere").textContent = `I tuoi dati sono in ${S.dataDir} (cartelle dati e backup).`;
+    const bad = (S.steps || []).filter(x => x.status !== "ok");
+    if (S.running) info.textContent = `Aggiornamento in corso: passo ${(S.steps || []).length + 1} di ${S.total} · ${S.current || "…"}`;
+    else if (S.firstRun) info.textContent = S.firstRunText;
+    else if (S.outcome === "completo") info.textContent = `Dati aggiornati il ${when(S.finishedAt)} (aggiornamento completo).`;
+    else if (S.outcome === "parziale") info.textContent = `Ultimo aggiornamento il ${when(S.finishedAt)}: parziale (${bad.map(x => `${x.name}: ${x.note || "non riuscito"}`).join("; ")}). Gli altri dati sono aggiornati; quelli non riusciti restano quelli di prima.`;
+    else if (S.outcome === "non riuscito") info.textContent = `Ultimo aggiornamento il ${when(S.finishedAt)} non riuscito: ${S.message || "errore"}.${S.lastComplete ? ` Dati completi del ${when(S.lastComplete)}.` : ""}`;
+    else info.textContent = S.hasData ? "Dati già presenti sul PC: premi «Aggiorna dati» per i più recenti." : S.firstRunText;
+    if (S.restored && !last) info.textContent = `Backup ripristinato: la dashboard usa i dati del backup (quelli di prima sono nella cartella backup). ${info.textContent}`;
+    if (last && last.running && !S.running) { location.reload(); return; }   // new data: every panel reads it again
+    last = S;
+    timer = setTimeout(deskState, S.running ? 2500 : 60000);
+  }
+  bar.querySelector("#deskUpd").addEventListener("click", async () => {
+    if (last?.firstRun && !confirm(`${last.firstRunText}\n\nVuoi scaricare i dati adesso?`)) return;
+    const r = await post("/api/app/aggiorna").catch(() => null);
+    if (r && !r.ok) info.textContent = (await r.json().catch(() => ({}))).message || "Aggiornamento non avviato.";
+    deskState();
+  });
+  bar.querySelector("#deskAuto").addEventListener("change", e =>
+    post("/api/app/impostazioni", JSON.stringify({ auto_sera: e.target.checked }), { "Content-Type": "application/json" }).then(deskState));
+  bar.querySelector("#deskBackup").addEventListener("click", async () => {
+    const r = await post("/api/app/backup").catch(() => null);
+    if (!r || !r.ok) { alert("Backup non riuscito."); return; }
+    const name = /filename="([^"]+)"/.exec(r.headers.get("Content-Disposition") || "")?.[1] || "Nasdaq100Monitor-backup.zip";
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(await r.blob()); a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    alert(`Backup salvato come ${name} (nella cartella Download del browser; una copia resta anche nella cartella backup dell'app).`);
+  });
+  bar.querySelector("#deskRestoreBtn").addEventListener("click", () => bar.querySelector("#deskRestore").click());
+  bar.querySelector("#deskRestore").addEventListener("change", async e => {
+    const f = e.target.files[0];
+    e.target.value = "";
+    if (!f || !confirm(`Ripristinare il backup ${f.name}?\nI dati attuali verranno messi da parte (non cancellati) alla prossima apertura dell'app.`)) return;
+    const r = await post("/api/app/ripristina", f, { "Content-Type": "application/zip" }).catch(() => null);
+    const d = r ? await r.json().catch(() => ({})) : {};
+    alert(r && r.ok ? d.message : `Ripristino non riuscito: ${d.error || "errore"}.`);
+  });
+  bar.querySelector("#deskClose").addEventListener("click", async () => {
+    if (last?.running && !confirm("È in corso «Aggiorna dati». Chiudere comunque?")) return;
+    await post("/api/app/chiudi").catch(() => {});
+    location.replace("/static/chiuso.html");             // a page without timers: nothing keeps calling the closed app
+  });
+  // the shared texts speak of "this Mac": on Windows the data are on this PC
+  const fix = node => {
+    const w = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    for (let t = w.nextNode(); t; t = w.nextNode()) if (t.data.includes("questo Mac")) t.data = t.data.replaceAll("questo Mac", "questo PC");
+  };
+  new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => n.nodeType === 1 ? fix(n) : n.nodeType === 3 && fix(n.parentNode || n))))
+    .observe(document.body, { childList: true, subtree: true });
+  fix(document.body);
+  deskState();
+}
+
 // ------------------------------------------------------------ state
 const LS = {
   get(k, d) { try { const v = localStorage.getItem("ndx." + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
@@ -180,7 +296,7 @@ async function load() {
   const sv = r.headers.get("X-Dashboard-Version");
   $("#verBanner").hidden = sv === PAGE_VERSION;
   if (sv !== PAGE_VERSION) $("#verBanner").innerHTML = `<b>Il server usa una versione vecchia del codice</b> (${esc(sv || "senza versione")}, la pagina è ${PAGE_VERSION}): alcuni dati mancherebbero.
-    Riavvialo: apri l'app <b>Nasdaq-100 Monitor</b> e scegli <b>Riavvia server</b> (con una versione vecchia dell'app: «Ferma server», poi riapri l'app).`;
+    ${DESKTOP ? "Chiudi Nasdaq-100 Monitor e riaprilo con il doppio clic." : "Riavvialo: apri l'app <b>Nasdaq-100 Monitor</b> e scegli <b>Riavvia server</b> (con una versione vecchia dell'app: «Ferma server», poi riapri l'app)."}`;
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
   const snap = await r.json();
   if (state.snap) state.snap.stocks.forEach(s => state.prevPrices.set(s.ticker, s.price));
@@ -1243,13 +1359,17 @@ function renderPortfolio() {
   $("#pfWarn").innerHTML = (UC.length ? `<details class="pf-uc"><summary><span class="small">Alcuni strumenti non sono stati associati con certezza a una categoria.
       Le relative esposizioni potrebbero essere parziali.</span> <span class="sn-more">Quali e cosa manca (${UC.length})</span></summary>
       <ul class="pf-uc-list">${UC.map(u => `<li><b>${esc(u.name)}</b> <span class="muted small">${esc(u.kind)} · ISIN ${esc(u.isin)}</span><br>
-        <span class="small">Manca: ${u.missing.map(esc).join("; ")}.${u.catalogIndex ? ` Il catalogo ETF pubblico conosce questo ISIN (indice: ${esc(u.catalogIndex)}): può aiutarti a compilarla.` : ""}</span></li>`).join("")}</ul>
+        <span class="small">Manca: ${u.missing.map(esc).join("; ")}.${u.catalogIndex ? ` Il catalogo ETF pubblico conosce questo ISIN (indice: ${esc(u.catalogIndex)}): può aiutarti a compilarla.` : ""}</span>
+        ${pfIsFund(u.kind) ? pfClsForm(u.isin, D) : ""}</li>`).join("")}</ul>
       <p class="muted small">Perché succede: per ETF ed ETC la dashboard non ha una fonte affidabile di settore, tema e paese, quindi li legge solo da
         <code>portafoglio/classificazione.json</code>, che compili tu con l'ISIN. Finché manca, lo strumento finisce in «Non classificato» nelle concentrazioni
-        (è normale per ogni ETF nuovo). La dashboard non inventa la classificazione e non modifica il file.</p></details>` : "")
+        (è normale per ogni ETF nuovo). La dashboard non inventa la classificazione: la scrivi tu con «Compila la classificazione» (oppure nel file) e la puoi cambiare quando vuoi.</p></details>` : "")
     + (other.length ? `<details class="fold pf-warn-box"><summary><span class="pf-warn-n">! ${other.length} ${other.length === 1 ? "avviso" : "avvisi"} sui dati del file</span></summary>`
     + other.map(w => `<div>⚠ ${esc(w)}</div>`).join("")
-    + `<div class="muted small">Puoi indicare il ticker giusto in <code>portafoglio/ticker.json</code>, per esempio {"ISIN": "TICKER.MI"}.</div></details>` : "");
+    + `<div class="muted small">Puoi indicare il ticker giusto qui sotto (salvato in <code>portafoglio/ticker.json</code>), per esempio VWCE.DE o QQQ3.MI.</div>`
+    + D.positions.filter(p => !p.ticker).map(p => `<form class="pf-tk-f" data-isin="${esc(p.isin)}"><label class="small">Ticker Yahoo per <b>${esc(p.name)}</b>
+        <input name="ticker" maxlength="20" autocomplete="off" spellcheck="false" placeholder="es. VWCE.DE"></label>
+        <button class="btn" type="submit">Salva</button> <span class="pf-f-msg small" role="status"></span></form>`).join("") + `</details>` : "");
   const COLS = pf.cols === "dash" ? PF_DASH() : PF_COLS;
   $$("#pfColSeg button").forEach(b => b.classList.toggle("on", b.dataset.cols === pf.cols));
   const col = COLS.find(c => c.k === pf.sort.key) || COLS.find(c => c.k === "value");
@@ -1522,6 +1642,36 @@ function renderTaxBox() {
     } catch (e) { $("#taxMsg").innerHTML = `<span class="down">Non salvato: ${esc(e.message)}</span>`; }
   };
 }
+// ---- phase 9A: classification of an ETF/ETC and Yahoo ticker typed by the user (before: only by hand in the files).
+// The dashboard invents nothing: it saves what is typed (server-side checks in portfolio.save_classification / save_ticker).
+const pfIsFund = kind => /^(ETF|ETC|ETN)$/i.test(kind || "") || !/^azion/i.test(kind || "");
+function pfClsForm(isin, D) {
+  const secs = [...new Set(["come il Nasdaq-100", ...((D.concentration || {}).sector || []).map(r => r.name).filter(n => n && n !== "Non classificato")])];
+  const id = "pfSec" + isin.replace(/[^A-Za-z0-9]/g, "");
+  return `<details class="pf-cls"><summary class="small">Compila la classificazione</summary>
+    <form class="pf-cls-f" data-isin="${esc(isin)}">
+      <label class="small">Settore <input name="settore" maxlength="40" list="${id}" required></label><datalist id="${id}">${secs.map(x => `<option value="${esc(x)}">`).join("")}</datalist>
+      <label class="small">Tema <input name="tema" maxlength="40"></label>
+      <label class="small">Paese o area <input name="paese" maxlength="40" placeholder="es. USA, Mondo, Europa"></label>
+      <label class="small">Leva <select name="leva"><option value="">nessuna</option>${[2, 3, 4, 5].map(n => `<option value="${n}">${n}x</option>`).join("")}</select></label>
+      <button class="btn" type="submit">Salva</button> <span class="pf-f-msg small" role="status"></span>
+    </form></details>`;
+}
+document.addEventListener("submit", async e => {
+  const f = e.target.closest(".pf-cls-f, .pf-tk-f");
+  if (!f) return;
+  e.preventDefault();
+  const msg = f.querySelector(".pf-f-msg"), v = n => f.elements[n]?.value.trim() || null;
+  const cls = f.classList.contains("pf-cls-f");
+  const body = cls ? { isin: f.dataset.isin, fields: { settore: v("settore"), tema: v("tema"), paese: v("paese"), leva: v("leva") } }
+    : { isin: f.dataset.isin, ticker: v("ticker") };
+  msg.textContent = "Salvo…";
+  try {
+    await pfPost(cls ? "/api/portfolio/classification" : "/api/portfolio/ticker", { body: JSON.stringify(body), headers: { "Content-Type": "application/json" } });
+    msg.textContent = "✓ Salvato";
+    await loadPortfolio();
+  } catch (err) { msg.innerHTML = `<span class="down">Non salvato: ${esc(err.message)}</span>`; }
+});
 // ---- upload of a Fineco export: preview first (new, sold, changed positions), saved only after confirmation.
 // The file goes only to the server on this Mac (portafoglio/, outside Git); older files stay there.
 const pfUp = { busy: false };
@@ -4522,7 +4672,7 @@ function briefHTML() {
       ${li("Sedute mancanti", H.missing.length ? H.missing.map(m => `${esc(m.diary)}: ${esc(m.sessions.map(dayIT).join(", "))}`).join("; ") : "nessuna")}
       ${li("Registrazioni escluse (registro delle esclusioni)", H.excluded.length ? H.excluded.map(x => `${esc(x.diary)} ${esc(dayIT(x.session))} (${x.observations} osservazioni): ${esc(x.reason)}`).join("<br>") : "nessuna")}
       ${li("Errori recenti", H.errors.length ? H.errors.map(e => `${tsIT(e.at)} ${esc(e.mode || "")} · ${esc(e.step || "")}${e.error ? ` (${esc(e.error)})` : ""}${e.note ? `: ${esc(e.note)}` : ""}`).join("<br>") : "nessuno")}
-      ${li("File aperti dal server", H.openFiles.open != null ? `${H.openFiles.open} su un limite di ${H.openFiles.limit ?? "n.d."} (${esc(H.openFiles.note)})` : "n.d.")}
+      ${li("File aperti dal server", H.openFiles.open != null ? `${H.openFiles.open} su un limite di ${H.openFiles.limit ?? "n.d."} (${esc(H.openFiles.note)})` : (H.openFiles.limit == null && H.openFiles.note ? esc(H.openFiles.note) : "n.d."))}
     </ul><p class="small muted">Problemi operativi: non sono eventi finanziari. Un giorno è completo solo con tutti e cinque i diari registrati.</p></details></div>`;
   return `<div class="card"><h2>Riepilogo del giorno</h2>${status}
       <div class="br-chain">${chain}</div>

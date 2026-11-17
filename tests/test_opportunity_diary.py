@@ -1,5 +1,6 @@
 """Phase O2: screening diagnosis, data coverage, analyst cache version, the opportunity diary (opportunity_diary.py,
 SQLite in a temporary folder: see conftest.py), its API and the navigation by hash. Only made-up data."""
+from contextlib import closing
 import json
 import os
 import re
@@ -27,7 +28,7 @@ def result():
 
 
 def rows(sql, *args):
-    with sqlite3.connect(od.DB) as con:
+    with closing(sqlite3.connect(od.DB)) as con, con:
         con.row_factory = sqlite3.Row
         return con.execute(sql, args).fetchall()
 
@@ -162,7 +163,7 @@ def test_recorded_ranking_uses_no_price_after_the_session():
 
 def test_original_rankings_can_never_be_changed(result):
     od.record(result, END, EVENING, "dashboard")
-    with sqlite3.connect(od.DB) as con:
+    with closing(sqlite3.connect(od.DB)) as con, con:
         with pytest.raises(sqlite3.DatabaseError, match="non si modifica"):
             con.execute("UPDATE observations SET rank=99 WHERE ticker='CCC'")
         with pytest.raises(sqlite3.DatabaseError, match="non si modifica"):

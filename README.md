@@ -1291,6 +1291,25 @@ Solo interfaccia e informazioni; motori, regole, soglie, diari e job **invariati
   eventi macro e trimestrali vengono letti dai file già in `cache/` in sola lettura.
 - Test in `tests/test_ui_8b1.py` (27 test, dati sintetici, nessuna rete; controlla anche che i motori siano identici al commit).
 
+## Istanza separata «Portafoglio secondario» (Fase 9A)
+
+Una seconda dashboard completa, con un portafoglio indipendente, per chi la apre da un altro PC tramite Tailscale.
+Stesso codice, un secondo processo (`./istanza.sh avvia ~/NasdaqMonitor-istanze/utente2`, porta 8110, solo 127.0.0.1):
+legge i dati pubblici della dashboard personale senza mai scriverli e tiene portafoglio, Preferiti, classificazioni,
+dati fiscali, storico e diari personali nella sua cartella privata. Non può aprire `portafoglio/` né `watchlist.json`
+(blocco nel processo). Accesso con password, sessione e protezione CSRF. Istruzioni complete, configurazione Tailscale
+proposta (non attivata), revoca e backup in `docs/istanza_secondaria.md`.
+
+## App portatile per Windows (Fase 9B)
+
+Lo stesso Nasdaq-100 Monitor come programma Windows indipendente dal Mac: si estrae lo ZIP, doppio clic su «Nasdaq-100
+Monitor.exe», la dashboard si apre nel browser. Nessun Python da installare, nessun servizio online. I dati personali
+stanno in `%LOCALAPPDATA%\Nasdaq100Monitor` (mai nella cartella del programma: una nuova versione non li cancella), i
+dati di mercato si scaricano con il pulsante «Aggiorna dati». Il pacchetto si costruisce **su Windows** con
+`packaging/build_windows.ps1` (test, PyInstaller, controllo che non ci siano dati personali, prova dell'eseguibile, ZIP con
+impronta SHA-256). Dettagli, strade gratuite per la build e limiti in `docs/app_windows.md`; guida per l'utente in
+`packaging/LEGGIMI.txt`.
+
 ## Da verificare quando il diario avrà almeno 3 mesi di dati
 
 - **"Entra ora"**: togliendo la regola D3 (Fase 21) i titoli con "Entra ora" sono passati da 18 a 33 su 101. Controllare

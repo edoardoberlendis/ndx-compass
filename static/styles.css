@@ -1253,3 +1253,27 @@ g.pt:focus-visible circle:last-of-type, g.pt.hl circle:last-of-type { stroke: va
   .search { flex: 1; }
   .search input { width: 100%; }
 }
+
+/* ------------------------------------------------ separate instance (phase 9A): discreet label of the environment */
+.env-tag { margin-left: 4px; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent);
+  font-size: var(--fs-xs); font-weight: 600; letter-spacing: .01em; }
+.env-out { font-size: var(--fs-xs); padding: 2px 4px; }
+@media (max-width: 420px) { .env-out { display: none; } }
+.pf-cls { margin-top: 4px; }
+.pf-cls-f, .pf-tk-f { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: end; margin: 6px 0; }
+.pf-cls-f label, .pf-tk-f label { display: flex; flex-direction: column; gap: 2px; }
+.pf-cls-f input, .pf-cls-f select, .pf-tk-f input { padding: 5px 8px; border: 1px solid var(--line); border-radius: var(--r-ctrl);
+  background: var(--surface-2); color: var(--ink); font: inherit; min-width: 0; max-width: 100%; }
+
+/* portable Windows app (phase 9B): the bar with «Aggiorna dati», only there */
+.desk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 16px; border-bottom: 1px solid var(--line);
+  background: var(--surface); }
+.desk-info { flex: 1 1 260px; min-width: 0; color: var(--ink-2); }
+.desk-more { position: relative; }
+.desk-more > summary { cursor: pointer; color: var(--accent); list-style: none; padding: 4px 2px; }
+.desk-menu { position: absolute; right: 0; z-index: 30; width: min(420px, calc(100vw - 32px)); margin-top: 6px; padding: 12px;
+  background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r-ctrl); box-shadow: 0 6px 24px rgb(0 0 0 / .12);
+  display: grid; gap: 10px; }
+.desk-menu label { display: flex; gap: 8px; align-items: flex-start; }
+.desk-row { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 560px) { .desk-menu { position: fixed; left: 16px; right: 16px; width: auto; } .desk-info { order: 3; flex-basis: 100%; } }

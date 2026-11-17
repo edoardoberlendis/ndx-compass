@@ -59,6 +59,13 @@ _state = {"path": None, "mtime": None, "positions": [], "error": None, "resolvin
 
 # ---------------------------------------------------------------- reading the export
 
+def _in_folder(path):
+    """True when `path` is a file of the current portfolio folder: memory read from another folder (a test that changed
+    folder in the same process) is never shown. In a running dashboard the folder never changes: always True."""
+    norm = lambda p: os.path.normcase(os.path.abspath(p))
+    return norm(os.path.dirname(path)) == norm(PORTFOLIO_DIR)
+
+
 def latest_file():
     """Newest .xls / .xlsx in portafoglio/ (the one exported last), or None."""
     if not os.path.isdir(PORTFOLIO_DIR):
@@ -114,6 +121,36 @@ UPLOAD_TMP = os.path.join(PORTFOLIO_DIR, ".caricamento.xls")
 MAX_UPLOAD = 5 * 1024 * 1024
 _upload = {"token": None}
 
+# Phase 9A: stricter checks of an uploaded file, turned on only by instance.py (the dashboard of another user). The
+# personal dashboard keeps the checks it always had.
+STRICT_UPLOAD = False
+MAX_POSITIONS = 500
+ISIN_RX = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]")
+CURRENCY_RX = re.compile(r"[A-Z]{3}")
+XLS_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"            # an Excel 97-2003 (.xls) file starts with these 8 bytes
+
+
+def validate_positions(positions):
+    """Strict check of the positions read from an uploaded file (phase 9A). Raises ValueError with a message that names
+    only the row and the field, never their content (it could be personal data)."""
+    import math
+    if len(positions) > MAX_POSITIONS:
+        raise ValueError(f"il file ha più di {MAX_POSITIONS} posizioni")
+    for n, p in enumerate(positions, 1):
+        if not ISIN_RX.fullmatch(p["isin"]):
+            raise ValueError(f"riga {n}: codice ISIN non valido")
+        if not CURRENCY_RX.fullmatch(p["currency"]):
+            raise ValueError(f"riga {n}: valuta non valida (servono 3 lettere, per esempio EUR)")
+        if not p["name"] or len(p["name"]) > 200 or len(p["symbol"]) > 40 or len(p["market"]) > 40 or len(p["kind"]) > 60:
+            raise ValueError(f"riga {n}: nome, simbolo, mercato o strumento mancante o troppo lungo")
+        if any(ord(c) < 32 for k in ("name", "symbol", "market", "kind") for c in p[k]):
+            raise ValueError(f"riga {n}: caratteri non ammessi")
+        for k in ("qty", "costPrice", "costFx", "costValue", "filePrice", "fileFx", "fileValue"):
+            if not math.isfinite(p[k]):
+                raise ValueError(f"riga {n}: valore numerico non valido")
+        if p["qty"] < 0:
+            raise ValueError(f"riga {n}: quantità negativa")
+
 
 def cancel_upload():
     _upload["token"] = None
@@ -129,14 +166,27 @@ def preview_upload(data, filename):
         raise ValueError("Il file deve essere l'export di Fineco in formato Excel .xls (Portafoglio → Sintesi → esporta).")
     if not data or len(data) > MAX_UPLOAD:
         raise ValueError("Il file è vuoto oppure troppo grande (massimo 5 MB).")
+    if STRICT_UPLOAD and not data.startswith(XLS_MAGIC):
+        raise ValueError("Il file non è un file Excel .xls: usa l'export di Fineco (Portafoglio → Sintesi → esporta).")
     os.makedirs(PORTFOLIO_DIR, exist_ok=True)
-    with open(UPLOAD_TMP, "wb") as f:
-        f.write(data)
+    if STRICT_UPLOAD:                     # phase 9A: a new file of the owner only, never through an existing link
+        fd = os.open(UPLOAD_TMP, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0), 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+    else:
+        with open(UPLOAD_TMP, "wb") as f:
+            f.write(data)
     try:
         new = read_export(UPLOAD_TMP)
+        if STRICT_UPLOAD:
+            validate_positions(new)
     except Exception as e:
         cancel_upload()
-        why = str(e) if isinstance(e, ValueError) else "non è un file Excel leggibile"
+        if STRICT_UPLOAD:                 # never echo the content of the file (Python's messages may quote a cell)
+            why = str(e) if isinstance(e, ValueError) and str(e).startswith(("riga ", "il file ", "mancano le colonne",
+                                                                                 "non trovo la riga")) else "contenuto non leggibile"
+        else:
+            why = str(e) if isinstance(e, ValueError) else "non è un file Excel leggibile"
         raise ValueError(f"Non sembra un export Fineco «Portafoglio sintesi»: {why}.")
     if not new:
         cancel_upload()
@@ -331,6 +381,94 @@ def missing_fields(p, cls, dims, lev, known):
     return out
 
 
+# ---------------------------------------------------------------- classification and ticker written from the page (phase 9A)
+# Before phase 9A these two files were edited only by hand on this Mac; a separate instance (another user, from his own
+# PC) needs to write them from the page. The dashboard still invents nothing: it stores only what the user typed.
+
+TICKER_RX = re.compile(r"[A-Za-z0-9][A-Za-z0-9.\-^=]{0,19}")
+CLASS_FIELDS = ("settore", "tema", "paese")
+
+
+def _clean_label(v, what):
+    if v in (None, ""):
+        return None
+    if not isinstance(v, str) or len(v.strip()) > 40 or any(ord(c) < 32 or c in "<>{}" for c in v):
+        raise ValueError(f"{what}: al massimo 40 caratteri, senza simboli speciali")
+    return v.strip() or None
+
+
+def _load_for_update(path):
+    """The current content of a personal JSON file before changing it: {} if missing, ValueError if unreadable (never
+    overwritten: the other entries would be lost)."""
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        raise ValueError(f"il file {os.path.basename(path)} non è leggibile: non lo sovrascrivo")
+    if not isinstance(data, dict):
+        raise ValueError(f"il file {os.path.basename(path)} non ha il formato atteso: non lo sovrascrivo")
+    return data
+
+
+def _write_json(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=1, ensure_ascii=False)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def save_classification(isin, fields, remove=False):
+    """Writes (or removes) the classification of one ETF/ETC in classificazione.json: settore, tema, paese, leva.
+    Raises ValueError with an Italian message. The other entries of the file are kept as they are."""
+    if not isinstance(isin, str) or not ISIN_RX.fullmatch(isin):
+        raise ValueError("codice ISIN non valido")
+    cls = _load_for_update(CLASS_FILE)
+    if remove:
+        cls.pop(isin, None)
+    else:
+        entry = {k: _clean_label((fields or {}).get(k), k) for k in CLASS_FIELDS}
+        lev = (fields or {}).get("leva")
+        if lev not in (None, ""):
+            try:
+                lev = int(lev)
+            except (TypeError, ValueError):
+                raise ValueError("leva: un numero intero da 1 a 5")
+            if not 1 <= lev <= 5:
+                raise ValueError("leva: un numero intero da 1 a 5")
+        entry["leva"] = lev or None
+        entry = {k: v for k, v in entry.items() if v is not None}
+        if not entry.get("settore"):
+            raise ValueError("indica almeno il settore (per un ETF sull'indice scrivi «come il Nasdaq-100»)")
+        cls[isin] = entry
+    _write_json(CLASS_FILE, cls)
+    return cls.get(isin)
+
+
+def save_ticker(isin, ticker):
+    """Writes (or removes, with ticker None) the Yahoo ticker of one position in ticker.json; the export is read again so
+    that the new ticker is used at once."""
+    if not isinstance(isin, str) or not ISIN_RX.fullmatch(isin):
+        raise ValueError("codice ISIN non valido")
+    if ticker not in (None, "") and (not isinstance(ticker, str) or not TICKER_RX.fullmatch(ticker.strip())):
+        raise ValueError("ticker non valido (lettere, numeri, punto e trattino; per esempio VWCE.DE)")
+    data = _load_for_update(OVERRIDES)
+    if ticker in (None, ""):
+        data.pop(isin, None)
+    else:
+        data[isin] = ticker.strip().upper()
+    _write_json(OVERRIDES, data)
+    with _lock:
+        _state["mtime"] = None                    # next refresh() reads the export again and resolves the tickers
+    return data.get(isin)
+
+
 def _catalog_index(isin):
     """Index name the public ETF catalogue knows for this ISIN (a hint for the user, never applied automatically)."""
     try:
@@ -358,7 +496,10 @@ def refresh():
             err = None
         except Exception as e:
             positions, err = [], f"Non riesco a leggere {os.path.basename(path)}: {e}"
-            log.warning("portfolio: %s", err)
+            if STRICT_UPLOAD:                     # phase 9A: the message may quote a cell; the log gets only its kind
+                log.warning("portfolio: export not readable (%s)", type(e).__name__)
+            else:
+                log.warning("portfolio: %s", err)
         with _lock:
             _state.update(path=path, mtime=mtime, positions=positions, error=err, resolving=bool(positions),
                           quotes={}, quotesAt=None)
@@ -412,7 +553,7 @@ def snapshot(ndx_snapshot=None, infos=None):
     ndx_snapshot / infos come from the running server (its store), to reuse sectors and weights of the Nasdaq-100."""
     with _lock:
         st = {k: (list(v) if isinstance(v, list) else dict(v) if isinstance(v, dict) else v) for k, v in _state.items()}
-    if not st["path"]:
+    if not st["path"] or not _in_folder(st["path"]):
         return {"file": None}
     fx_now = st["fx"]
     out, warnings = [], []

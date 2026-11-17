@@ -1,0 +1,43 @@
+# Fase 9B - librerie dell'app Windows, versioni bloccate (le stesse provate sul Mac l'11 novembre 2026).
+# Tutte hanno il pacchetto già compilato per Windows a 64 bit e Python 3.12 (controllato su PyPI): niente compilatori.
+# Uso: python -m pip install -r packaging/requirements-windows.txt
+beautifulsoup4==4.15.0
+blinker==1.9.0
+certifi==2026.7.22
+cffi==2.1.1
+charset-normalizer==3.5.1
+click==8.5.0
+curl_cffi==0.16.3
+Flask==3.1.3
+idna==3.20
+itsdangerous==2.2.0
+Jinja2==3.1.6
+lxml==6.1.3
+MarkupSafe==3.0.3
+multitasking==0.0.13
+numpy==2.5.3
+packaging==26.3
+pandas==3.0.6
+peewee==4.5.2
+platformdirs==4.12.1
+protobuf==7.36.2
+pycparser==3.0
+python-dateutil==2.9.0.post0
+pytz==2026.4
+requests==2.34.2
+six==1.17.0
+soupsieve==2.10
+typing_extensions==4.16.0
+urllib3==2.8.0
+websockets==17.1
+Werkzeug==3.1.9
+xlrd==2.0.2
+yfinance==1.7.0
+tzdata==2026.6              # fusi orari (Windows non ha il database IANA: senza, ZoneInfo fallisce)
+colorama==0.4.6             # richiesto da click su Windows
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.10
+pytest==9.1.1               # per eseguire i test su Windows prima di impacchettare
+pluggy==1.6.0
+iniconfig==2.3.1
+Pygments==2.21.0

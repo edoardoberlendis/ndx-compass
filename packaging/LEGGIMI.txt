@@ -1,0 +1,46 @@
+NASDAQ-100 MONITOR PER WINDOWS - GUIDA RAPIDA
+
+1. SCARICA IL FILE
+   Scarica Nasdaq-100-Monitor-Windows.zip dal link che ti ho mandato.
+   Prima di aprirlo controlla che venga davvero da me: ti scrivo a parte un codice di controllo (SHA-256).
+   In PowerShell:  Get-FileHash .\Nasdaq-100-Monitor-Windows.zip
+   Il codice mostrato deve essere uguale a quello che ti ho mandato. Se è diverso, non aprirlo.
+
+2. ESTRAI LO ZIP
+   Tasto destro sul file > «Estrai tutto...» > per esempio in Documenti.
+   Si crea la cartella «Nasdaq-100 Monitor». Non avviare il programma dall'interno dello ZIP.
+
+3. APRI «Nasdaq-100 Monitor.exe»
+   Doppio clic. Si apre una piccola finestra e la dashboard nel browser (Chrome o Edge).
+   La prima volta Windows può mostrare «Windows ha protetto il PC» (SmartScreen): succede perché il
+   programma non è firmato da un'azienda, non perché sia stato trovato un virus. Se hai controllato il
+   codice del punto 1, scegli «Ulteriori informazioni» > «Esegui comunque». Non disattivare mai
+   l'antivirus, il firewall o SmartScreen. Se il codice non corrisponde, non eseguirlo e avvisami.
+
+4. PRIMA VOLTA: PREMI «AGGIORNA DATI»
+   In alto. Scarica i dati di mercato (serve Internet; circa 50-100 MB, 5-15 minuti la prima volta).
+
+5. PREMI «CARICA FILE FINECO»
+   Su Fineco esporta le posizioni in Excel (.xls); poi Portafoglio > Posizioni > «Carica file Fineco»,
+   controlla l'anteprima e premi «Conferma».
+
+6. CONSULTA IL PORTAFOGLIO
+   Posizioni, Performance, Concentrazione, Rischio, Compatibilità. Sono analisi automatiche, non consigli
+   di investimento.
+
+7. «AGGIORNA DATI» QUANDO SERVE
+   Le quotazioni del giorno si aggiornano da sole mentre l'app è aperta; per tutto il resto premi
+   «Aggiorna dati» (meglio la sera, dopo la chiusura di Wall Street). La data dell'ultimo aggiornamento
+   è scritta accanto al pulsante.
+
+8. QUANDO HAI FINITO: «CHIUDI L'APP»
+   In alto nella pagina, oppure «Chiudi Nasdaq-100 Monitor» nella piccola finestra.
+
+I TUOI DATI
+- Restano solo su questo PC, nella cartella %LOCALAPPDATA%\Nasdaq100Monitor (non nella cartella del
+  programma). A Yahoo Finance e alle altre fonti vanno solo i codici dei titoli (ticker e ISIN), mai
+  quantità, prezzi di carico o valori.
+- Backup: «Altro» > «Backup dei miei dati» (salva un file .zip). Conservalo anche fuori dal PC.
+- Nuova versione: chiudi l'app, cancella la vecchia cartella «Nasdaq-100 Monitor» ed estrai quella nuova.
+  Portafoglio, Preferiti e storico non si perdono.
+- Senza Internet l'app si apre con gli ultimi dati scaricati, ma non può aggiornare le quotazioni.

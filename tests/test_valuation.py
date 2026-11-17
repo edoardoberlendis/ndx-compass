@@ -1,5 +1,6 @@
 """Phase 5B: valuation and scenarios (investment_valuation.py), its diary (valuation_diary.py), the API, the page and the
 currency labels. Only made-up companies and numbers: no Yahoo, no personal data."""
+from contextlib import closing
 import copy
 import json
 import os
@@ -9,6 +10,8 @@ import subprocess
 from datetime import datetime
 
 import pytest
+
+import jscheck  # noqa: E402  (tests/jscheck.py)
 
 import fundamentals as fu
 import investment_diary as invd
@@ -336,10 +339,10 @@ def test_valuation_diary_records_once_and_leaves_the_other_diaries_unchanged():
     inv, res = diary_result()
     assert invd.record(inv, "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)[0]
     tables = ("runs", "observations", "inv_runs", "inv_observations")
-    with sqlite3.connect(od.DB) as con:
+    with closing(sqlite3.connect(od.DB)) as con, con:
         before = {t: con.execute(f"SELECT * FROM {t}").fetchall() for t in tables}
     assert vd.stats() == {"started": False, "days": 0}
-    with sqlite3.connect(od.DB) as con:
+    with closing(sqlite3.connect(od.DB)) as con, con:
         assert not con.execute("SELECT 1 FROM sqlite_master WHERE name='val_runs'").fetchone()   # a read creates nothing
     _, live = diary_result(quotes={t: {"price": 111.0, "time": "2026-10-30T15:00:00-04:00"} for t in VPEERS})
     assert vd.record(live, "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)[0] is False   # only closes
@@ -350,7 +353,7 @@ def test_valuation_diary_records_once_and_leaves_the_other_diaries_unchanged():
     saved, why = vd.record(res, "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)
     assert saved and why == "6 valutazioni salvate"
     assert vd.record(res, "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)[0] is False
-    with sqlite3.connect(od.DB) as con:
+    with closing(sqlite3.connect(od.DB)) as con, con:
         assert {t: con.execute(f"SELECT * FROM {t}").fetchall() for t in tables} == before
         row = con.execute("SELECT price, price_date, status, value_base, scenarios, inputs, monitor FROM val_observations "
                           "WHERE ticker='A'").fetchone()
@@ -450,9 +453,7 @@ def test_page_has_the_valuation_section_and_currency_labels():
     assert '"$" + fBig(o.avg)' not in js
     block = re.search(r"Valutazione e scenari \(phase 5B[\s\S]+?function renderOpps", js).group(0)
     assert not re.search(r"\b(Compra|Vendi)\b", block) and "probabilità" in block
-    node = subprocess.run(["node", "--check", os.path.join(ROOT, "static", "app.js")], capture_output=True, text=True)
-    if node.returncode == 127:
-        pytest.skip("node non installato")
-    assert node.returncode == 0, node.stderr
+    ok, how = jscheck.check_app_js()            # node --check, or the copy verified by node on the Mac (phase 9B.1)
+    assert ok, how
     server_src = open(os.path.join(ROOT, "server.py")).read()
     assert re.search(r'DASHBOARD_VERSION = "([^"]+)"', server_src).group(1) == re.search(r'PAGE_VERSION = "([^"]+)"', js).group(1)

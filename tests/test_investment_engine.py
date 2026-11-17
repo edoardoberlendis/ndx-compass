@@ -1,5 +1,6 @@
 """Phase 5A: fundamental analysis engine (investment_engine.py), statements cache (fundamentals.py), its diary
 (investment_diary.py), the API and the page. Only made-up companies and numbers: no Yahoo, no personal data."""
+from contextlib import closing
 import json
 import os
 import re
@@ -9,6 +10,8 @@ from datetime import date, datetime, timedelta
 
 import pandas as pd
 import pytest
+
+import jscheck  # noqa: E402  (tests/jscheck.py)
 
 import fundamentals as fu
 import investment_diary as invd
@@ -404,10 +407,10 @@ def test_investment_diary_records_once_after_the_opportunity_diary_and_is_immuta
     scan = o.scan([stock("AAA")], {"AAA": frame(path(300, 0.004), RISING_VOL)}, QQQ, {}, today=TODAY, keep_all=True)
     ok, _ = od.record(scan, "2026-10-30", EVENING.isoformat(), "dashboard")
     assert ok
-    with sqlite3.connect(od.DB) as con:
+    with closing(sqlite3.connect(od.DB)) as con, con:
         before = {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("runs", "observations")}
     assert invd.stats() == {"started": False, "days": 0}                    # a read never creates the new tables
-    with sqlite3.connect(od.DB) as con:
+    with closing(sqlite3.connect(od.DB)) as con, con:
         assert not con.execute("SELECT 1 FROM sqlite_master WHERE name='inv_runs'").fetchone()
     wrong = engine_result(day="2026-10-29")                                 # trend not of that session
     assert invd.record(wrong, "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)[0] is False
@@ -416,7 +419,7 @@ def test_investment_diary_records_once_after_the_opportunity_diary_and_is_immuta
     saved, why = invd.record(engine_result(), "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)
     assert saved and why == "6 giudizi fondamentali salvati"
     assert invd.record(engine_result(), "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)[0] is False
-    with sqlite3.connect(od.DB) as con:
+    with closing(sqlite3.connect(od.DB)) as con, con:
         assert {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("runs", "observations")} == before
         row = con.execute("SELECT model_version, profile, dims, indicators, data_dates FROM inv_observations WHERE ticker='A'").fetchone()
         assert row[0] == ie.VERSION and row[1] in dict(ie.PROFILES)
@@ -487,7 +490,5 @@ def test_page_has_the_investment_panel_and_valid_javascript():
     for needle in ("function invCardHTML", "function invDetailHTML", "/api/investment", "Analisi investimento", "data-ifil", "data-isort"):
         assert needle in js
     assert "Compra" not in re.search(r"const INV_FILTERS[\s\S]+?function invDetailHTML", js).group(0)
-    node = subprocess.run(["node", "--check", os.path.join(ROOT, "static", "app.js")], capture_output=True, text=True)
-    if node.returncode == 127:
-        pytest.skip("node non installato")
-    assert node.returncode == 0, node.stderr
+    ok, how = jscheck.check_app_js()            # node --check, or the copy verified by node on the Mac (phase 9B.1)
+    assert ok, how

@@ -27,7 +27,9 @@ import threading
 
 ROOT = os.path.realpath(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(ROOT, "data")
-ENVS = ("produzione", "test", "anteprima")
+ENVS = ("produzione", "test", "anteprima", "istanza", "desktop")
+# "istanza" (phase 9A): a separate user's dashboard (instance.py). "desktop" (phase 9B): the portable Windows app
+# (desktop.py), production of ITS OWN data in its own folder (%LOCALAPPDATA%), never of this project folder.
 ALIASES = {"production": "produzione", "prod": "produzione", "preview": "anteprima", "testing": "test"}
 OFFICIAL_SOURCES = ("dashboard", "job serale", "comando manuale")
 WRITE_EVENTS = ("open", "sqlite3.connect", "os.mkdir", "os.rename", "os.remove", "os.rmdir", "os.truncate", "shutil.rmtree",
@@ -53,7 +55,8 @@ PRIVATE_EVENTS = ("open", "os.listdir", "os.scandir", "glob.glob", "glob.glob/2"
                   "shutil.move", "os.symlink", "os.link", "os.chmod", "os.chown", "os.utime", "os.listxattr", "os.getxattr")
 
 _state = {"authorized": None, "guard": None, "hook": False, "extra": [], "watch": None,
-          "market_only": False, "private_roots": [], "private_blocked": []}
+          "market_only": False, "private_roots": [], "private_blocked": [],
+          "instance": None, "instance_parent": None, "desktop": None}
 _lock = threading.Lock()
 
 
@@ -124,7 +127,7 @@ def is_production_diary(path):
 def authorize(who):
     """Called only by the real entry points (server started as a program, evening job, manual update command).
     Refused outside production: a test or a preview can never become a production writer."""
-    if not is_production():
+    if not is_production() and not (env() == "desktop" and _state["desktop"]):
         raise ProductionWriteBlocked(f"ambiente «{env()}»: «{who}» non può essere autorizzato a scrivere i diari di produzione")
     with _lock:
         _state["authorized"] = who
@@ -132,7 +135,7 @@ def authorize(who):
 
 
 def authorized():
-    return _state["authorized"] if is_production() else None
+    return _state["authorized"] if is_production() or (env() == "desktop" and _state["desktop"]) else None
 
 
 def check_diary_write(path, source=None):
@@ -141,6 +144,14 @@ def check_diary_write(path, source=None):
     - test / preview: never inside a protected folder (the guard would block it anyway: this message is clearer);
     - production, diary in data/: only an authorized process and only an official origin."""
     e = env()
+    if e == "desktop" and _state["desktop"]:             # phase 9B: the Windows app's own diaries, in its own folder
+        if is_protected(path) or not _under(_real(path), _state["desktop"]):
+            raise ProductionWriteBlocked("app desktop: un diario si scrive solo nella cartella dei dati dell'app")
+        if not _state["authorized"]:
+            raise ProductionWriteBlocked("app desktop: scrittura del diario non autorizzata")
+        if source is not None and source not in OFFICIAL_SOURCES:
+            raise ProductionWriteBlocked(f"origine «{source}» non ammessa (ammesse: {', '.join(OFFICIAL_SOURCES)})")
+        return source
     if e != "produzione":
         if is_protected(path) or is_production_diary(path):
             raise ProductionWriteBlocked(f"ambiente «{e}»: scrittura nel diario di produzione bloccata ({path})")
@@ -258,6 +269,15 @@ def _private_paths(event, args):
     return [p] if p is not None else []
 
 
+def _denied(p):
+    """A path this process may not even read: the personal roots (MARKET-ONLY or another user's data) and, in a separate
+    instance, every other user's folder next to its own (phase 9A)."""
+    if any(_under(p, r) for r in _state["private_roots"]):
+        return True
+    parent, own = _state["instance_parent"], _state["instance"]
+    return bool(parent and _under(p, parent) and p != parent and not _under(p, own))
+
+
 def _private_check(event, args):
     if event not in PRIVATE_EVENTS:
         return
@@ -266,13 +286,15 @@ def _private_check(event, args):
     except Exception:
         return
     for p in paths:
-        if any(_under(p, r) for r in _state["private_roots"]):
+        if _denied(p):
             _state["private_blocked"].append(event)          # only the kind of operation: never the name of a file
-            raise PrivateAccessBlocked("modalità MARKET-ONLY: accesso al portafoglio personale bloccato")
+            raise PrivateAccessBlocked("modalità MARKET-ONLY: accesso al portafoglio personale bloccato" if _state["market_only"]
+                                       else "app desktop: i dati personali del progetto non si leggono" if _state["desktop"]
+                                       else "istanza separata: accesso ai dati personali di un altro utente bloccato")
 
 
 def _hook(event, args):
-    if _state["market_only"]:
+    if _state["market_only"] or _state["instance"] or _state["desktop"]:
         _private_check(event, args)
     g = _state["guard"]
     w = _state["watch"]
@@ -367,6 +389,113 @@ def _end_market_only_for_tests():
         _state.update(market_only=False, private_roots=[], private_blocked=[])
 
 
+# ---------------------------------------------------------------- separate instance for another user (phase 9A)
+
+INSTANCE_MARKER = ".ndx-istanze"       # file in the folder that holds the users' folders (instance.py --crea writes it)
+# My personal data in the project folder: a separate instance may never read, list or change them.
+OWNER_PRIVATE = (PRIVATE, os.path.join(ROOT, "watchlist.json"))
+
+
+def check_instance_dir(path):
+    """The private folder of a separate instance, resolved, or ValueError. It must exist, be a real folder (no symbolic
+    link), live OUTSIDE the project folder and inside a container folder marked with INSTANCE_MARKER (so the other users'
+    folders next to it can be denied as a whole without touching anything else of this Mac)."""
+    p = os.path.abspath(os.path.expanduser(os.fspath(path)))
+    if os.path.islink(p) or not os.path.isdir(p):
+        raise ValueError("la cartella dell'istanza deve esistere ed essere una cartella vera (non un collegamento)")
+    real = _real(p)
+    if _under(real, ROOT) or _under(ROOT, real):
+        raise ValueError("la cartella dell'istanza deve stare fuori dalla cartella del progetto")
+    parent = os.path.dirname(real)
+    if not os.path.isfile(os.path.join(parent, INSTANCE_MARKER)):
+        raise ValueError(f"la cartella dell'istanza deve stare in una cartella contenitore con il file {INSTANCE_MARKER}")
+    if parent in ("/", _real(os.path.expanduser("~"))):
+        raise ValueError("la cartella contenitore non può essere la cartella Inizio né la radice del disco")
+    return real
+
+
+def enable_instance(path, extra_denied=()):
+    """Separate instance for the rest of this process (phase 9A, instance.py). Enforced in the backend by the audit hook,
+    BEFORE each operation:
+    - my personal data (portafoglio/, watchlist.json) and the folders of the other users next to this one: no read, no
+      listing, no change (PrivateAccessBlocked);
+    - the whole project folder (code, cache/, data/ with the public diaries, reports/): read only (ProductionWriteBlocked);
+    - this process is never a production writer (env "istanza": authorize() refuses it).
+    Writes are possible only in the instance's own folder (and in the system's temporary/cache folders outside the
+    project, e.g. the Yahoo library's). It cannot be turned off: audit hooks stay until the process ends."""
+    if env() not in ("istanza", "test"):
+        raise RuntimeError("la modalità istanza vuole NDX_ENV=istanza")
+    own = check_instance_dir(path)
+    roots = [_real(r) for r in (*OWNER_PRIVATE, *extra_denied)]
+    with _lock:
+        if not _state["hook"]:
+            sys.addaudithook(_hook)
+            _state["hook"] = True
+        _state["guard"] = env()
+        _state["authorized"] = None
+        for r in roots:
+            if r not in _state["private_roots"]:
+                _state["private_roots"].append(r)
+        _state["instance"] = own
+        _state["instance_parent"] = os.path.dirname(own)
+    return own
+
+
+def instance_dir():
+    return _state["instance"]
+
+
+def _end_instance_for_tests():
+    """Only for pytest: turns the instance mode off again (one process runs many tests). Refused anywhere else."""
+    if env() != "test":
+        raise RuntimeError("la modalità istanza non si spegne: dura fino alla fine del processo")
+    with _lock:
+        _state.update(instance=None, instance_parent=None, private_roots=[], private_blocked=[], guard="test")
+
+
+# ---------------------------------------------------------------- portable Windows app (phase 9B)
+
+def enable_desktop(path):
+    """Portable app (desktop.py) for the rest of this process. `path` is the app's data folder (on Windows
+    %LOCALAPPDATA%\\Nasdaq100Monitor), outside the program folder. From here on:
+    - every write inside the program folder (ROOT: code, static files, bundled public files) is blocked before it
+      happens (ProductionWriteBlocked), so personal data can never end up there and a new version can replace the
+      program folder without losing anything;
+    - the app may become the writer of the diaries in ITS data folder only (`authorize`, `check_diary_write`).
+    Call it before importing the other modules. It cannot be turned off (audit hooks stay until the process ends)."""
+    if env() not in ("desktop", "test"):
+        raise RuntimeError("la modalità desktop vuole NDX_ENV=desktop")
+    p = os.path.abspath(os.fspath(path))
+    if os.path.islink(p) or not os.path.isdir(p):
+        raise ValueError("la cartella dei dati dell'app deve esistere ed essere una cartella vera")
+    real = _real(p)
+    if _under(real, ROOT) or _under(ROOT, real):
+        raise ValueError("la cartella dei dati dell'app deve stare fuori dalla cartella del programma")
+    with _lock:
+        if not _state["hook"]:
+            sys.addaudithook(_hook)
+            _state["hook"] = True
+        _state["guard"] = env()
+        _state["authorized"] = None
+        for r in (_real(x) for x in OWNER_PRIVATE):   # never shipped, but on a developer's Mac: never read either
+            if r not in _state["private_roots"]:
+                _state["private_roots"].append(r)
+        _state["desktop"] = real
+    return real
+
+
+def desktop_dir():
+    return _state["desktop"]
+
+
+def _end_desktop_for_tests():
+    """Only for pytest: turns the desktop mode off again. Refused anywhere else."""
+    if env() != "test":
+        raise RuntimeError("la modalità desktop non si spegne: dura fino alla fine del processo")
+    with _lock:
+        _state.update(desktop=None, authorized=None, guard="test", private_roots=[], private_blocked=[])
+
+
 @contextlib.contextmanager
 def record_writes():
     """Collects every write attempted inside the block (path and kind), wherever it goes: used by the tests to prove
@@ -386,10 +515,12 @@ def record_writes():
 
 # ---------------------------------------------------------------- isolation of the private and production paths
 
-def isolate(base, setter=setattr, public_reads=False):
+def isolate(base, setter=setattr, public_reads=False, shared_public=False):
     """Points every module that writes personal data, diaries, reports or caches to folders inside `base` (one list for
-    tests and preview). public_reads=True (preview) keeps the PUBLIC market caches on the real files, read only (the
-    guard blocks writes): the page then shows real public data, never personal data."""
+    tests, preview and the separate instances). public_reads=True (preview, instances) keeps the PUBLIC market caches on
+    the real files, read only (the guard blocks writes): the page then shows real public data, never personal data.
+    shared_public=True (separate instances, phase 9A) also keeps the PUBLIC diaries, the alert registry, the job registry and
+    the studies on the real files, read only: only the personal paths move to `base`."""
     import actions
     import diary
     import etf_buy
@@ -411,6 +542,10 @@ def isolate(base, setter=setattr, public_reads=False):
     setter(portfolio, "PORTFOLIO_DIR", pf)
     setter(portfolio, "OVERRIDES", os.path.join(pf, "ticker.json"))
     setter(portfolio, "CLASS_FILE", os.path.join(pf, "classificazione.json"))
+    setter(portfolio, "UPLOAD_TMP", os.path.join(pf, ".caricamento.xls"))   # phase 9A: the upload waits in the SAME folder
+    server = sys.modules.get("server")
+    if server is not None:                                                   # "Preferiti" (the page writes them)
+        setter(server, "WATCHLIST", j("watchlist.json"))
     setter(actions, "FISCAL", j("fiscale.json"))
     setter(pos_diary, "DIR", j("diario_posizioni"))
     setter(pillars, "FILE", j("dati_titoli.json"))
@@ -423,6 +558,8 @@ def isolate(base, setter=setattr, public_reads=False):
     setter(diary, "EXCLUDED", j("diario", "esclusi.json"))
     setter(etf_buy, "DIR", j("diario_etf"))
     setter(etf_holdings, "PRIVATE", j("etf_composizioni.json"))
+    if shared_public:
+        return str(base)
     setter(opportunity_diary, "DB", j("data", "opportunita.sqlite3"))
     import alert_engine
     setter(alert_engine, "DB", j("data", "alert.sqlite3"))                  # Phase 8A: the alert registry

@@ -1,6 +1,7 @@
 """Phase 5C: audit of the valuation engine (model V2) against hand-computed financial cases, an independent DCF written
 here from the textbook formulas, the frozen V1 model and the diary. Only made-up companies and numbers: no Yahoo, no
 personal data, no network."""
+from contextlib import closing
 import copy
 import json
 import os
@@ -348,11 +349,11 @@ def test_recorded_valuations_stay_unchanged_and_versions_are_kept_apart():
     from test_investment_engine import ANALYST
     r1 = v1.analyze_all(inv, fund, {t: vinfo() for t in VPEERS}, {t: ANALYST for t in VPEERS}, EVENING, closes=closes)
     assert vd.record(r1, "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)[0]
-    with sqlite3.connect(od.DB) as con:
+    with closing(sqlite3.connect(od.DB)) as con, con:
         before = con.execute("SELECT * FROM val_observations WHERE model_version='V1' ORDER BY ticker").fetchall()
     assert vd.record(r2, "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)[0]
     assert vd.record(r2, "2026-10-30", EVENING.isoformat(), "dashboard", o.MODEL_VERSION)[0] is False   # idempotent
-    with sqlite3.connect(od.DB) as con:
+    with closing(sqlite3.connect(od.DB)) as con, con:
         assert con.execute("SELECT * FROM val_observations WHERE model_version='V1' ORDER BY ticker").fetchall() == before
         row = con.execute("SELECT inputs FROM val_observations WHERE model_version='V2' AND ticker='A'").fetchone()
         assert json.loads(row[0])["timing"]["baseEnd"] and "fcffHist" in json.loads(row[0])

@@ -1,0 +1,93 @@
+COME CREARE Nasdaq-100-Monitor-Windows.zip SU UN PC WINDOWS
+(Si fa una volta sola, su un PC con Windows 10 o 11 a 64 bit e Internet. Tempo: circa 45 minuti.)
+
+Ti servono: questo kit (Nasdaq100-kit-build.zip) e una chiavetta USB per portarlo dal Mac al PC.
+Python serve solo per costruire il programma: chi userà l'app NON deve installarlo.
+
+
+PASSO 1 - COPIA IL KIT SUL PC
+  Sul Mac copia Nasdaq100-kit-build.zip sulla chiavetta USB e poi sul PC Windows, per esempio nella
+  cartella Download. Meglio la chiavetta che e-mail o Drive: così il kit non passa da servizi online.
+
+PASSO 2 - ESTRAI IL KIT IN C:\build
+  1. Apri «Esplora file», vai su «Questo PC» > «Disco locale (C:)», tasto destro > Nuovo > Cartella,
+     e chiamala:  build
+  2. Tasto destro su Nasdaq100-kit-build.zip > «Estrai tutto...» > «Sfoglia...» > scegli C:\build >
+     «Estrai».
+  3. Deve esistere la cartella  C:\build\Nasdaq100  (dentro ci sono desktop_app.py, packaging, static...).
+  Perché C:\build e non Desktop o Documenti: quelle cartelle spesso sono sincronizzate con OneDrive (il
+  codice finirebbe online) e i percorsi lunghi possono dare problemi alla build.
+
+PASSO 3 - SCARICA PYTHON 3.12
+  Apri questo indirizzo nel browser (è il sito ufficiale python.org):
+      https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe
+  Si scarica il file python-3.12.10-amd64.exe (circa 26 MB).
+  Nota: è proprio la versione 3.12.10, l'ultima 3.12 con installazione per Windows. Non serve una
+  versione più nuova: le librerie del programma sono state controllate per Python 3.12.
+
+PASSO 4 - INSTALLA PYTHON
+  1. Doppio clic su python-3.12.10-amd64.exe (se Windows chiede il permesso, rispondi Sì: è firmato
+     dalla Python Software Foundation).
+  2. Nella prima schermata, IN BASSO, metti la spunta su:
+        [x] Use admin privileges when installing py.exe
+        [x] Add python.exe to PATH
+  3. Clicca «Install Now» e aspetta. Alla fine clicca «Close».
+
+PASSO 5 - CONTROLLA CHE PYTHON FUNZIONI
+  1. Premi il tasto Windows, scrivi  powershell  e apri «Windows PowerShell» (normale, NON come
+     amministratore).
+  2. Scrivi questo comando e premi Invio:
+        py -3.12 --version
+  3. Deve comparire:  Python 3.12.10
+     Se compare un errore, chiudi PowerShell, riavvia il PC e riprova. Se ancora non va, ripeti il passo 4.
+
+PASSO 6 - AVVIA LA BUILD
+  Nella stessa finestra di PowerShell scrivi questi due comandi (uno alla volta, Invio dopo ciascuno):
+        cd C:\build\Nasdaq100
+        powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1 -ConInternet
+  («-ExecutionPolicy Bypass» vale solo per questo script e solo questa volta: non cambia le
+  impostazioni di sicurezza di Windows.)
+
+PASSO 7 - ASPETTA (circa 30-40 minuti, non chiudere la finestra)
+  Lo script fa da solo 8 passi, con titoli in azzurro:
+    1. controlli                     5. PyInstaller (crea il programma .exe)
+    2. ambiente Python separato      6. controllo del pacchetto (nessun dato personale)
+    3. test automatici               7. prova dell'eseguibile vero (scarica i dati di mercato: 5-15 min)
+    4. file pubblici e icona         8. ZIP e impronta SHA-256
+  Molte righe scorrono: è normale. Le prove usano una cartella temporanea, mai dati veri.
+  Alla fine compare in verde:
+        Fatto: build\Nasdaq-100-Monitor-Windows.zip ...
+
+PASSO 8 - PRENDI LO ZIP E IL SUO CODICE
+  In C:\build\Nasdaq100\build\ trovi:
+    - Nasdaq-100-Monitor-Windows.zip              (il programma da dare al secondo utente)
+    - Nasdaq-100-Monitor-Windows.zip.sha256.txt   (il codice di controllo: mandalo al secondo utente a parte)
+  Prova finale a mano: estrai lo ZIP in un'altra cartella, doppio clic su «Nasdaq-100 Monitor.exe»,
+  controlla che si apra la dashboard, poi «Chiudi l'app».
+  SmartScreen («Windows ha protetto il PC») è normale per un programma non firmato:
+  «Ulteriori informazioni» > «Esegui comunque». Non disattivare mai antivirus, firewall o SmartScreen.
+
+PASSO 9 - DOPO (facoltativo)
+  Puoi disinstallare Python: Impostazioni > App > «Python 3.12.10 (64-bit)» > Disinstalla (anche
+  «Python Launcher»). Puoi cancellare C:\build dopo aver copiato lo ZIP: i dati del secondo utente non sono lì.
+  Per una versione nuova del programma servirà rifare i passi 1-2 e 6-8 con un kit nuovo.
+
+
+RIFARE LA BUILD CON UN KIT NUOVO (Python è già installato: NON reinstallarlo)
+  1. Chiudi PowerShell se è aperto.
+  2. In Esplora file apri C:\build\Nasdaq100 e controlla che ci siano SOLO i file del kit (desktop_app.py,
+     server.py, packaging, static, tests...) più le cartelle create dalla build (.venv-win, build).
+     Nessun tuo file personale deve stare lì: se ce n'è uno, spostalo altrove prima.
+  3. Tasto destro sulla cartella C:\build\Nasdaq100 > «Elimina».
+  4. Ripeti i passi 1 e 2 con il kit nuovo (deve ricomparire C:\build\Nasdaq100).
+  5. Salta i passi 3 e 4. Fai il passo 5 (py -3.12 --version) e poi il passo 6.
+
+SE QUALCOSA VA STORTO
+  - Lo script si ferma con una scritta rossa «comando non riuscito»: fai una foto o uno screenshot
+    (tasto Windows + Maiusc + S) delle ultime righe e mandamela. Non serve ricominciare da capo:
+    dopo la correzione si rilancia solo il comando del passo 6.
+  - Errore durante il passo 2 (pip, download delle librerie): di solito è la connessione; rilancia il
+    comando del passo 6.
+  - L'antivirus blocca o mette in quarantena il file .exe: NON disattivarlo. Fammelo sapere: si può
+    inviare il file a Microsoft per l'analisi (gratis).
+  - «serve Python 3.12 a 64 bit»: Python non è installato bene, ripeti i passi 4 e 5.
