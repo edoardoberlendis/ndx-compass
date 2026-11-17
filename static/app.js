@@ -2776,7 +2776,7 @@ document.addEventListener("click", e => {
 // ------------------------------------------------------------ Ricerca → ETF (etf.py, /api/etf)
 // What is rising, why (computed), whether it makes sense for my portfolio. The momentum rules failed the test
 // (etf_backtest.py): nothing here says "favorevole" or "investi", only "non verificato". Texts fixed, numbers from data.
-const etfS = { data: null, at: 0, grp: LS.get("etfGrp", "Tutti"), sort: { key: LS.get("etfSort", "r3m"), dir: -1 }, retry: null, why: {} };
+const etfS = { data: null, at: 0, grp: LS.get("etfGrp", "Tutti"), ft: LS.get("etfTrend", ""), fb: LS.get("etfBuy", ""), sort: { key: LS.get("etfSort", "r3m"), dir: -1 }, retry: null, why: {} };
 const ETF_PER = [["r1w", "1 settimana"], ["r2w", "2 settimane"], ["r1m", "1 mese"], ["r3m", "3 mesi"], ["r6m", "6 mesi"], ["r1y", "1 anno"], ["r3y", "3 anni"]];
 const ETF_PER_Y = { r1w: "2 giorni", r2w: "1 settimana", r1m: "1 settimana", r3m: "1 mese", r6m: "1 mese", r1y: "3 mesi", r3y: "6 mesi" };
 const TREND_CLS = { "Rialzista": "up", "Laterale": "flat", "Ribassista": "down" };
@@ -2898,10 +2898,23 @@ function renderEtf() {
   if (!D || D.status === "error") { el.innerHTML = `<div class="card empty"><b>Prezzi degli ETF non disponibili</b>${D?.error ? ` (${esc(D.error)})` : ""}.${D?.retryAt ? ` Nuovo tentativo alle ${hm(D.retryAt)}.` : ""}</div>`; return; }
   if (D.status === "loading") { el.innerHTML = `<div class="card empty">Calcolo in corso: scarico i prezzi di 63 ETF e le composizioni (qualche minuto la prima volta al giorno)…</div>`; return; }
   const stale = D.rows.filter(r => r.stale).length, buy = isin => D.buy?.[isin], personal = D.fitComplete;
-  const rowsAll = D.rows.filter(r => etfS.grp === "Tutti" || r.group === etfS.grp);
   const { key, dir } = etfS.sort;
   const BUY_ORDER = { "Entra ora": 4, "Entra su ritracciamento": 3, "Attendi": 2, "Evita": 1, "Solo informazione": 0 };
   const verdictOf = isin => personal ? buy(isin)?.verdict : buy(isin)?.market.verdict;
+  // two filters that add up (and add up with the group): Trend and «Ha senso comprare?» (the verdict shown in the column)
+  const NONE = "non calcolabile", trendOf = r => r.trend || NONE, buyOf = r => verdictOf(r.isin) || NONE;
+  const okT = (r, v = etfS.ft) => !v || trendOf(r) === v, okB = (r, v = etfS.fb) => !v || buyOf(r) === v;
+  const rowsGrp = D.rows.filter(r => etfS.grp === "Tutti" || r.group === etfS.grp);
+  const rowsAll = rowsGrp.filter(r => okT(r) && okB(r)), filtered = !!(etfS.ft || etfS.fb);
+  const fSel = (k, label, order, of, ok) => {
+    const vals = order.filter(v => v === etfS[k] || rowsGrp.some(r => of(r) === v)).concat(rowsGrp.some(r => !order.includes(of(r))) ? [NONE] : []);
+    const n = v => rowsGrp.filter(r => of(r) === v && ok(r)).length;            // how many with this value AND the other filter
+    return `<label class="cat-f"><span>${label}</span><select data-etff="${k}"><option value="">tutti</option>
+      ${[...new Set(vals)].map(v => `<option value="${esc(v)}" ${etfS[k] === v ? "selected" : ""}>${esc(v)} (${n(v)})</option>`).join("")}</select></label>`;
+  };
+  const filtersHTML = `<div class="etf-filters">${fSel("ft", "Trend", ["Rialzista", "Laterale", "Ribassista"], trendOf, r => okB(r))}
+    ${fSel("fb", `Ha senso comprare? <span class="muted">(${personal ? "per te" : "solo mercato"})</span>`, Object.keys(BUY_ORDER), buyOf, r => okT(r))}
+    ${filtered ? `<button class="link-btn" data-etfclear>Togli i filtri</button>` : ""}</div>`;
   const val = (r, k) => k === "fit" ? (personal ? ({ "diversifica": 1, "neutro": 0, "si sovrappone": -1 }[etfFit(r.isin)?.verdict] ?? null) : null) : k === "name" ? r.category
     : k === "trend" ? ({ "Rialzista": 1, "Laterale": 0, "Ribassista": -1 }[r.trend] ?? null) : k === "buy" ? (BUY_ORDER[verdictOf(r.isin)] ?? null) : r[k];
   const rows = rowsAll.slice().sort((a, b) => { const va = val(a, key), vb = val(b, key); if (va == null) return 1; if (vb == null) return -1; return (typeof va === "string" ? va.localeCompare(vb) : va - vb) * dir; });
@@ -2927,10 +2940,11 @@ function renderEtf() {
     ${stale ? `<p class="small data-note">! <b>${stale} ETF hanno dati di justETF con più di 6 mesi</b>: rilancia etf_universe.py.</p>` : ""}
     ${etfNotice(D)}
     ${diversifyHTML(D)}
-    <div class="card"><div class="card-h"><h2>Tutti gli ETF</h2><span class="card-meta">${rows.length} ETF · clicca un'intestazione per ordinare, una riga per i dettagli · dati del ${dayIT(D.generated.slice(0, 10))}</span></div>
+    <div class="card"><div class="card-h"><h2>Tutti gli ETF</h2><span class="card-meta">${filtered ? `${rows.length} di ${rowsGrp.length}` : rows.length} ETF · clicca un'intestazione per ordinare, una riga per i dettagli · dati del ${dayIT(D.generated.slice(0, 10))}</span></div>
       <div class="chips">${ETF_GROUPS.map(g => `<button data-etfgrp="${esc(g)}" class="${g === etfS.grp ? "on" : ""}">${esc(g)}</button>`).join("")}</div>
+      ${filtersHTML}
       <div class="table-wrap etf-wrap"><table class="scr etf-tbl"><thead><tr>${cols.map(([k, l, c]) => `<th class="${c || ""} ${pr(k)} ${key === k ? "sorted" + (dir > 0 ? " asc" : "") : ""}" data-etfsort="${k}">${l}${k === "fit" ? " " + info(ETF_FIT_INFO) : k === "trend" ? " " + info(ETF_TREND_INFO) : k === "buy" ? " " + info(BUY_INFO) : ""}</th>`).join("")}</tr></thead>
-        <tbody>${rows.map(rowHTML).join("")}</tbody></table></div>
+        <tbody>${rows.length ? rows.map(rowHTML).join("") : `<tr><td class="l" colspan="${cols.length}"><span class="muted">Nessun ETF ${etfS.grp === "Tutti" ? "" : `del gruppo «${esc(etfS.grp)}» `}con questi filtri.</span> <button class="link-btn" data-etfclear>Togli i filtri</button></td></tr>`}</tbody></table></div>
       <p class="muted small"><b>*</b> = storico di ripiego ${info(ETF_FALLBACK_INFO)} · Rendimenti in euro, dividendi inclusi per gli ETF ad accumulazione. Trend: <span class="trend-w up">Rialzista</span>
         <span class="trend-w flat">Laterale</span> <span class="trend-w down">Ribassista</span>, mini-grafico di 6 mesi con la media 200 tratteggiata ${info(ETF_TREND_INFO)}.
         «Ha senso comprare?»: verdetto per te (sotto, «mercato» se senza il tuo portafoglio sarebbe diverso), <b>non verificato</b> ${info(BUY_INFO)}. 2 settimane, 6 mesi, volatilità,
@@ -3150,6 +3164,8 @@ document.addEventListener("input", e => {
 document.addEventListener("change", e => {
   const f = e.target.closest("[data-catf]");
   if (f) { etfC.f[f.dataset.catf] = f.value; $("#etfCatList").innerHTML = etfCatListHTML(); }
+  const ef = e.target.closest("[data-etff]");                    // Mercato ETF: Trend and «Ha senso comprare?» filters
+  if (ef) { const k = ef.dataset.etff; etfS[k] = ef.value; LS.set(k === "ft" ? "etfTrend" : "etfBuy", ef.value); renderEtf(); }
 });
 // Opportunità → ETF (phase 6B): exploratory scanner of the ETF EXPOSURES (etf_opportunity.py). Exposure first, products
 // after; the judgement on the exposure and the quality of the product stay separate; never Compra/Vendi, never a score.
@@ -3493,6 +3509,7 @@ function etfWatchHTML(D) {
 document.addEventListener("click", e => {
   const g =e.target.closest("[data-etfgrp]");
   if (g) { etfS.grp = g.dataset.etfgrp; LS.set("etfGrp", etfS.grp); return renderEtf(); }
+  if (e.target.closest("[data-etfclear]")) { etfS.ft = etfS.fb = ""; LS.set("etfTrend", ""); LS.set("etfBuy", ""); return renderEtf(); }
   const s = e.target.closest("[data-etfsort]");
   if (s && !e.target.closest(".info")) { const k = s.dataset.etfsort; etfS.sort = etfS.sort.key === k ? { key: k, dir: -etfS.sort.dir } : { key: k, dir: k === "name" ? 1 : -1 }; LS.set("etfSort", k); return renderEtf(); }
   const o = e.target.closest("[data-etf]");

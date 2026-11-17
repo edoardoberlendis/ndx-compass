@@ -998,6 +998,7 @@ table.my td.nw { max-width: 280px; }
 .cat-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin: 4px 0 10px; }
 .cat-bar input[type=search] { flex: 1 1 260px; min-width: 0; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: var(--r-ctrl); background: var(--surface); color: var(--ink); font: inherit; }
 .cat-f { display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-xs); color: var(--muted); }
+.etf-filters { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin: 8px 0 4px; }
 .cat-f select { padding: 5px 6px; border: 1px solid var(--line-strong); border-radius: var(--r-ctrl); background: var(--surface); color: var(--ink); font: inherit; font-size: var(--fs-sm); max-width: 190px; }
 .cat-sel { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 0 10px; font-size: var(--fs-sm); }
 .cat-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border: 1px solid var(--line); border-radius: 999px; font-size: var(--fs-xs); color: var(--ink-2); background: var(--surface-2); white-space: nowrap; }

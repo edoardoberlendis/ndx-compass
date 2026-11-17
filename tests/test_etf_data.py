@@ -73,3 +73,17 @@ def test_page_and_server_versions_match():
     js = open(os.path.join(ROOT, "static", "app.js")).read()
     page = re.search(r'const PAGE_VERSION = "([^"]+)"', js).group(1)
     assert page == server.DASHBOARD_VERSION
+
+
+def test_market_etf_filters_cover_every_trend_and_verdict():
+    """Mercato ETF (17 nov 2026): the two filters Trend and «Ha senso comprare?» offer every value the server can give;
+    a new verdict in etf_buy.py would otherwise disappear from the filter."""
+    js = open(os.path.join(ROOT, "static", "app.js"), encoding="utf-8").read()
+    assert 'data-etff="${k}"' in js and "data-etfclear" in js
+    order = re.search(r"const BUY_ORDER = \{([^}]+)\}", js).group(1)
+    verdicts = set(etf_buy.VERDICT_OF.values()) | {"Entra ora"}
+    assert verdicts <= set(re.findall(r'"([^"]+)":', order))
+    src = open(os.path.join(ROOT, "etf.py"), encoding="utf-8").read()
+    trends = set(re.findall(r'return "(Rialzista|Laterale|Ribassista|[A-Z][a-z]+ista)"', src))
+    assert trends and trends <= {"Rialzista", "Laterale", "Ribassista"}
+    assert '["Rialzista", "Laterale", "Ribassista"]' in js
