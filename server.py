@@ -679,6 +679,8 @@ class Store:
             sig = sigs[t] = score.for_stock(r, self.tech.get(t), v, news_all.get(t) if news_all is not None else None)
             r["sigScore"], r["signal"] = (sig["score"], sig["signal"]) if sig else (None, None)
             r["trend"] = sig["trend"]["score"] if sig and sig["trend"] else None   # technical score, shown apart as "Trend"
+            # Rialzista / Laterale / Ribassista with the SAME rule of the ETF tab (etf.trend_word): Screener filter
+            r["trendWord"] = etf_trend_word(r.get("price"), r.get("sma50"), r.get("sma200"))
 
         # index + benchmarks
         idx = {}
@@ -1492,7 +1494,7 @@ def movers_why(n=8):
 app = Flask(__name__, static_folder=None)
 # version of the code that serves the page: change it together with PAGE_VERSION in static/app.js whenever the data
 # sent to the page changes, so that a server left running with old code is noticed (the page asks to restart it)
-DASHBOARD_VERSION = "2026-11-09a"
+DASHBOARD_VERSION = "2026-11-17a"
 
 
 # Phase 9A: a separate instance for another user (instance.py) sets INSTANCE; the personal dashboard leaves it None and
@@ -1532,6 +1534,42 @@ def index():
 @app.route("/static/<path:p>")
 def static_files(p):
     return send_from_directory(STATIC_DIR, p)
+
+
+def etf_trend_word(price, sma50, sma200):
+    import etf  # local import: etf imports this module
+    return etf.trend_word(price, sma50, sma200)
+
+
+_buy = {"key": None, "data": None, "lock": threading.Lock()}
+
+
+def buy_verdicts():
+    """«Ha senso comprare?» of every Nasdaq-100 stock for the Screener filter: the market verdict of the Decisione sheet
+    (decision.decide -> buyVerdict, rules D1-D7), computed with an EMPTY portfolio, so no personal data is read or sent.
+    Recomputed only when the snapshot changes (one pass over ~100 stocks, as the signal diary does)."""
+    with store.lock:
+        snap = store.snapshot
+    if not snap:
+        return None
+    key = (id(snap), snap.get("asOf"))
+    with _buy["lock"]:
+        if _buy["key"] != key:
+            out = {}
+            for r in snap["stocks"]:
+                d = stock_decision(r["ticker"], pf={}, details=False)
+                out[r["ticker"]] = d["buyVerdict"]["category"] if d and d.get("buyVerdict") else None
+            _buy.update(key=key, data={"asOf": snap.get("asOf"), "verdicts": out})
+        return _buy["data"]
+
+
+@app.route("/api/stocks/buy")
+def api_stocks_buy():
+    """Market verdicts of all the stocks (Screener filter «Ha senso comprare?»); read only, no portfolio."""
+    data = buy_verdicts()
+    if data is None:
+        return jsonify({"error": "loading"}), 503
+    return jsonify(data)
 
 
 @app.route("/api/snapshot")

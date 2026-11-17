@@ -135,6 +135,9 @@ const state = {
   cols: LS.get("cols", "overview"),
   preset: "all",
   sector: "",
+  ft: LS.get("scrTrend", ""),     // Screener: Trend filter (Rialzista / Laterale / Ribassista, rule of the ETF tab)
+  fb: LS.get("scrBuy", ""),       // Screener: «Ha senso comprare?» filter (market verdict of the Decisione sheet)
+  buyV: null,                     // {asOf, verdicts: {ticker: verdict}} from /api/stocks/buy
   sort: { key: "mcap", dir: -1 },
   watch: new Set(),              // loaded from watchlist.json at boot (loadWatch)
   watchNews: {},                 // ticker -> newest headlines naming the stock (newest first)
@@ -290,7 +293,7 @@ function spark(values, w = 80, h = 22, base = null, color = null) {
 
 // ------------------------------------------------------------ data
 // must equal DASHBOARD_VERSION in server.py: otherwise the server runs old code and the page says so
-const PAGE_VERSION = "2026-11-09a";
+const PAGE_VERSION = "2026-11-17a";
 async function load() {
   const r = await fetch("/api/snapshot", { cache: "no-store" });
   const sv = r.headers.get("X-Dashboard-Version");
@@ -1855,12 +1858,27 @@ const COL_PRIO = {
   my: { name: "p3", price: "p4", perf1M: "p2", perfYTD: "p3", vsSma20: "p15", vsSma40: "p15", vsSma60: "p15", vsSma200: "p2", maOrder: "p15",
     valLabel: "p3", upside: "p15", trend: "p2", earnings: "p2", news: "p3" },
 };
+// two filters that add up (with each other, the sector, the quick filters and the search): Trend and «Ha senso comprare?»
+const SCR_NONE = "non calcolabile", SCR_TRENDS = ["Rialzista", "Laterale", "Ribassista"], SCR_BUY = ["Entra ora", "Entra su ritracciamento", "Attendi", "Evita"];
+const scrTrend = s => s.trendWord || SCR_NONE;
+const scrBuy = s => !state.buyV ? null : state.buyV.verdicts[s.ticker] || SCR_NONE;
+const scrOkT = (s, v = state.ft) => !v || scrTrend(s) === v;
+const scrOkB = (s, v = state.fb) => !v || !state.buyV || scrBuy(s) === v;     // verdicts still loading: nothing hidden
+let scrBuyAsked = null;                                          // asOf of the snapshot whose verdicts were asked (one request each)
+async function loadBuyVerdicts() {
+  const at = state.snap?.asOf;
+  if (!at || state.buyV?.asOf === at || scrBuyAsked === at) return;
+  scrBuyAsked = at;
+  try { const d = await getJSON("/api/stocks/buy"); if (d.verdicts) state.buyV = d; } catch { scrBuyAsked = null; }   // retried at the next render
+  if (state.view === "screener") renderScreener();
+}
 function screenerRows() {
   const p = PRESETS.find(x => x.id === state.preset) || PRESETS[0];
   const q = $("#scrFind").value.trim().toLowerCase();
   const col = C[state.sort.key] || C.mcap;
   return stocks().filter(p.f)
     .filter(s => !state.sector || s.sector === state.sector)
+    .filter(s => scrOkT(s) && scrOkB(s))
     .filter(s => !q || s.ticker.toLowerCase().includes(q) || s.name.toLowerCase().includes(q) || s.industry.toLowerCase().includes(q))
     .sort((a, b) => {
       const va = col.sort(a), vb = col.sort(b);
@@ -1878,6 +1896,18 @@ function renderScreener() {
   const secs = [...new Set(S.map(s => s.sector))].sort();
   if (sel.options.length !== secs.length + 1) sel.innerHTML = `<option value="">Tutti i settori</option>` + secs.map(s => `<option>${esc(s)}</option>`).join("");
   sel.value = state.sector;
+  loadBuyVerdicts();
+  const base = stocks().filter(s => !state.sector || s.sector === state.sector);            // counts: same sector, the other filter
+  const fSel = (id, k, label, order, of, ok) => {
+    const known = k === "ft" || !!state.buyV;                                                  // verdicts not arrived yet: no counts
+    const vals = [...new Set(order.filter(v => v === state[k] || base.some(s => of(s) === v)).concat(base.some(s => of(s) && !order.includes(of(s))) ? [SCR_NONE] : []))];
+    const n = v => base.filter(s => of(s) === v && ok(s)).length;
+    return `<label class="cat-f"><span>${label}</span><select id="${id}" data-scrf="${k}"><option value="">tutti</option>
+      ${(known ? vals : order).map(v => `<option value="${esc(v)}" ${state[k] === v ? "selected" : ""}>${esc(v)}${known ? ` (${n(v)})` : ""}</option>`).join("")}</select></label>`;
+  };
+  $("#scrFilters").innerHTML = `${fSel("scrTrendSel", "ft", `Trend ${info(SCR_TREND_INFO)}`, SCR_TRENDS, scrTrend, s => scrOkB(s))}
+    ${fSel("scrBuySel", "fb", `Ha senso comprare? <span class="muted">${state.buyV ? "(solo mercato)" : "(in calcolo…)"}</span> ${info(SCR_BUY_INFO)}`, SCR_BUY, scrBuy, s => scrOkT(s))}
+    ${state.ft || state.fb ? `<button class="link-btn" data-scrclear>Togli i filtri</button>` : ""}`;
   const chip = p => `<button data-p="${p.id}" class="${p.id === state.preset ? "on" : ""}">${esc(p.label)}<span>${S.filter(p.f).length}</span>${info(PRESET_INFO[p.id])}</button>`;
   $("#presets").innerHTML = PRESET_GROUPS.map(g => `<div class="chip-row"><span class="chip-g">${esc(g.label)}</span>${g.ids.map(id => chip(PRESETS.find(p => p.id === id))).join("")}</div>`).join("");
   const rows = screenerRows();
@@ -1885,8 +1915,21 @@ function renderScreener() {
   $("#scrCount").textContent = `${rows.length} di ${S.length}`;
   $("#scr").innerHTML = `<thead><tr>${cols.map(k => `<th class="${C[k].cls?.split(" ")[0] || ""} ${pr[k] || ""} ${state.sort.key === k ? "sorted" + (state.sort.dir > 0 ? " asc" : "") : ""}" data-k="${k}">${colHead(k)}</th>`).join("")}</tr></thead>
     <tbody>${rows.map(s => `<tr data-t="${esc(s.ticker)}">${cols.map(k => `<td class="${C[k].cls || ""} ${pr[k] || ""}">${C[k].html(s)}</td>`).join("")}</tr>`).join("")}</tbody>`;
-  if (!rows.length) $("#scr").insertAdjacentHTML("beforeend", `<tbody><tr><td colspan="${cols.length}" class="empty">Nessun titolo corrisponde ai filtri</td></tr></tbody>`);
+  if (!rows.length) $("#scr").insertAdjacentHTML("beforeend", `<tbody><tr><td colspan="${cols.length}" class="empty">Nessun titolo corrisponde ai filtri${state.ft || state.fb ? ` <button class="link-btn" data-scrclear>Togli i filtri</button>` : ""}</td></tr></tbody>`);
 }
+const SCR_TREND_INFO = `<b>Trend in parole</b>, con la stessa regola della scheda ETF: <b>Rialzista</b> se il prezzo è sopra la media 50 e la media 50 è sopra la
+  media 200; <b>Ribassista</b> se il prezzo è sotto la media 50 e la media 50 sotto la 200; <b>Laterale</b> negli altri casi. Descrive l'andamento, non è un voto.
+  La colonna «Trend» della tabella è un'altra cosa: il punteggio da −100 a +100.`;
+const SCR_BUY_INFO = `<b>Ha senso comprare?</b> È il verdetto di acquisto della sezione Decisione di ogni titolo (regole D1–D7: azienda e valutazione, trimestrale,
+  media 200, titolo tirato, massimo a 52 settimane), calcolato <b>solo sul mercato</b>, senza il tuo portafoglio: per un titolo che possiedi la scheda mostra
+  invece il livello della posizione. Regole esplicite ma <b>non verificate</b> da un backtest; non è una consulenza finanziaria.`;
+document.addEventListener("change", e => {
+  const f = e.target.closest("[data-scrf]");
+  if (f) { const k = f.dataset.scrf; state[k] = f.value; LS.set(k === "ft" ? "scrTrend" : "scrBuy", f.value); renderScreener(); }
+});
+document.addEventListener("click", e => {
+  if (e.target.closest("[data-scrclear]")) { state.ft = state.fb = ""; LS.set("scrTrend", ""); LS.set("scrBuy", ""); renderScreener(); }
+});
 $("#colSeg").addEventListener("click", e => { const b = e.target.closest("[data-cols]"); if (b) { state.cols = b.dataset.cols; LS.set("cols", state.cols); renderScreener(); } });
 // clicking the active filter again switches it off (back to "Tutti")
 $("#presets").addEventListener("click", e => {
