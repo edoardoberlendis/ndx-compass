@@ -22,3 +22,4 @@ build/
 .venv-win/
 packaging/js_verificato.json
 packaging/motori_verificati.json
+watchlist.json
