@@ -60,3 +60,5 @@ Personal data (broker exports, positions, personal diaries) lives only in a loca
 ```
 
 Requires Python 3.12. Full technical documentation (in Italian) is in the main `README.md`.
+
+Third-party ETF reference data (fund lists, costs and exposures collected from provider websites) is not included in this repository, so the ETF section starts empty on a fresh install.
